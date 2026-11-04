@@ -110,3 +110,16 @@ export function oemEmailHtml(body) {
   // Plain text body from the template, kept as written; bullets and line breaks preserved.
   return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#111">${esc(body).replace(/\n/g, '<br>')}</div>`;
 }
+
+export function consoleInviteEmail({ appName, consoleUrl, name, token, days, invitedBy, reset }) {
+  const link = `${consoleUrl}/console/invite#token=${encodeURIComponent(token)}`;
+  const host = new URL(consoleUrl).host;
+  const title = reset ? 'Set up your console login again' : `You're invited to the ${appName} Console`;
+  const html = shell(`${appName} Console`, title, `
+    <p>Hello ${esc(name)},</p>
+    <p>${esc(invitedBy)} has ${reset ? 'reset your login for' : 'added you as an operator of'} the <b>${esc(appName)} Console</b>, where companies, their limits and their logins are managed.
+      Choose a password, then set up two-step login with an authenticator app.</p>
+    ${button(link, reset ? 'Set up my login' : 'Accept invite')}
+    <p style="color:#5b6b7f;font-size:13px">This link works once and expires in ${days} days.</p>`, host);
+  return { subject: `${appName} Console: ${reset ? 'set up your login again' : 'you are invited'}`, html, text: `Hello ${name},\n\nSet up your ${appName} Console login (works once, expires in ${days} days):\n${link}` };
+}

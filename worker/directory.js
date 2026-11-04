@@ -18,6 +18,15 @@ const RESET_MINUTES = 30;
 const INVITE_DAYS = 7;
 
 export const ROLES = ['Admin', 'Manager', 'Technician', 'Viewer'];
+// Optional parts of the app a service provider can switch on or off per company. RMA itself is always on.
+export const MODULES = ['carepack', 'zoho', 'batches', 'import', 'reports'];
+const COMPANY_COLS = [
+  ['contact_name', 'TEXT'], ['contact_email', 'TEXT'], ['contact_phone', 'TEXT'], ['address', 'TEXT'], ['gstin', 'TEXT'], ['notes', 'TEXT'],
+  ['max_users', 'INTEGER NOT NULL DEFAULT 0'], ['max_concurrent', 'INTEGER NOT NULL DEFAULT 0'], ['valid_until', 'TEXT'], ['modules', 'TEXT'],
+  ['idle_minutes', 'INTEGER NOT NULL DEFAULT 0'], ['email_domains', 'TEXT'], ['suspend_reason', 'TEXT'], ['updated_at', 'INTEGER'],
+];
+const todayIST = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+const dmy = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
 
 export class AuthError extends Error {
   constructor(code, message, extra = {}) {
@@ -69,7 +78,58 @@ export class Directory extends DurableObject {
         event TEXT NOT NULL, detail TEXT, ip TEXT, ua TEXT
       );
       CREATE INDEX IF NOT EXISTS auth_log_at ON auth_log(company_id, at);
+      CREATE TABLE IF NOT EXISTS console_users (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
+        pass_hash TEXT NOT NULL DEFAULT '', pass_salt TEXT NOT NULL DEFAULT '', pass_iter INTEGER NOT NULL DEFAULT 0,
+        totp_enc TEXT, totp_enabled INTEGER NOT NULL DEFAULT 0, totp_last INTEGER NOT NULL DEFAULT -1,
+        recovery TEXT NOT NULL DEFAULT '[]', failed INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0,
+        disabled INTEGER NOT NULL DEFAULT 0, last_login INTEGER, created_at INTEGER NOT NULL, created_by TEXT
+      );
+      CREATE TABLE IF NOT EXISTS console_sessions (
+        id TEXT PRIMARY KEY, op_id TEXT NOT NULL, token_hash TEXT NOT NULL, prev_hash TEXT, prev_until INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, last_active INTEGER NOT NULL, rotated_at INTEGER NOT NULL, ua TEXT, ip TEXT, place TEXT
+      );
+      CREATE TABLE IF NOT EXISTS console_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, op_email TEXT, action TEXT NOT NULL, company_id TEXT, detail TEXT, ip TEXT
+      );
     `);
+    for (const [c, def] of COMPANY_COLS) {
+      try { this.sql.exec(`ALTER TABLE companies ADD COLUMN ${c} ${def}`); } catch { /* already there */ }
+    }
+  }
+
+  // ---------- Company limits (set from the console) ----------
+  modulesOf(c) {
+    try {
+      const m = JSON.parse(c?.modules || 'null');
+      return Array.isArray(m) ? MODULES.filter((x) => m.includes(x)) : [...MODULES];
+    } catch { return [...MODULES]; }
+  }
+  idleFor(c) {
+    const m = Number(c?.idle_minutes) || 0;
+    return (m >= 2 && m <= 60 ? m : Number(this.env.IDLE_MINUTES || 5)) * MIN;
+  }
+  expired(c) { return !!(c?.valid_until && c.valid_until < todayIST()); }
+  domains(c) { return String(c?.email_domains || '').split(/[\s,;]+/).map((x) => x.trim().toLowerCase().replace(/^@/, '')).filter(Boolean); }
+  domainOk(c, email) {
+    const list = this.domains(c);
+    return !list.length || list.includes(String(email).split('@')[1]?.toLowerCase());
+  }
+  seatsInUse(c, exceptUserId = '') {
+    const now = Date.now();
+    return this.one(`SELECT COUNT(*) AS n FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE u.company_id = ? AND u.id != ? AND s.last_active > ? AND s.created_at > ?`, c.id, exceptUserId, now - this.idleFor(c), now - this.maxMs).n;
+  }
+  activeUsers(companyId) { return this.one('SELECT COUNT(*) AS n FROM users WHERE company_id = ? AND disabled = 0', companyId).n; }
+  checkUserLimit(c) {
+    if (c.max_users > 0 && this.activeUsers(c.id) >= c.max_users) {
+      throw new AuthError(409, `${c.name} can have at most ${c.max_users} active login${c.max_users === 1 ? '' : 's'}. Disable a login first, or ask your service provider to raise the limit.`);
+    }
+  }
+  accessEnded(c) {
+    if (!c || !c.active) return `Access for ${c?.name || 'this company'} is suspended.${c?.suspend_reason ? ` ${c.suspend_reason}` : ''} Please contact your service provider.`;
+    if (this.expired(c)) return `Access for ${c.name} ended on ${dmy(c.valid_until)}. Please contact your service provider.`;
+    return null;
   }
 
   // RPC entry point. Errors come back as plain data because custom error
@@ -82,7 +142,11 @@ export class Directory extends DurableObject {
       'loginPassword', 'loginVerify', 'touch', 'logout', 'publicUser',
       'listUsers', 'inviteUser', 'updateUser', 'resendInvite', 'resetSignIn', 'removeUser',
       'listSessions', 'endSession', 'authLog',
-      'listCompanies', 'createCompany', 'updateCompany', 'setCompanyActive', 'reminderRecipients',
+      'updateCompany', 'reminderRecipients',
+      'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
+      'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
+      'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
+      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -120,12 +184,12 @@ export class Directory extends DurableObject {
   cleanup() {
     const now = Date.now();
     this.sql.exec('DELETE FROM pending WHERE expires < ?', now);
-    this.sql.exec('DELETE FROM sessions WHERE last_active < ? OR created_at < ?', now - this.idleMs, now - this.maxMs);
+    this.sql.exec('DELETE FROM sessions WHERE last_active < ? OR created_at < ?', now - Math.max(this.idleMs, 60 * MIN), now - this.maxMs);
+    this.sql.exec('DELETE FROM console_sessions WHERE last_active < ? OR created_at < ?', now - this.cIdleMs, now - this.maxMs);
   }
 
   companyByCode(code) {
-    const c = this.one('SELECT * FROM companies WHERE code = ?', String(code || '').trim());
-    return c && c.active ? c : null;
+    return this.one('SELECT * FROM companies WHERE code = ?', String(code || '').trim());
   }
 
   otpauth(user, company) {
@@ -134,10 +198,10 @@ export class Directory extends DurableObject {
     return `otpauth://totp/${encodeURIComponent(`${issuer}:${user.email}`)}?secret=${'{SECRET}'}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
   }
 
-  async newRecovery(userId) {
+  async newRecovery(userId, table = 'users') {
     const recovery = Array.from({ length: 10 }, () => newToken(6).replace(/[-_]/g, 'x').slice(0, 8).toUpperCase());
     const hashes = await Promise.all(recovery.map((c) => sha256(c)));
-    this.sql.exec('UPDATE users SET recovery = ? WHERE id = ?', JSON.stringify(hashes), userId);
+    this.sql.exec(`UPDATE ${table} SET recovery = ? WHERE id = ?`, JSON.stringify(hashes), userId);
     return recovery;
   }
 
@@ -188,6 +252,13 @@ export class Directory extends DurableObject {
     const p = await this.takePending(setupToken, 'enroll', false);
     const user = this.one('SELECT * FROM users WHERE id = ?', p.user_id);
     if (!user || user.disabled) throw new AuthError(400, 'This step expired. Please start again.');
+    const co = this.one('SELECT * FROM companies WHERE id = ?', user.company_id);
+    const ended = this.accessEnded(co);
+    if (ended) throw new AuthError(403, ended);
+    this.cleanup();
+    if (co.max_concurrent > 0 && this.seatsInUse(co, user.id) >= co.max_concurrent) {
+      throw new AuthError(409, `All ${co.max_concurrent} sign-in seat${co.max_concurrent === 1 ? '' : 's'} for ${co.name} ${co.max_concurrent === 1 ? 'is' : 'are'} in use right now. Try this code again when someone logs out.`, { code: 'seats_full' });
+    }
     const secret = await decryptSecret(user.totp_enc, this.env.ENC_KEY);
     const counter = await verifyTotp(secret, code, user.totp_last);
     if (counter === null) throw new AuthError(400, 'That code did not match. Check your authenticator app and try again.', { field: 'code' });
@@ -240,6 +311,11 @@ export class Directory extends DurableObject {
       this.log('login_failed', { companyId: company.id, userId: user.id, email, detail: 'wrong password', client });
       throw new AuthError(401, 'Company code, email or password is incorrect.');
     }
+    const ended = this.accessEnded(company);
+    if (ended) {
+      this.log('login_refused', { companyId: company.id, userId: user.id, email, detail: 'company access ended', client });
+      throw new AuthError(403, ended);
+    }
     const token = newToken();
     this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)',
       await sha256(token), user.id, 'login', Date.now() + 5 * MIN);
@@ -263,9 +339,17 @@ export class Directory extends DurableObject {
       this.sql.exec('UPDATE pending SET passed = 1 WHERE token_hash = ?', await sha256(loginToken));
     }
 
-    // One active session per login.
+    const c = this.one('SELECT * FROM companies WHERE id = ?', user.company_id);
+    const ended = this.accessEnded(c);
+    if (ended) throw new AuthError(403, ended);
+    // Seats: how many people of this company may be signed in at the same time.
     this.cleanup();
-    const active = this.one('SELECT * FROM sessions WHERE user_id = ? ORDER BY last_active DESC LIMIT 1', user.id);
+    if (c.max_concurrent > 0 && this.seatsInUse(c, user.id) >= c.max_concurrent) {
+      this.log('login_refused', { companyId: c.id, userId: user.id, email: user.email, detail: `all ${c.max_concurrent} seats in use`, client });
+      throw new AuthError(409, `All ${c.max_concurrent} sign-in seat${c.max_concurrent === 1 ? '' : 's'} for ${c.name} ${c.max_concurrent === 1 ? 'is' : 'are'} in use right now. Try again when someone logs out, or ask your Admin to sign someone out.`, { code: 'seats_full' });
+    }
+    // One active session per login.
+    const active = this.one('SELECT * FROM sessions WHERE user_id = ? AND last_active > ? ORDER BY last_active DESC LIMIT 1', user.id, Date.now() - this.idleFor(c));
     if (active && !endOther) {
       throw new AuthError(409, 'This login is already in use on another device.', {
         active: { device: active.ua, place: active.place, lastActive: active.last_active },
@@ -294,7 +378,7 @@ export class Directory extends DurableObject {
         throw new AuthError(401, 'That recovery code is not valid or was already used.', { field: 'code' });
       }
       hashes.splice(idx, 1);
-      this.sql.exec('UPDATE users SET recovery = ? WHERE id = ?', JSON.stringify(hashes), user.id);
+      this.sql.exec(`UPDATE ${user._t || 'users'} SET recovery = ? WHERE id = ?`, JSON.stringify(hashes), user.id);
       return;
     }
     const secret = await decryptSecret(user.totp_enc, this.env.ENC_KEY);
@@ -303,7 +387,7 @@ export class Directory extends DurableObject {
       this.recordFailure(user);
       throw new AuthError(401, 'That code did not match. Use the latest 6-digit code from your authenticator app.', { field: 'code' });
     }
-    this.sql.exec('UPDATE users SET totp_last = ? WHERE id = ?', counter, user.id);
+    this.sql.exec(`UPDATE ${user._t || 'users'} SET totp_last = ? WHERE id = ?`, counter, user.id);
   }
 
   async setPassword(userId, password) {
@@ -389,6 +473,7 @@ export class Directory extends DurableObject {
       const msg = {
         reset: 'This reset link has expired or was already used. Ask for a new one.',
         invite: 'This invite link has expired or was already used. Ask your admin for a new one.',
+        c_invite: 'This console invite has expired or was already used. Ask another operator for a new one.',
       }[purpose] || 'This step expired. Please start again.';
       throw new AuthError(400, msg);
     }
@@ -397,16 +482,17 @@ export class Directory extends DurableObject {
   }
 
   checkLock(user) {
-    const fresh = this.one('SELECT locked_until FROM users WHERE id = ?', user.id);
+    const fresh = this.one(`SELECT locked_until FROM ${user._t || 'users'} WHERE id = ?`, user.id);
     if (fresh && fresh.locked_until > Date.now()) {
       const mins = Math.ceil((fresh.locked_until - Date.now()) / MIN);
       throw new AuthError(423, `Too many wrong attempts. Login locked for ${mins} more minute${mins === 1 ? '' : 's'}.`);
     }
   }
   recordFailure(user) {
-    const failed = (this.one('SELECT failed FROM users WHERE id = ?', user.id)?.failed || 0) + 1;
+    const t = user._t || 'users';
+    const failed = (this.one(`SELECT failed FROM ${t} WHERE id = ?`, user.id)?.failed || 0) + 1;
     const lock = failed >= LOCK_AFTER ? Date.now() + LOCK_MINUTES * MIN : 0;
-    this.sql.exec('UPDATE users SET failed = ?, locked_until = ? WHERE id = ?', lock ? 0 : failed, lock, user.id);
+    this.sql.exec(`UPDATE ${t} SET failed = ?, locked_until = ? WHERE id = ?`, lock ? 0 : failed, lock, user.id);
     if (lock) this.log('login_locked', { companyId: user.company_id, userId: user.id, email: user.email });
   }
 
@@ -433,14 +519,12 @@ export class Directory extends DurableObject {
       viaOld = !!s;
     }
     if (!s) return null;
-    if (now - s.last_active > this.idleMs || now - s.created_at > this.maxMs) {
-      this.sql.exec('DELETE FROM sessions WHERE id = ?', s.id);
-      return null;
-    }
     const u = this.one(
       `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.disabled, c.id AS company_id, c.name AS company_name,
-              c.code AS company_code, c.ticket_prefix, c.active FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, s.user_id);
-    if (!u || u.disabled || !u.active) {
+              c.code AS company_code, c.ticket_prefix, c.active, c.valid_until, c.idle_minutes, c.modules
+       FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, s.user_id);
+    const idle = this.idleFor(u);
+    if (!u || u.disabled || !u.active || this.expired(u) || now - s.last_active > idle || now - s.created_at > this.maxMs) {
       this.sql.exec('DELETE FROM sessions WHERE id = ?', s.id);
       return null;
     }
@@ -455,8 +539,8 @@ export class Directory extends DurableObject {
     return {
       sessionId: s.id, userId: u.id, email: u.email, name: u.name, isOwner: !!u.is_owner,
       companyId: u.company_id, companyName: u.company_name, companyCode: u.company_code, ticketPrefix: u.ticket_prefix,
-      role: u.role, dupOverride: !!u.dup_override || u.role === 'Admin',
-      newToken: newTok, expiresIn: this.idleMs,
+      role: u.role, dupOverride: !!u.dup_override || u.role === 'Admin', modules: this.modulesOf(u),
+      newToken: newTok, expiresIn: idle, idleMinutes: idle / MIN,
     };
   }
 
@@ -471,13 +555,15 @@ export class Directory extends DurableObject {
   publicUser(arg) {
     const userId = typeof arg === 'string' ? arg : arg.userId;
     const u = this.one(
-      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.recovery, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix
+      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.recovery, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix,
+              c.modules, c.idle_minutes, c.valid_until
        FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, userId);
     if (!u) return null;
     return {
       id: u.id, email: u.email, name: u.name, role: u.role, isOwner: !!u.is_owner,
       dupOverride: !!u.dup_override || u.role === 'Admin',
-      company: { id: u.cid, name: u.cname, code: u.code, ticketPrefix: u.ticket_prefix },
+      company: { id: u.cid, name: u.cname, code: u.code, ticketPrefix: u.ticket_prefix, modules: this.modulesOf(u), validUntil: u.valid_until },
+      idleMinutes: this.idleFor(u) / MIN,
       recoveryLeft: JSON.parse(u.recovery).length,
     };
   }
@@ -494,7 +580,8 @@ export class Directory extends DurableObject {
       `SELECT id, email, name, role, dup_override, is_owner, disabled, totp_enabled, last_login, created_at, locked_until
        FROM users WHERE company_id = ? ORDER BY disabled, name COLLATE NOCASE`, actor.companyId);
     const invites = new Set(this.all("SELECT user_id FROM pending WHERE purpose = 'invite' AND expires > ?", now).map((r) => r.user_id));
-    const online = new Set(this.all('SELECT user_id FROM sessions WHERE last_active > ?', now - this.idleMs).map((r) => r.user_id));
+    const c = this.one('SELECT * FROM companies WHERE id = ?', actor.companyId);
+    const online = new Set(this.all('SELECT user_id FROM sessions WHERE last_active > ?', now - this.idleFor(c)).map((r) => r.user_id));
     return rows.map((r) => ({
       id: r.id, email: r.email, name: r.name, role: r.role, isOwner: !!r.is_owner, disabled: !!r.disabled,
       dupOverride: !!r.dup_override, lastLogin: r.last_login, createdAt: r.created_at,
@@ -521,6 +608,9 @@ export class Directory extends DurableObject {
     if (this.one('SELECT 1 AS x FROM users WHERE company_id = ? AND email = ?', actor.companyId, email)) {
       throw new AuthError(409, 'This email already has a login in this company.', { field: 'email' });
     }
+    const c = this.one('SELECT * FROM companies WHERE id = ?', actor.companyId);
+    if (!this.domainOk(c, email)) throw new AuthError(422, `Logins for ${c.name} must use an email at: ${this.domains(c).join(', ')}`, { field: 'email' });
+    this.checkUserLimit(c);
     const id = uuid();
     this.sql.exec('INSERT INTO users (id, company_id, email, name, role, dup_override, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)',
       id, actor.companyId, email, name, role, dupOverride ? 1 : 0, Date.now(), actor.userId);
@@ -557,6 +647,7 @@ export class Directory extends DurableObject {
       changes.push(`duplicate override ${dupOverride ? 'on' : 'off'}`);
     }
     if (typeof disabled === 'boolean' && disabled !== !!u.disabled) {
+      if (!disabled) this.checkUserLimit(this.one('SELECT * FROM companies WHERE id = ?', actor.companyId));
       this.sql.exec('UPDATE users SET disabled = ? WHERE id = ?', disabled ? 1 : 0, userId);
       if (disabled) {
         this.sql.exec('DELETE FROM sessions WHERE user_id = ?', userId);
@@ -614,7 +705,8 @@ export class Directory extends DurableObject {
     this.cleanup();
     return this.all(
       `SELECT s.id, s.created_at, s.last_active, s.ua, s.ip, s.place, u.name, u.email, u.role
-       FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.company_id = ? ORDER BY s.last_active DESC`, actor.companyId)
+       FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.company_id = ? AND s.last_active > ? ORDER BY s.last_active DESC`,
+      actor.companyId, Date.now() - this.idleFor(this.one('SELECT * FROM companies WHERE id = ?', actor.companyId)))
       .map((s) => ({ ...s, current: s.id === actor.sessionId }));
   }
 
@@ -634,42 +726,7 @@ export class Directory extends DurableObject {
       actor.companyId, Math.min(Number(limit) || 300, 1000));
   }
 
-  // ---------- Companies ----------
-  // The owner (the login created at first setup) can add companies. Each new company
-  // gets its own first Admin through an invite; the owner does NOT get access to its data.
-  listCompanies({ actor }) {
-    if (!actor.isOwner) throw new AuthError(403, 'Only the owner can see all companies.');
-    return this.all(`SELECT c.id, c.code, c.name, c.ticket_prefix, c.active, c.created_at,
-      (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id AND u.disabled = 0) AS users,
-      (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id AND u.role = 'Admin' AND u.totp_enabled = 1) AS admins_ready
-      FROM companies c ORDER BY c.name`);
-  }
-
-  async createCompany({ actor, name, code, ticketPrefix, adminName, adminEmail }) {
-    if (!actor.isOwner) throw new AuthError(403, 'Only the owner can add companies.');
-    if (this.one('SELECT 1 AS x FROM companies WHERE code = ?', code)) throw new AuthError(409, 'Another company already uses this code.', { field: 'code' });
-    if (this.one('SELECT 1 AS x FROM companies WHERE name = ?', name)) throw new AuthError(409, 'A company with this name already exists.', { field: 'name' });
-    const id = uuid();
-    const userId = uuid();
-    const now = Date.now();
-    this.sql.exec('INSERT INTO companies (id, code, name, ticket_prefix, created_at) VALUES (?,?,?,?,?)', id, code, name, ticketPrefix, now);
-    this.sql.exec("INSERT INTO users (id, company_id, email, name, role, dup_override, created_at, created_by) VALUES (?,?,?,?, 'Admin', 1, ?,?)",
-      userId, id, adminEmail, adminName, now, actor.userId);
-    const inv = await this.makeInvite(userId);
-    this.log('company_created', { companyId: id, userId: actor.userId, email: actor.email, detail: `${name} (${code}) by ${actor.email}` });
-    this.log('user_invited', { companyId: id, userId, email: adminEmail, detail: `Admin by ${actor.email} (owner)` });
-    return { company: { id, code, name, ticketPrefix }, invite: inv, user: { id: userId, email: adminEmail, name: adminName } };
-  }
-
-  setCompanyActive({ actor, companyId, active }) {
-    if (!actor.isOwner) throw new AuthError(403, 'Only the owner can switch companies on or off.');
-    if (companyId === actor.companyId && !active) throw new AuthError(422, 'You cannot switch off your own company.');
-    this.sql.exec('UPDATE companies SET active = ? WHERE id = ?', active ? 1 : 0, companyId);
-    if (!active) this.sql.exec('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', companyId);
-    this.log(active ? 'company_enabled' : 'company_disabled', { companyId, userId: actor.userId, email: actor.email });
-    return { ok: true };
-  }
-
+  // ---------- Companies (created and limited from the console; an Admin can rename their own) ----------
   updateCompany({ actor, name, ticketPrefix }) {
     this.requireAdmin(actor);
     if (this.one('SELECT 1 AS x FROM companies WHERE name = ? AND id != ?', name, actor.companyId)) {
@@ -696,5 +753,329 @@ export class Directory extends DurableObject {
 
   appUrl() {
     return this.one("SELECT value FROM meta WHERE key = 'app_url'")?.value || null;
+  }
+
+  // =====================================================================
+  // Console: the service provider's own website. Separate accounts (console_users), separate sessions,
+  // mandatory 2FA. Operators create companies, set their limits and rights, and manage their logins.
+  // Operators never see a company's RMA or care pack data.
+  // =====================================================================
+  get cIdleMs() { return Number(this.env.CONSOLE_IDLE_MINUTES || 15) * MIN; }
+
+  cLog(op, action, { companyId = null, detail = null, ip = null } = {}) {
+    this.sql.exec('INSERT INTO console_log (at, op_email, action, company_id, detail, ip) VALUES (?,?,?,?,?,?)',
+      Date.now(), op?.email || null, action, companyId, detail ? String(detail).slice(0, 1000) : null, ip);
+  }
+  cOp(id) {
+    const op = this.one('SELECT * FROM console_users WHERE id = ?', id);
+    return op ? { ...op, _t: 'console_users' } : null;
+  }
+  cPublic(id) {
+    const o = this.one('SELECT id, email, name, recovery, last_login FROM console_users WHERE id = ?', id);
+    return o && { id: o.id, email: o.email, name: o.name, recoveryLeft: JSON.parse(o.recovery).length, lastLogin: o.last_login };
+  }
+
+  consoleNeedsSetup() {
+    return { needsSetup: !this.one('SELECT 1 AS x FROM console_users WHERE totp_enabled = 1 LIMIT 1') };
+  }
+  async consoleSetupStart({ name, email, password, ip }) {
+    this.limitIp(ip);
+    if (!this.consoleNeedsSetup().needsSetup) throw new AuthError(409, 'The console is already set up. Log in instead.');
+    this.sql.exec('DELETE FROM console_users WHERE totp_enabled = 0');
+    const pw = await hashPassword(password, null, this.iterations);
+    const id = uuid();
+    this.sql.exec('INSERT INTO console_users (id, email, name, pass_hash, pass_salt, pass_iter, created_at) VALUES (?,?,?,?,?,?,?)',
+      id, email, name, pw.hash, pw.salt, pw.iterations, Date.now());
+    this.cLog({ email }, 'setup', { ip });
+    return this.cBeginEnroll(this.cOp(id));
+  }
+  async cBeginEnroll(op) {
+    const secret = newTotpSecret();
+    this.sql.exec('UPDATE console_users SET totp_enc = ?, totp_enabled = 0, totp_last = -1 WHERE id = ?', await encryptSecret(secret, this.env.ENC_KEY), op.id);
+    const token = newToken();
+    this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), op.id, 'c_enroll', Date.now() + 15 * MIN);
+    const issuer = `${this.appName} Console`;
+    return { setupToken: token, secret, otpauth: `otpauth://totp/${encodeURIComponent(`${issuer}:${op.email}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30` };
+  }
+  async consoleEnrollFinish({ setupToken, code, client }) {
+    const p = await this.takePending(setupToken, 'c_enroll', false);
+    const op = this.cOp(p.user_id);
+    if (!op || op.disabled) throw new AuthError(400, 'This step expired. Please start again.');
+    const counter = await verifyTotp(await decryptSecret(op.totp_enc, this.env.ENC_KEY), code, op.totp_last);
+    if (counter === null) throw new AuthError(400, 'That code did not match. Check your authenticator app and try again.', { field: 'code' });
+    this.sql.exec('UPDATE console_users SET totp_enabled = 1, totp_last = ?, failed = 0, locked_until = 0, last_login = ? WHERE id = ?', counter, Date.now(), op.id);
+    const recoveryCodes = await this.newRecovery(op.id, 'console_users');
+    this.sql.exec('DELETE FROM pending WHERE token_hash = ?', await sha256(setupToken));
+    this.sql.exec('DELETE FROM console_sessions WHERE op_id = ?', op.id);
+    const token = await this.cCreateSession(op.id, client);
+    this.cLog(op, '2fa_enrolled', { ip: client?.ip });
+    return { recoveryCodes, op: this.cPublic(op.id), token };
+  }
+  async cCreateSession(opId, client = {}) {
+    const token = newToken();
+    const now = Date.now();
+    this.sql.exec('INSERT INTO console_sessions (id, op_id, token_hash, created_at, last_active, rotated_at, ua, ip, place) VALUES (?,?,?,?,?,?,?,?,?)',
+      uuid(), opId, await sha256(token), now, now, now, (client.ua || '').slice(0, 200), client.ip || '', client.place || '');
+    return token;
+  }
+  async consoleLogin({ email, password, client }) {
+    this.limitIp(client.ip);
+    this.cleanup();
+    const row = this.one('SELECT id FROM console_users WHERE email = ?', email);
+    const op = row ? this.cOp(row.id) : null;
+    if (!op || !op.totp_enabled || !op.pass_hash || op.disabled) {
+      await hashPassword(password || 'x', null, this.iterations);
+      this.cLog({ email }, 'login_failed', { detail: op ? 'not active' : 'unknown email', ip: client.ip });
+      throw new AuthError(401, 'Email or password is incorrect.');
+    }
+    this.checkLock(op);
+    const pw = await hashPassword(password, op.pass_salt, op.pass_iter);
+    if (!timingSafeEqual(pw.hash, op.pass_hash)) {
+      this.recordFailure(op);
+      this.cLog(op, 'login_failed', { detail: 'wrong password', ip: client.ip });
+      throw new AuthError(401, 'Email or password is incorrect.');
+    }
+    const token = newToken();
+    this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), op.id, 'c_login', Date.now() + 5 * MIN);
+    return { loginToken: token };
+  }
+  async consoleVerify({ loginToken, code, recoveryCode, client }) {
+    const p = await this.takePending(loginToken, 'c_login', false);
+    const op = this.cOp(p.user_id);
+    if (!op || op.disabled) throw new AuthError(401, 'Login expired. Please start again.');
+    this.checkLock(op);
+    try {
+      await this.verifySecondFactor(op, { code, recoveryCode });
+    } catch (e) {
+      this.cLog(op, 'login_failed', { detail: 'wrong 2FA code', ip: client.ip });
+      throw e;
+    }
+    this.sql.exec('DELETE FROM pending WHERE token_hash = ?', await sha256(loginToken));
+    // One console session per operator; a new login ends the old one.
+    this.sql.exec('DELETE FROM console_sessions WHERE op_id = ?', op.id);
+    this.sql.exec('UPDATE console_users SET failed = 0, locked_until = 0, last_login = ? WHERE id = ?', Date.now(), op.id);
+    const token = await this.cCreateSession(op.id, client);
+    this.cLog(op, recoveryCode ? 'login (recovery code)' : 'login', { detail: [client.ua, client.place].filter(Boolean).join(', '), ip: client.ip });
+    return { token, op: this.cPublic(op.id) };
+  }
+  async consoleTouch({ token }) {
+    if (!token) return null;
+    const h = await sha256(token);
+    const now = Date.now();
+    let s = this.one('SELECT * FROM console_sessions WHERE token_hash = ?', h);
+    let viaOld = false;
+    if (!s) { s = this.one('SELECT * FROM console_sessions WHERE prev_hash = ? AND prev_until > ?', h, now); viaOld = !!s; }
+    if (!s) return null;
+    const op = this.cOp(s.op_id);
+    if (!op || op.disabled || now - s.last_active > this.cIdleMs || now - s.created_at > this.maxMs) {
+      this.sql.exec('DELETE FROM console_sessions WHERE id = ?', s.id);
+      return null;
+    }
+    let newTok = null;
+    if (!viaOld && now - s.rotated_at > ROTATE_EVERY) {
+      newTok = newToken();
+      this.sql.exec('UPDATE console_sessions SET prev_hash = token_hash, prev_until = ?, token_hash = ?, rotated_at = ?, last_active = ? WHERE id = ?',
+        now + OLD_TOKEN_GRACE, await sha256(newTok), now, now, s.id);
+    } else {
+      this.sql.exec('UPDATE console_sessions SET last_active = ? WHERE id = ?', now, s.id);
+    }
+    return { opId: op.id, email: op.email, name: op.name, sessionId: s.id, newToken: newTok, idleMinutes: this.cIdleMs / MIN };
+  }
+  async consoleLogout({ token }) {
+    if (!token) return;
+    const h = await sha256(token);
+    const s = this.one('SELECT op_id FROM console_sessions WHERE token_hash = ? OR prev_hash = ?', h, h);
+    this.sql.exec('DELETE FROM console_sessions WHERE token_hash = ? OR prev_hash = ?', h, h);
+    if (s) this.cLog(this.cOp(s.op_id), 'logout');
+  }
+  consoleMe({ op }) { return this.cPublic(op.opId); }
+  async consoleChangePassword({ op, current, password, code }) {
+    const o = this.cOp(op.opId);
+    this.checkLock(o);
+    const pw = await hashPassword(current || '', o.pass_salt, o.pass_iter);
+    if (!timingSafeEqual(pw.hash, o.pass_hash)) { this.recordFailure(o); throw new AuthError(401, 'Current password is incorrect.', { field: 'current' }); }
+    await this.verifySecondFactor(o, { code });
+    const next = await hashPassword(password, null, this.iterations);
+    this.sql.exec('UPDATE console_users SET pass_hash = ?, pass_salt = ?, pass_iter = ?, failed = 0 WHERE id = ?', next.hash, next.salt, next.iterations, o.id);
+    this.sql.exec('DELETE FROM console_sessions WHERE op_id = ? AND id != ?', o.id, op.sessionId);
+    this.cLog(o, 'password_changed');
+    return { email: o.email, name: o.name };
+  }
+  async consoleRecoveryCodes({ op, code }) {
+    const o = this.cOp(op.opId);
+    this.checkLock(o);
+    await this.verifySecondFactor(o, { code });
+    this.cLog(o, 'recovery_codes_renewed');
+    return { recoveryCodes: await this.newRecovery(o.id, 'console_users') };
+  }
+
+  // ---------- Operators ----------
+  consoleOperators() {
+    const now = Date.now();
+    const invites = new Set(this.all("SELECT user_id FROM pending WHERE purpose = 'c_invite' AND expires > ?", now).map((r) => r.user_id));
+    const online = new Set(this.all('SELECT op_id FROM console_sessions WHERE last_active > ?', now - this.cIdleMs).map((r) => r.op_id));
+    return this.all('SELECT id, email, name, totp_enabled, disabled, last_login, created_at, created_by, locked_until FROM console_users ORDER BY disabled, name COLLATE NOCASE')
+      .map((o) => ({ id: o.id, email: o.email, name: o.name, lastLogin: o.last_login, createdAt: o.created_at, createdBy: o.created_by, online: online.has(o.id),
+        status: o.disabled ? 'Disabled' : o.totp_enabled ? (o.locked_until > now ? 'Locked' : 'Active') : invites.has(o.id) ? 'Invited' : 'Invite expired' }));
+  }
+  async cInvite(id) {
+    this.sql.exec("DELETE FROM pending WHERE user_id = ? AND purpose = 'c_invite'", id);
+    const token = newToken();
+    this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), id, 'c_invite', Date.now() + 2 * DAY);
+    return { token, days: 2 };
+  }
+  async consoleInviteOperator({ op, name, email }) {
+    if (this.one('SELECT 1 AS x FROM console_users WHERE email = ?', email)) throw new AuthError(409, 'This email is already a console operator.', { field: 'email' });
+    const id = uuid();
+    this.sql.exec('INSERT INTO console_users (id, email, name, created_at, created_by) VALUES (?,?,?,?,?)', id, email, name, Date.now(), op.email);
+    this.cLog(op, 'operator_invited', { detail: email });
+    return { invite: await this.cInvite(id), user: { id, email, name } };
+  }
+  async consoleInviteCheck({ token }) {
+    const p = await this.takePending(token, 'c_invite', false);
+    const o = this.cOp(p.user_id);
+    if (!o || o.disabled) throw new AuthError(400, 'This console invite is no longer valid.');
+    return { email: o.email, name: o.name };
+  }
+  async consoleInviteStart({ token, password, ip }) {
+    this.limitIp(ip);
+    const p = await this.takePending(token, 'c_invite', false);
+    const o = this.cOp(p.user_id);
+    if (!o || o.disabled) throw new AuthError(400, 'This console invite is no longer valid.');
+    const pw = await hashPassword(password, null, this.iterations);
+    this.sql.exec('UPDATE console_users SET pass_hash = ?, pass_salt = ?, pass_iter = ? WHERE id = ?', pw.hash, pw.salt, pw.iterations, o.id);
+    this.sql.exec('DELETE FROM pending WHERE token_hash = ?', await sha256(token));
+    this.cLog(o, 'invite_accepted', { ip });
+    return this.cBeginEnroll(o);
+  }
+  consoleUpdateOperator({ op, id, disabled }) {
+    const o = this.cOp(id);
+    if (!o) throw new AuthError(404, 'Operator not found.');
+    if (id === op.opId) throw new AuthError(422, 'You cannot disable yourself.');
+    if (disabled && this.one('SELECT COUNT(*) AS n FROM console_users WHERE disabled = 0 AND totp_enabled = 1 AND id != ?', id).n === 0) {
+      throw new AuthError(422, 'At least one active operator is needed.');
+    }
+    this.sql.exec('UPDATE console_users SET disabled = ? WHERE id = ?', disabled ? 1 : 0, id);
+    if (disabled) { this.sql.exec('DELETE FROM console_sessions WHERE op_id = ?', id); this.sql.exec('DELETE FROM pending WHERE user_id = ?', id); }
+    this.cLog(op, disabled ? 'operator_disabled' : 'operator_enabled', { detail: o.email });
+    return { ok: true };
+  }
+  async consoleResetOperator({ op, id }) {
+    const o = this.cOp(id);
+    if (!o) throw new AuthError(404, 'Operator not found.');
+    if (id === op.opId) throw new AuthError(422, 'Use your profile to change your own password or recovery codes.');
+    this.sql.exec("UPDATE console_users SET pass_hash = '', pass_salt = '', pass_iter = 0, totp_enc = NULL, totp_enabled = 0, totp_last = -1, recovery = '[]', failed = 0, locked_until = 0, disabled = 0 WHERE id = ?", id);
+    this.sql.exec('DELETE FROM console_sessions WHERE op_id = ?', id);
+    this.cLog(op, 'operator_reset', { detail: o.email });
+    return { invite: await this.cInvite(id), user: { id, email: o.email, name: o.name } };
+  }
+  consoleLogView({ companyId, limit = 500 }) {
+    const lim = Math.min(Number(limit) || 500, 2000);
+    return companyId
+      ? this.all('SELECT * FROM console_log WHERE company_id = ? ORDER BY at DESC LIMIT ?', companyId, lim)
+      : this.all('SELECT l.*, c.name AS company FROM console_log l LEFT JOIN companies c ON c.id = l.company_id ORDER BY l.at DESC LIMIT ?', lim);
+  }
+
+  // ---------- Companies ----------
+  cCompanyOut(c) {
+    const now = Date.now();
+    return {
+      id: c.id, code: c.code, name: c.name, ticketPrefix: c.ticket_prefix, active: !!c.active, createdAt: c.created_at, updatedAt: c.updated_at,
+      contactName: c.contact_name || '', contactEmail: c.contact_email || '', contactPhone: c.contact_phone || '', address: c.address || '',
+      gstin: c.gstin || '', notes: c.notes || '', maxUsers: c.max_users || 0, maxConcurrent: c.max_concurrent || 0, validUntil: c.valid_until || '',
+      modules: this.modulesOf(c), idleMinutes: c.idle_minutes || 0, emailDomains: c.email_domains || '', suspendReason: c.suspend_reason || '',
+      expired: this.expired(c), users: this.activeUsers(c.id), online: this.seatsInUse(c),
+      adminsReady: this.one("SELECT COUNT(*) AS n FROM users WHERE company_id = ? AND role = 'Admin' AND totp_enabled = 1 AND disabled = 0", c.id).n,
+      lastLogin: this.one('SELECT MAX(last_login) AS t FROM users WHERE company_id = ?', c.id).t,
+      daysLeft: c.valid_until ? Math.round((Date.parse(`${c.valid_until}T00:00:00Z`) - Date.parse(`${todayIST()}T00:00:00Z`)) / DAY) : null,
+      checkedAt: now,
+    };
+  }
+  consoleCompanies() {
+    this.cleanup();
+    return { companies: this.all('SELECT * FROM companies ORDER BY name COLLATE NOCASE').map((c) => this.cCompanyOut(c)), modules: MODULES };
+  }
+  cCompany(id) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    return c;
+  }
+  cActor(op, companyId) {
+    return { role: 'Admin', companyId, userId: `console:${op.opId}`, email: `${op.email} (console)`, name: op.name, sessionId: null };
+  }
+  consoleCompany({ op, id }) {
+    const c = this.cCompany(id);
+    const actor = this.cActor(op, id);
+    return {
+      company: this.cCompanyOut(c), modules: MODULES, roles: ROLES,
+      users: this.listUsers({ actor }), sessions: this.listSessions({ actor }),
+      log: this.authLog({ actor, limit: 200 }), consoleLog: this.consoleLogView({ companyId: id, limit: 100 }),
+    };
+  }
+  cFields(d) {
+    const mods = Array.isArray(d.modules) ? MODULES.filter((m) => d.modules.includes(m)) : [...MODULES];
+    return {
+      contact_name: d.contactName || null, contact_email: d.contactEmail || null, contact_phone: d.contactPhone || null, address: d.address || null,
+      gstin: d.gstin || null, notes: d.notes || null, max_users: Number(d.maxUsers) || 0, max_concurrent: Number(d.maxConcurrent) || 0,
+      valid_until: d.validUntil || null, modules: JSON.stringify(mods), idle_minutes: Number(d.idleMinutes) || 0, email_domains: d.emailDomains || null,
+    };
+  }
+  async consoleCreateCompany({ op, data, admin, ip }) {
+    if (this.one('SELECT 1 AS x FROM companies WHERE code = ?', data.code)) throw new AuthError(409, 'Another company already uses this login code.', { field: 'code' });
+    if (this.one('SELECT 1 AS x FROM companies WHERE name = ?', data.name)) throw new AuthError(409, 'A company with this name already exists.', { field: 'name' });
+    const id = uuid();
+    const userId = uuid();
+    const now = Date.now();
+    const f = this.cFields(data);
+    const tmp = { ...f, email_domains: f.email_domains };
+    if (!this.domainOk(tmp, admin.email)) throw new AuthError(422, `The first Admin's email must be at: ${this.domains(tmp).join(', ')}`, { field: 'adminEmail' });
+    this.sql.exec(`INSERT INTO companies (id, code, name, ticket_prefix, active, created_at, updated_at, ${Object.keys(f).join(', ')})
+      VALUES (?,?,?,?,1,?,?, ${Object.keys(f).map(() => '?').join(',')})`, id, data.code, data.name, data.ticketPrefix, now, now, ...Object.values(f));
+    this.sql.exec("INSERT INTO users (id, company_id, email, name, role, dup_override, created_at, created_by) VALUES (?,?,?,?, 'Admin', 1, ?,?)",
+      userId, id, admin.email, admin.name, now, `console:${op.opId}`);
+    const invite = await this.makeInvite(userId);
+    this.log('company_created', { companyId: id, email: op.email, detail: `${data.name} (${data.code}) by ${op.email} (console)` });
+    this.log('user_invited', { companyId: id, userId, email: admin.email, detail: `Admin by ${op.email} (console)` });
+    this.cLog(op, 'company_created', { companyId: id, detail: `${data.name} (${data.code}); first Admin ${admin.email}; users ${f.max_users || '∞'}, seats ${f.max_concurrent || '∞'}, until ${f.valid_until || '—'}`, ip });
+    return { company: this.cCompanyOut(this.cCompany(id)), invite, user: { id: userId, email: admin.email, name: admin.name } };
+  }
+  consoleUpdateCompany({ op, id, data, ip }) {
+    const c = this.cCompany(id);
+    if (data.name && this.one('SELECT 1 AS x FROM companies WHERE name = ? AND id != ?', data.name, id)) throw new AuthError(409, 'A company with this name already exists.', { field: 'name' });
+    const f = this.cFields(data);
+    const active = typeof data.active === 'boolean' ? (data.active ? 1 : 0) : c.active;
+    const before = this.cCompanyOut(c);
+    this.sql.exec(`UPDATE companies SET name = ?, ticket_prefix = ?, active = ?, suspend_reason = ?, updated_at = ?, ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      data.name || c.name, data.ticketPrefix || c.ticket_prefix, active, active ? null : (data.suspendReason || c.suspend_reason || null), Date.now(), ...Object.values(f), id);
+    const after = this.cCompany(id);
+    if (!after.active || this.expired(after)) this.sql.exec('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id);
+    const out = this.cCompanyOut(after);
+    const changed = ['name', 'ticketPrefix', 'active', 'maxUsers', 'maxConcurrent', 'validUntil', 'idleMinutes', 'emailDomains', 'contactName', 'contactEmail', 'contactPhone', 'address', 'gstin', 'notes']
+      .filter((k) => String(before[k]) !== String(out[k])).map((k) => `${k}: ${before[k] === '' ? '—' : before[k]} → ${out[k] === '' ? '—' : out[k]}`);
+    if (before.modules.join() !== out.modules.join()) changed.push(`modules: ${before.modules.join(' ') || '—'} → ${out.modules.join(' ') || '—'}`);
+    if (changed.length) {
+      this.cLog(op, before.active !== out.active ? (out.active ? 'company_activated' : 'company_suspended') : 'company_updated', { companyId: id, detail: changed.join('; '), ip });
+      this.log('company_updated', { companyId: id, email: op.email, detail: `by ${op.email} (console): ${changed.join('; ')}`.slice(0, 500) });
+    }
+    return out;
+  }
+  consoleSignOutAll({ op, id }) {
+    this.cCompany(id);
+    const n = this.one('SELECT COUNT(*) AS n FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id).n;
+    this.sql.exec('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id);
+    this.cLog(op, 'signed_out_everyone', { companyId: id, detail: `${n} session(s)` });
+    this.log('session_ended_by_admin', { companyId: id, email: op.email, detail: `all sessions, by ${op.email} (console)` });
+    return { ended: n };
+  }
+  // Runs one of the company Admin's user actions on behalf of a console operator, and logs it.
+  async consoleAct({ op, companyId, action, args = {} }) {
+    const allowed = ['inviteUser', 'updateUser', 'resendInvite', 'resetSignIn', 'removeUser', 'endSession'];
+    if (!allowed.includes(action)) throw new AuthError(400, 'Unknown action');
+    this.cCompany(companyId);
+    const r = await this[action]({ ...args, actor: this.cActor(op, companyId) });
+    const who = args.email || (args.userId && this.one('SELECT email FROM users WHERE id = ?', args.userId)?.email) || args.id || '';
+    const what = action === 'updateUser' ? Object.entries(args).filter(([k]) => k !== 'userId').map(([k, v]) => `${k}=${v}`).join(', ') : '';
+    this.cLog(op, action, { companyId, detail: [who, what].filter(Boolean).join(' · ') });
+    return r;
   }
 }

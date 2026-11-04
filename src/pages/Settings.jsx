@@ -135,8 +135,8 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
 
       <div className="savebar"><button className="btn primary" disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
     </form>
-    <CarePackSettings s0={s0} reloadBoot={reloadBoot} />
-    <ZohoSettings s0={s0} reloadBoot={reloadBoot} />
+    {user.company.modules?.includes('carepack') && <CarePackSettings s0={s0} reloadBoot={reloadBoot} />}
+    {user.company.modules?.includes('zoho') && <ZohoSettings s0={s0} reloadBoot={reloadBoot} />}
     </>
   );
 }

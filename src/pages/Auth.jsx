@@ -121,9 +121,12 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
         : useRecovery ? `Recovery code used — ${r.user.recoveryLeft} left. Make new ones in your profile.` : null;
       onSignedIn(r.user, r.idleMinutes, note);
     } catch (err) {
-      if (err.status === 409) {
+      if (err.status === 409 && err.data.active) {
         setActive(err.data.active);
         setStep('active');
+      } else if (err.status === 403 || err.data?.code === 'seats_full') {
+        setErrors({ form: err.message });
+        setCode('');
       } else if (err.status === 400 && /expired|start again/i.test(err.message)) {
         setStep('password');
         setErrors({ form: err.message });
@@ -308,7 +311,7 @@ function Setup({ onSignedIn, toLogin }) {
       <div className="steps" aria-label="Step 1 of 3"><i className="on" /><i /><i /></div>
       <div>
         <h2 style={{ fontSize: '1.5rem' }}>Set up RMA Cloud</h2>
-        <p className="muted" style={{ marginTop: 6 }}>Create the first company and your Admin login. You'll be the owner: you can add more companies later, each with its own separate logins.</p>
+        <p className="muted" style={{ marginTop: 6 }}>Create the first company and its Admin login. More companies, their limits and logins are managed from the separate console website.</p>
       </div>
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
       <Field label="Company name" required htmlFor="cn" error={errors.companyName}>

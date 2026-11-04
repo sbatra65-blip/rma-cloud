@@ -13,6 +13,10 @@ export default defineConfig({
     __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
     __BUILD_COMMIT__: JSON.stringify(commit),
   },
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 1200 },
+  build: {
+    outDir: 'dist', emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 1200,
+    // Two sites: the RMA app (index.html) and the service provider console (console.html).
+    rollupOptions: { input: { app: 'index.html', console: 'console.html' } },
+  },
   server: { proxy: { '/api': 'http://localhost:8787' } },
 });

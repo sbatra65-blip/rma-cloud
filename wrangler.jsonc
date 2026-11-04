@@ -8,8 +8,11 @@
 
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "html_handling": "auto-trailing-slash",
+    // The Worker sees every request so it can send /console to the console site (or to its own domain).
+    "run_worker_first": true
   },
 
   // The OEM RMA Excel form ships inside the Worker as the default template.
@@ -39,7 +42,12 @@
     "IDLE_MINUTES": "5",
     "MAX_SESSION_HOURS": "12",
     "PBKDF2_ITERATIONS": "100000",
-    "MAIL_FROM": "RMA Cloud <onboarding@resend.dev>"
+    "MAIL_FROM": "RMA Cloud <onboarding@resend.dev>",
+    "CONSOLE_IDLE_MINUTES": "15"
+    // Optional (set in the Cloudflare dashboard):
+    //   CONSOLE_HOST  e.g. "console.example.com" — console only on that domain
+    //   APP_URL       e.g. "https://rma.example.com" — where invite links for company logins point
+    //   CONSOLE_SETUP_KEY (secret) — needed once to create the first console operator
   },
 
   "keep_vars": true,

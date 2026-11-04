@@ -14,7 +14,6 @@ import Import from './pages/Import.jsx';
 import Masters from './pages/Masters.jsx';
 import Settings from './pages/Settings.jsx';
 import Users from './pages/Users.jsx';
-import Companies from './pages/Companies.jsx';
 import Profile from './pages/Profile.jsx';
 import CarePacks, { CarePackPending, OverrideLog } from './pages/CarePacks.jsx';
 import CarePackRegister from './pages/CarePackRegister.jsx';
@@ -98,6 +97,8 @@ function Shell() {
   const { user } = state;
   const route = path.split('?')[0];
   const common = { user, boot, reloadBoot: loadBoot, path, onChange: refreshReminders };
+  const mods = user.company.modules || ['carepack', 'zoho', 'batches', 'import', 'reports'];
+  const has = (m) => mods.includes(m);
 
   let page;
   let m;
@@ -106,20 +107,19 @@ function Shell() {
   else if (route === '/rma/new' && can.edit(user)) page = <RmaForm {...common} key="new" />;
   else if ((m = route.match(/^\/rma\/(\d+)\/edit$/)) && can.edit(user)) page = <RmaForm {...common} id={m[1]} key={`e${m[1]}`} />;
   else if ((m = route.match(/^\/rma\/(\d+)$/))) page = <RmaDetail {...common} id={m[1]} key={m[1]} />;
-  else if (route === '/batches' || route.startsWith('/batches/')) page = <Batches {...common} code={route.split('/')[2]} key={route} />;
-  else if (route === '/care-packs') page = <CarePacks {...common} />;
-  else if (route === '/care-packs/new' && can.manage(user)) page = <CarePackRegister {...common} />;
-  else if (route === '/care-packs/pending') page = <CarePackPending {...common} />;
-  else if (route === '/care-packs/overrides' && can.admin(user)) page = <OverrideLog {...common} />;
-  else if ((m = route.match(/^\/care-packs\/(\d+)\/po$/)) && can.edit(user)) page = <CarePackPo {...common} id={m[1]} key={`po${m[1]}`} />;
-  else if ((m = route.match(/^\/care-packs\/(\d+)$/))) page = <CarePackDetail {...common} id={m[1]} key={`cp${m[1]}`} />;
+  else if ((route === '/batches' || route.startsWith('/batches/')) && has('batches')) page = <Batches {...common} code={route.split('/')[2]} key={route} />;
+  else if (route === '/care-packs' && has('carepack')) page = <CarePacks {...common} />;
+  else if (route === '/care-packs/new' && has('carepack') && can.manage(user)) page = <CarePackRegister {...common} />;
+  else if (route === '/care-packs/pending' && has('carepack')) page = <CarePackPending {...common} />;
+  else if (route === '/care-packs/overrides' && has('carepack') && can.admin(user)) page = <OverrideLog {...common} />;
+  else if (has('carepack') && (m = route.match(/^\/care-packs\/(\d+)\/po$/)) && can.edit(user)) page = <CarePackPo {...common} id={m[1]} key={`po${m[1]}`} />;
+  else if (has('carepack') && (m = route.match(/^\/care-packs\/(\d+)$/))) page = <CarePackDetail {...common} id={m[1]} key={`cp${m[1]}`} />;
   else if (route === '/reminders') page = <Reminders {...common} />;
-  else if (route === '/reports') page = <Reports {...common} />;
-  else if (route === '/import' && can.manage(user)) page = <Import {...common} />;
+  else if (route === '/reports' && has('reports')) page = <Reports {...common} />;
+  else if (route === '/import' && can.manage(user) && has('import')) page = <Import {...common} />;
   else if (route === '/masters') page = <Masters {...common} />;
   else if (route === '/settings' && can.admin(user)) page = <Settings {...common} onUserChange={(u) => setState((s) => ({ ...s, user: u }))} />;
   else if (route === '/users' && can.admin(user)) page = <Users {...common} />;
-  else if (route === '/companies' && user.isOwner) page = <Companies {...common} />;
   else if (route === '/profile') page = <Profile {...common} idleMinutes={state.idleMinutes} onLogout={() => signOut('logout')} />;
   else if (route === '/more') page = <More user={user} onLogout={() => signOut('logout')} />;
   else page = <div className="panel"><h1>Page not found</h1><p className="muted" style={{ marginTop: 8 }}><Link to="/">Go to the dashboard</Link></p></div>;
@@ -127,17 +127,16 @@ function Shell() {
   const nav = [
     { to: '/', icon: 'home', label: 'Dashboard' },
     { to: '/rma', icon: 'ticket', label: 'RMAs' },
-    { to: '/batches', icon: 'truck', label: 'OEM batches' },
-    { to: '/care-packs', icon: 'shield', label: 'Care packs' },
+    has('batches') && { to: '/batches', icon: 'truck', label: 'OEM batches' },
+    has('carepack') && { to: '/care-packs', icon: 'shield', label: 'Care packs' },
     { to: '/reminders', icon: 'bell', label: 'Reminders', count: reminderCount },
-    { to: '/reports', icon: 'chart', label: 'Reports' },
+    has('reports') && { to: '/reports', icon: 'chart', label: 'Reports' },
     { group: 'Data' },
     { to: '/masters', icon: 'list', label: 'Masters' },
-    can.manage(user) && { to: '/import', icon: 'upload', label: 'Import' },
+    can.manage(user) && has('import') && { to: '/import', icon: 'upload', label: 'Import' },
     can.admin(user) && { group: 'Admin' },
     can.admin(user) && { to: '/users', icon: 'users', label: 'Users & security' },
     can.admin(user) && { to: '/settings', icon: 'gear', label: 'Company settings' },
-    user.isOwner && { to: '/companies', icon: 'building', label: 'Companies' },
   ].filter(Boolean);
   const current = (to) => (to === '/' ? route === '/' : route === to || (route.startsWith(to + '/') && route !== '/rma/new'));
 
@@ -173,7 +172,7 @@ function Shell() {
         <Link to="/rma" aria-current={route === '/rma' || /^\/rma\/\d/.test(route) ? 'page' : undefined}><Icon name="ticket" /><span>RMAs</span></Link>
         {can.edit(user)
           ? <Link to="/rma/new" className="add" aria-label="New RMA" aria-current={route === '/rma/new' ? 'page' : undefined}><Icon name="plus" size={28} /><span>New</span></Link>
-          : <Link to="/batches" aria-current={current('/batches') ? 'page' : undefined}><Icon name="truck" /><span>Batches</span></Link>}
+          : <Link to="/rma?open=" aria-current={undefined}><Icon name="list" /><span>Open</span></Link>}
         <Link to="/reminders" aria-current={current('/reminders') ? 'page' : undefined}><Icon name="bell" /><span>Reminders</span>
           {reminderCount ? <i className="badge-dot">{reminderCount > 99 ? '99+' : reminderCount}</i> : null}</Link>
         <Link to="/more" aria-current={route === '/more' ? 'page' : undefined}><Icon name="more" /><span>More</span></Link>
@@ -191,15 +190,15 @@ function Shell() {
 }
 
 function More({ user, onLogout }) {
+  const has = (m) => (user.company.modules || ['carepack', 'zoho', 'batches', 'import', 'reports']).includes(m);
   const items = [
-    ['/batches', 'truck', 'OEM batches', 'Dispatch RMAs to the OEM together, packing list'],
-    ['/care-packs', 'shield', 'Care packs', 'Printers sold with care packs, OEM PO, OEM invoice, payment'],
-    ['/reports', 'chart', 'Reports', 'Filter RMAs and export to Excel'],
+    has('batches') && ['/batches', 'truck', 'OEM batches', 'Dispatch RMAs to the OEM together, packing list'],
+    has('carepack') && ['/care-packs', 'shield', 'Care packs', 'Printers sold with care packs, OEM PO, OEM invoice, payment'],
+    has('reports') && ['/reports', 'chart', 'Reports', 'Filter RMAs and export to Excel'],
     ['/masters', 'list', 'Masters', 'Customers, OEMs, products, models, care pack types'],
-    can.manage(user) && ['/import', 'upload', 'Import', 'Bring in RMAs and customers from Excel'],
+    can.manage(user) && has('import') && ['/import', 'upload', 'Import', 'Bring in RMAs and customers from Excel'],
     can.admin(user) && ['/users', 'users', 'Users & security', 'Logins, roles, sessions, login history'],
     can.admin(user) && ['/settings', 'gear', 'Company settings', 'Company details, OEM email, Excel template, care packs, Zoho Books'],
-    user.isOwner && ['/companies', 'building', 'Companies', 'Add companies, each with separate logins'],
     ['/profile', 'user', 'My profile', 'Password, recovery codes'],
   ].filter(Boolean);
   return (

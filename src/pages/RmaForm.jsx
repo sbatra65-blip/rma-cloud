@@ -56,9 +56,10 @@ export default function RmaForm({ user, boot, id, onChange }) {
     }).catch(setLoadError);
   }, [id, editing]);
 
-  // Care pack cover for this serial (blocks expired cover).
+  // Care pack cover for this serial (blocks expired cover). Only when the company has the care pack module.
+  const cpOn = (user.company.modules || ['carepack']).includes('carepack');
   useEffect(() => {
-    if (!f.printer_sn.trim()) { setCover(null); return undefined; }
+    if (!f.printer_sn.trim() || !cpOn) { setCover(null); return undefined; }
     const t = setTimeout(() => {
       get(`/api/carepack/serial?sn=${encodeURIComponent(f.printer_sn)}`).then((r) => setCover(r.device || false)).catch(() => setCover(null));
     }, 400);
@@ -275,7 +276,7 @@ export default function RmaForm({ user, boot, id, onChange }) {
 
       <section className="panel">
         <div className="section-title"><i>2</i><h2>Printer</h2></div>
-        {!editing && <div style={{ marginBottom: 12 }}><CarePackPicker onPick={pickDevice} /></div>}
+        {!editing && cpOn && <div style={{ marginBottom: 12 }}><CarePackPicker onPick={pickDevice} /></div>}
         <div className="fields three">
           <Field label="Product model" required error={errors.printer_model}>
             <Suggest value={f.printer_model} onChange={(v) => setF({ ...f, printer_model: v, model_id: '' })} options={modelOptions}

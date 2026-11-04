@@ -34,6 +34,10 @@ Runs on Cloudflare Workers + Durable Objects and installs as an app on Android a
   from the registry. OEM PO link with serial cross-check (clubbed POs, manual or Zoho, serials pasted or read from
   XLSX/CSV/PDF), OEM invoice + PDF → 100% verified, OEM payment, deadlines (PO 25 days, payment 40 days by default),
   pending lists, Admin override and document removal with a permanent log, validation report Excel, CSV export.
+- **Service provider console** (separate website at `/console`, or its own domain): operators with their own 2FA logins
+  create companies, set maximum users, people signed in at once, valid-until date, idle sign-out, allowed email domains,
+  switch modules on/off, suspend/activate, and manage each company's logins (invite, reset, disable, sign out).
+  Every change is logged. Operators never see a company's RMA or care pack data.
 - **Zoho Books per company** (Company settings → Zoho Books): Self Client ID/secret + grant code, stored encrypted.
   Used for care pack invoices/POs and to create the delivery challan when goods go back to the customer.
 
@@ -43,16 +47,23 @@ Runs on Cloudflare Workers + Durable Objects and installs as an app on Android a
    - Build command: `npm run build`
    - Deploy command: `npx wrangler deploy`
 2. **Secrets** — open the Worker → Settings → *Variables and Secrets* → Add → type **Secret**:
-   - `ENC_KEY` — run `openssl rand -base64 32` and paste the output. Keep a copy safe:
-     changing it later breaks everyone's two-step login.
+   - `ENC_KEY` — 32 random bytes, base64. Mac/Linux: `openssl rand -base64 32`. Windows PowerShell:
+     `$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`.
+     Keep a copy safe: changing it later breaks everyone's two-step login and Zoho connections.
+   - `CONSOLE_SETUP_KEY` — any long phrase; needed once to create the first console operator.
    - `RESEND_API_KEY` — from resend.com → API Keys (Sending access).
 3. **Set up straight away** — open `https://rma-cloud.<you>.workers.dev`. The first screen creates the first company
-   (e.g. *Infinite Solutions*, code `INF`) and your Admin login. That login is the **owner** and can add more companies.
-   Setup closes as soon as one login is complete, so do it right after the first deploy.
-4. **Email sender** — until you verify your domain in Resend, mail only reaches your own Resend address.
+   (e.g. *Infinite Solutions*, code `INF`) and its Admin login. Setup closes as soon as one login is complete,
+   so do it right after the first deploy.
+4. **Console** — open `https://rma-cloud.<you>.workers.dev/console` → *Set up the console* → enter `CONSOLE_SETUP_KEY`,
+   your name, email, password, scan the QR code. From then on, create every new company there.
+   - Own address (optional): Worker → Settings → *Domains & Routes* → add custom domain e.g. `console.example.com`,
+     then add variables `CONSOLE_HOST` = `console.example.com` and `APP_URL` = `https://rma.example.com` (the RMA app address,
+     used in invite links). With `CONSOLE_HOST` set, the console answers only on that domain.
+5. **Email sender** — until you verify your domain in Resend, mail only reaches your own Resend address.
    Verify `infinitesolutions.co.in` in Resend, then set the Worker variable `MAIL_FROM`
    (e.g. `RMA Desk <rma@infinitesolutions.co.in>`). OEM emails to `tsc_rma@tscprinters.com` need this.
-5. **Phones** — open the address in Chrome (Android: menu → *Install app*) or Safari (iPhone: Share → *Add to Home Screen*).
+6. **Phones** — open the address in Chrome (Android: menu → *Install app*) or Safari (iPhone: Share → *Add to Home Screen*).
 
 Every push to `main` redeploys.
 
@@ -61,8 +72,11 @@ Every push to `main` redeploys.
 - **Users & security → Add user** — they get an invite email (and you get the link to share on WhatsApp if email isn't set up).
   They choose a password and scan a QR code. They log in with the **company code + email + password + 6-digit code**.
 - Lost phone and no recovery codes: **Reset login** issues a new set-up link.
-- **Companies → Add company** (owner only) — creates the company and invites its first Admin. Use your own email if you want
-  to run it yourself: it's a separate login with its own authenticator entry, labelled `RMA Cloud (CODE)`.
+- **Console → New company** — creates the company with its limits and modules and invites its first Admin. The same email
+  can have logins in several companies, each a separate authenticator entry labelled `RMA Cloud (CODE)`.
+- Limits: when *maximum users* is reached, new invites are refused; when *signed in at the same time* is reached, the next
+  login is refused until someone logs out (or an Admin / operator signs someone out). After *valid until*, or when
+  suspended, everyone is signed out and logins show the reason.
 - The built-in OEM form has Infinite Solutions' details in its ship-to block. Other companies should upload their own copy
   in **Company settings → OEM Excel form**.
 
@@ -78,6 +92,9 @@ existing numbers. Do the same with `Customers` → **Import → Customers**. Pho
 | Variable | Default | |
 |---|---|---|
 | `IDLE_MINUTES` | 5 | sign-out after this many idle minutes |
+| `CONSOLE_IDLE_MINUTES` | 15 | console sign-out after this many idle minutes |
+| `CONSOLE_HOST` | — | serve the console only on this hostname |
+| `APP_URL` | — | RMA app address used in invite links sent from the console |
 | `MAX_SESSION_HOURS` | 12 | longest session |
 | `PBKDF2_ITERATIONS` | 100000 | lower it if login shows "exceeded resource limits" on the free plan |
 | `MAIL_FROM` | Resend test sender | verified sender address |

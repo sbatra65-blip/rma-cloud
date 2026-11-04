@@ -48,7 +48,7 @@ export default function Dashboard({ user }) {
         <div className="stat"><b>{d.avgCloseDays ?? '—'}</b><span>Avg days to close (6 mo)</span></div>
       </div>
 
-      {d.carePack && <CarePackTiles cp={d.carePack} />}
+      {d.carePack && user.company.modules?.includes('carepack') && <CarePackTiles cp={d.carePack} />}
 
       <div className="grid2">
         <section className="panel">

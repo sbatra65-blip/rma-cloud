@@ -200,7 +200,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
         </section>
       )}
 
-      {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} settings={boot?.settings} onClose={() => setDlg(null)} after={after} />}
+      {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} settings={user.company.modules?.includes('zoho') ? boot?.settings : null} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'email' && <EmailDialog ticket={t} inbound={inbound} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'draft' && <DraftDialog ticket={t} onClose={() => setDlg(null)} />}
       <Dialog open={dlg === 'delete'} onClose={() => setDlg(null)} title={`Delete ${t.ticket_no}?`}>

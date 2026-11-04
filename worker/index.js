@@ -1,14 +1,15 @@
 // API router. Static PWA files are served by Cloudflare's asset handler; only /api/* reaches here.
-import { Directory, ROLES } from './directory.js';
+import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
-import { inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail } from './mail.js';
-import { uuid } from './crypto.js';
+import { consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail } from './mail.js';
+import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
 export { Directory, Company };
 
 const COOKIE = '__Host-rma_sid';
+const CCOOKIE = '__Host-rma_csid'; // console: a different cookie, so the two logins never mix
 const MAX_PHOTO = 10 * 1024 * 1024;
 const MAX_TEMPLATE = 5 * 1024 * 1024;
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -31,18 +32,18 @@ function json(data, status = 200, extra = {}) {
 function err(status, message, more = {}) {
   return json({ error: message, ...more }, status);
 }
-function sessionCookie(token) {
+function sessionCookie(token, name = COOKIE) {
   // No Max-Age: the cookie ends when the browser closes; the server also ends it after the idle limit.
-  return `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict`;
+  return `${name}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict`;
 }
-function clearCookie() {
-  return `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`;
+function clearCookie(name = COOKIE) {
+  return `${name}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`;
 }
-function readCookie(request) {
+function readCookie(request, name = COOKIE) {
   const raw = request.headers.get('Cookie') || '';
   for (const part of raw.split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === COOKIE) return v.join('=');
+    if (k === name) return v.join('=');
   }
   return null;
 }
@@ -145,6 +146,14 @@ async function handle(request, env, ctx) {
     if (!origin || origin !== url.origin) return err(403, 'Request blocked: wrong origin.');
   }
 
+  // ---------- Console (service provider) ----------
+  const onConsoleHost = !!env.CONSOLE_HOST && url.hostname === env.CONSOLE_HOST;
+  if (path.startsWith('/api/console')) {
+    if (env.CONSOLE_HOST && !onConsoleHost) return err(404, 'Not found');
+    return handleConsole(request, env, ctx, url, path, method, client);
+  }
+  if (onConsoleHost) return err(404, 'Not found');
+
   // ---------- First-run setup ----------
   if (path === '/api/setup' && method === 'GET') return json(await dcall(env, 'needsSetup', {}));
   if (path === '/api/setup' && method === 'POST') {
@@ -168,7 +177,7 @@ async function handle(request, env, ctx) {
     const b = await body(request);
     if (!/^\d{6}$/.test(String(b.code || ''))) throw new ValidationError({ code: 'Enter the 6-digit code from your authenticator app' });
     const data = await dcall(env, 'enrollFinish', { setupToken: b.setupToken, code: String(b.code).trim(), client });
-    return json({ recoveryCodes: data.recoveryCodes, user: data.user, idleMinutes: Number(env.IDLE_MINUTES || 5) },
+    return json({ recoveryCodes: data.recoveryCodes, user: data.user, idleMinutes: data.user.idleMinutes },
       200, { 'Set-Cookie': sessionCookie(data.token) });
   }
 
@@ -199,7 +208,7 @@ async function handle(request, env, ctx) {
       loginToken: b.loginToken, code: String(b.code || '').trim(), recoveryCode: b.recoveryCode,
       endOther: b.endOther === true, client, origin: url.origin,
     });
-    return json({ user: data.user, endedOther: data.endedOther, idleMinutes: Number(env.IDLE_MINUTES || 5) },
+    return json({ user: data.user, endedOther: data.endedOther, idleMinutes: data.user.idleMinutes },
       200, { 'Set-Cookie': sessionCookie(data.token) });
   }
 
@@ -241,15 +250,21 @@ async function handle(request, env, ctx) {
   const user = {
     userId: session.userId, sessionId: session.sessionId, email: session.email, name: session.name, role: session.role,
     isOwner: session.isOwner, dupOverride: session.dupOverride, companyId: session.companyId, companyName: session.companyName,
-    companyCode: session.companyCode, ticketPrefix: session.ticketPrefix,
+    companyCode: session.companyCode, ticketPrefix: session.ticketPrefix, modules: session.modules,
   };
+  // Parts of the app the service provider has switched off for this company.
+  const needs = moduleFor(path);
+  if (needs && !session.modules.includes(needs)) {
+    return json({ error: `${MODULE_LABEL[needs]} is not enabled for ${session.companyName}. Ask your service provider.`, code: 'module_off' }, 403,
+      session.newToken ? { 'Set-Cookie': sessionCookie(session.newToken) } : {});
+  }
   const withCookie = (headers = {}) => (session.newToken ? { ...headers, 'Set-Cookie': sessionCookie(session.newToken) } : headers);
   const respond = (data, status = 200) => json(data, status, withCookie());
   const raw = (data, headers) => new Response(data, { headers: withCookie({ ...SECURITY_HEADERS, ...headers }) });
   const isAdmin = user.role === 'Admin';
 
   if (path === '/api/auth/me' && method === 'GET') {
-    return respond({ user: await dcall(env, 'publicUser', { userId: user.userId }), idleMinutes: Number(env.IDLE_MINUTES || 5) });
+    return respond({ user: await dcall(env, 'publicUser', { userId: user.userId }), idleMinutes: session.idleMinutes });
   }
   if (path === '/api/session/ping' && method === 'POST') return respond({ ok: true });
 
@@ -528,28 +543,209 @@ async function handle(request, env, ctx) {
   if (path === '/api/admin/login-log' && method === 'GET') return respond(await dcall(env, 'authLog', { actor: user }));
   if (path === '/api/admin/audit' && method === 'GET') return respond(await ccall(env, user, 'auditLog', {}));
 
-  // ---------- Owner: companies ----------
-  if (path === '/api/owner/companies' && method === 'GET') return respond(await dcall(env, 'listCompanies', { actor: user }));
-  if (path === '/api/owner/companies' && method === 'POST') {
-    const b = await body(request);
-    const v = new Checker(b).text('name', { required: true, max: 120, label: 'Company name' })
-      .text('adminName', { required: true, max: 80, label: 'Admin name' }).email('adminEmail', { required: true, label: 'Admin email' }).done();
-    const code = companyCode(b.code);
-    const prefix = companyCode(b.ticketPrefix) || code;
-    const errs = {};
-    if (!CODE_RE.test(code)) errs.code = 'Company code: 2–12 letters or numbers';
-    if (!/^[A-Z0-9]{2,8}$/.test(prefix)) errs.ticketPrefix = 'Ticket prefix: 2–8 letters or numbers';
-    if (Object.keys(errs).length) throw new ValidationError(errs);
-    const data = await dcall(env, 'createCompany', { actor: user, name: v.name, code, ticketPrefix: prefix, adminName: v.adminName, adminEmail: v.adminEmail });
-    return respond({ company: data.company, user: data.user, ...(await emailInvite(env, url, user, data, { companyName: v.name })) });
+  return err(404, 'Not found');
+}
+
+const MODULE_LABEL = { carepack: 'Care packs', zoho: 'Zoho Books', batches: 'OEM batches', import: 'Import', reports: 'Reports' };
+function moduleFor(path) {
+  if (/^\/api\/(carepack\/zoho-|settings\/zoho|rma\/\d+\/challan)/.test(path)) return 'zoho';
+  if (path.startsWith('/api/carepack') || path === '/api/settings/carepack') return 'carepack';
+  if (path.startsWith('/api/batches')) return 'batches';
+  if (path.startsWith('/api/import')) return 'import';
+  return null;
+}
+
+// ======================= Console (service provider website) =======================
+const COMPANY_CODE_RE = CODE_RE;
+function companyData(b, creating) {
+  const c = new Checker(b).text('name', { required: true, max: 120, label: 'Company name' })
+    .text('contactName', { max: 80, label: 'Contact person' }).email('contactEmail', { label: 'Contact email' }).phone('contactPhone', { label: 'Contact phone' })
+    .text('address', { max: 400, label: 'Address' }).gstin('gstin').text('notes', { max: 2000, label: 'Notes' })
+    .number('maxUsers', { min: 0, max: 10000, int: true, label: 'Maximum users' }).number('maxConcurrent', { min: 0, max: 10000, int: true, label: 'Signed in at once' })
+    .date('validUntil', { label: 'Valid until' }).number('idleMinutes', { min: 0, max: 60, int: true, label: 'Idle sign-out minutes' })
+    .text('emailDomains', { max: 300, label: 'Email domains' }).text('suspendReason', { max: 300, label: 'Reason' });
+  const v = c.out;
+  const errs = {};
+  v.code = companyCode(b.code);
+  v.ticketPrefix = companyCode(b.ticketPrefix) || (creating ? v.code : '');
+  if (creating && !COMPANY_CODE_RE.test(v.code)) errs.code = 'Login code: 2–12 letters or numbers, e.g. INF';
+  if (v.ticketPrefix && !/^[A-Z0-9]{2,8}$/.test(v.ticketPrefix)) errs.ticketPrefix = 'RMA prefix: 2–8 letters or numbers';
+  if (v.idleMinutes && v.idleMinutes < 2) errs.idleMinutes = 'Use 2–60 minutes, or 0 for the default';
+  if (v.maxUsers && v.maxConcurrent && v.maxConcurrent > v.maxUsers) errs.maxConcurrent = 'Cannot be more than the maximum users';
+  const doms = String(v.emailDomains || '').split(/[\s,;]+/).map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+  if (doms.some((d) => !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d))) errs.emailDomains = 'List domains like infinite.co.in, separated by commas';
+  v.emailDomains = doms.join(', ');
+  v.modules = Array.isArray(b.modules) ? b.modules.filter((m) => MODULES.includes(m)) : MODULES;
+  if (typeof b.active === 'boolean') v.active = b.active;
+  try { c.done(); } catch (e) { Object.assign(errs, e.fields || {}); }
+  if (Object.keys(errs).length) throw new ValidationError(errs);
+  return v;
+}
+
+async function appOrigin(env, url) {
+  if (env.APP_URL) return env.APP_URL.replace(/\/+$/, '');
+  if (env.CONSOLE_HOST && url.hostname === env.CONSOLE_HOST) return (await dcall(env, 'appUrl', {})) || url.origin;
+  return url.origin;
+}
+
+async function handleConsole(request, env, ctx, url, path, method, client) {
+  const appName = env.APP_NAME || 'RMA Cloud';
+  const cookie = (t) => ({ 'Set-Cookie': sessionCookie(t, CCOOKIE) });
+
+  // ---- before login ----
+  if (path === '/api/console/setup' && method === 'GET') {
+    return json({ ...(await dcall(env, 'consoleNeedsSetup', {})), keyConfigured: !!env.CONSOLE_SETUP_KEY });
   }
-  m = path.match(/^\/api\/owner\/companies\/([0-9a-f-]{36})$/);
-  if (m && method === 'POST') {
+  if (path === '/api/console/setup' && method === 'POST') {
+    if (!env.CONSOLE_SETUP_KEY) return err(503, 'Console setup is locked: add the CONSOLE_SETUP_KEY secret to the Worker first.');
     const b = await body(request);
-    return respond(await dcall(env, 'setCompanyActive', { actor: user, companyId: m[1], active: b.active === true }));
+    if (!timingSafeEqual(String(b.key || ''), env.CONSOLE_SETUP_KEY)) {
+      await new Promise((r) => setTimeout(r, 800));
+      throw new ValidationError({ key: 'Setup key is not correct' });
+    }
+    const v = new Checker(b).text('name', { required: true, max: 80, label: 'Your name' }).email('email', { required: true }).done();
+    if (b.password !== b.confirm) throw new ValidationError({ confirm: 'Passwords do not match' });
+    await checkNewPassword(b.password, v.email);
+    return json(await dcall(env, 'consoleSetupStart', { ...v, password: b.password, ip: client.ip }));
+  }
+  if (path === '/api/console/enroll' && method === 'POST') {
+    const b = await body(request);
+    if (!/^\d{6}$/.test(String(b.code || ''))) throw new ValidationError({ code: 'Enter the 6-digit code from your authenticator app' });
+    const d = await dcall(env, 'consoleEnrollFinish', { setupToken: b.setupToken, code: String(b.code), client });
+    return json({ recoveryCodes: d.recoveryCodes, op: d.op }, 200, cookie(d.token));
+  }
+  if (path === '/api/console/invite/check' && method === 'POST') return json(await dcall(env, 'consoleInviteCheck', { token: String((await body(request)).token || '') }));
+  if (path === '/api/console/invite/accept' && method === 'POST') {
+    const b = await body(request);
+    const inv = await dcall(env, 'consoleInviteCheck', { token: String(b.token || '') });
+    if (b.password !== b.confirm) throw new ValidationError({ confirm: 'Passwords do not match' });
+    await checkNewPassword(b.password, inv.email);
+    return json(await dcall(env, 'consoleInviteStart', { token: String(b.token), password: b.password, ip: client.ip }));
+  }
+  if (path === '/api/console/login' && method === 'POST') {
+    const b = await body(request);
+    const v = new Checker(b).email('email', { required: true }).text('password', { required: true, max: 128, label: 'Password' }).done();
+    return json(await dcall(env, 'consoleLogin', { email: v.email, password: b.password, client }));
+  }
+  if (path === '/api/console/login/verify' && method === 'POST') {
+    const b = await body(request);
+    const d = await dcall(env, 'consoleVerify', { loginToken: b.loginToken, code: String(b.code || '').trim(), recoveryCode: b.recoveryCode, client });
+    return json({ op: d.op }, 200, cookie(d.token));
+  }
+  if (path === '/api/console/logout' && method === 'POST') {
+    await dcall(env, 'consoleLogout', { token: readCookie(request, CCOOKIE) });
+    return json({ ok: true }, 200, { 'Set-Cookie': clearCookie(CCOOKIE) });
   }
 
+  // ---- signed in ----
+  const s = await dcall(env, 'consoleTouch', { token: readCookie(request, CCOOKIE) });
+  if (!s) return err(401, 'Your console session ended. Please log in again.', { code: 'session_ended' });
+  const op = { opId: s.opId, email: s.email, name: s.name, sessionId: s.sessionId };
+  const respond = (data, status = 200) => json(data, status, s.newToken ? cookie(s.newToken) : {});
+  const app = await appOrigin(env, url);
+  const sendInvite = async (data, companyName, reset = false) => {
+    const mail = inviteEmail({ appName, appUrl: app, name: data.user.name, token: data.invite.token, days: data.invite.days, companies: [companyName], invitedBy: op.name, reset });
+    const sent = await sendMail(env, { to: data.user.email, ...mail });
+    return { emailed: sent.ok, emailError: sent.ok ? null : sent.error, link: inviteLink(app, data.invite.token), days: data.invite.days, companyCode: data.companyCode };
+  };
+
+  if (path === '/api/console/me' && method === 'GET') return respond({ op: await dcall(env, 'consoleMe', { op }), idleMinutes: s.idleMinutes, appUrl: app });
+  if (path === '/api/console/ping' && method === 'POST') return respond({ ok: true });
+  if (path === '/api/console/change-password' && method === 'POST') {
+    const b = await body(request);
+    const errs = {};
+    if (!b.current) errs.current = 'Enter your current password';
+    if (!/^\d{6}$/.test(String(b.code || ''))) errs.code = 'Enter the 6-digit code from your authenticator app';
+    if (b.password !== b.confirm) errs.confirm = 'Passwords do not match';
+    if (Object.keys(errs).length) throw new ValidationError(errs);
+    await checkNewPassword(b.password, op.email);
+    const r = await dcall(env, 'consoleChangePassword', { op, current: b.current, password: b.password, code: String(b.code) });
+    ctx.waitUntil(sendMail(env, { to: r.email, ...passwordChangedEmail({ appName: `${appName} Console`, appUrl: url.origin, name: r.name, how: 'change', client }) }));
+    return respond({ ok: true });
+  }
+  if (path === '/api/console/recovery-codes' && method === 'POST') {
+    const b = await body(request);
+    if (!/^\d{6}$/.test(String(b.code || ''))) throw new ValidationError({ code: 'Enter the 6-digit code from your authenticator app' });
+    return respond(await dcall(env, 'consoleRecoveryCodes', { op, code: String(b.code) }));
+  }
+
+  if (path === '/api/console/companies' && method === 'GET') return respond(await dcall(env, 'consoleCompanies', {}));
+  if (path === '/api/console/companies' && method === 'POST') {
+    const b = await body(request);
+    const data = companyData(b.company || {}, true);
+    const admin = new Checker(b.admin || {}).text('name', { required: true, max: 80, label: 'Admin name' }).email('email', { required: true, label: 'Admin email' }).done();
+    const r = await dcall(env, 'consoleCreateCompany', { op, data, admin, ip: client.ip });
+    return respond({ company: r.company, user: r.user, ...(await sendInvite(r, r.company.name)) });
+  }
+  let m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})$/);
+  if (m && method === 'GET') return respond(await dcall(env, 'consoleCompany', { op, id: m[1] }));
+  if (m && method === 'POST') return respond(await dcall(env, 'consoleUpdateCompany', { op, id: m[1], data: companyData(await body(request), false), ip: client.ip }));
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/signout-all$/);
+  if (m && method === 'POST') return respond(await dcall(env, 'consoleSignOutAll', { op, id: m[1] }));
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/users$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    const v = new Checker(b).text('name', { required: true, max: 80, label: 'Name' }).email('email', { required: true })
+      .oneOf('role', ROLES, { required: true, label: 'Role' }).bool('dupOverride').done();
+    const data = await dcall(env, 'consoleAct', { op, companyId: m[1], action: 'inviteUser', args: { name: v.name, email: v.email, role: v.role, dupOverride: !!v.dupOverride } });
+    const co = await dcall(env, 'consoleCompany', { op, id: m[1] });
+    return respond({ user: data.user, ...(await sendInvite(data, co.company.name)) });
+  }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/users\/([0-9a-f-]{36})$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    const args = { userId: m[2] };
+    if (b.role !== undefined) args.role = String(b.role);
+    if (b.dupOverride !== undefined) args.dupOverride = b.dupOverride === true;
+    if (b.disabled !== undefined) args.disabled = b.disabled === true;
+    return respond(await dcall(env, 'consoleAct', { op, companyId: m[1], action: 'updateUser', args }));
+  }
+  if (m && method === 'DELETE') return respond(await dcall(env, 'consoleAct', { op, companyId: m[1], action: 'removeUser', args: { userId: m[2] } }));
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/users\/([0-9a-f-]{36})\/(resend-invite|reset-login)$/);
+  if (m && method === 'POST') {
+    const reset = m[3] === 'reset-login';
+    const data = await dcall(env, 'consoleAct', { op, companyId: m[1], action: reset ? 'resetSignIn' : 'resendInvite', args: { userId: m[2] } });
+    const co = await dcall(env, 'consoleCompany', { op, id: m[1] });
+    return respond({ user: data.user, ...(await sendInvite(data, co.company.name, reset)) });
+  }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/sessions\/([0-9a-f-]{36})$/);
+  if (m && method === 'DELETE') return respond(await dcall(env, 'consoleAct', { op, companyId: m[1], action: 'endSession', args: { id: m[2] } }));
+
+  if (path === '/api/console/operators' && method === 'GET') return respond({ operators: await dcall(env, 'consoleOperators', {}), you: op.opId });
+  if (path === '/api/console/operators' && method === 'POST') {
+    const v = new Checker(await body(request)).text('name', { required: true, max: 80, label: 'Name' }).email('email', { required: true }).done();
+    const d = await dcall(env, 'consoleInviteOperator', { op, name: v.name, email: v.email });
+    const mail = consoleInviteEmail({ appName, consoleUrl: url.origin, name: d.user.name, token: d.invite.token, days: d.invite.days, invitedBy: op.name });
+    const sent = await sendMail(env, { to: d.user.email, ...mail });
+    return respond({ user: d.user, emailed: sent.ok, emailError: sent.ok ? null : sent.error, link: `${url.origin}/console/invite#token=${encodeURIComponent(d.invite.token)}`, days: d.invite.days });
+  }
+  m = path.match(/^\/api\/console\/operators\/([0-9a-f-]{36})$/);
+  if (m && method === 'POST') return respond(await dcall(env, 'consoleUpdateOperator', { op, id: m[1], disabled: (await body(request)).disabled === true }));
+  m = path.match(/^\/api\/console\/operators\/([0-9a-f-]{36})\/reset$/);
+  if (m && method === 'POST') {
+    const d = await dcall(env, 'consoleResetOperator', { op, id: m[1] });
+    const mail = consoleInviteEmail({ appName, consoleUrl: url.origin, name: d.user.name, token: d.invite.token, days: d.invite.days, invitedBy: op.name, reset: true });
+    const sent = await sendMail(env, { to: d.user.email, ...mail });
+    return respond({ user: d.user, emailed: sent.ok, emailError: sent.ok ? null : sent.error, link: `${url.origin}/console/invite#token=${encodeURIComponent(d.invite.token)}`, days: d.invite.days });
+  }
+  if (path === '/api/console/log' && method === 'GET') return respond(await dcall(env, 'consoleLogView', { limit: url.searchParams.get('limit') }));
   return err(404, 'Not found');
+}
+
+// Pages: the RMA app and the console are two single-page sites in one Worker.
+// With CONSOLE_HOST set, the console answers only on that hostname and the app hostname has no console.
+async function serveStatic(request, env, url) {
+  const host = env.CONSOLE_HOST;
+  const onConsoleHost = !!host && url.hostname === host;
+  const isConsolePath = url.pathname === '/console' || url.pathname.startsWith('/console/');
+  const consolePage = () => env.ASSETS.fetch(new Request(new URL('/console', url), { headers: request.headers }));
+  if (onConsoleHost) {
+    if (isConsolePath) return consolePage();
+    if (/\.[a-z0-9]{2,8}$/i.test(url.pathname)) return env.ASSETS.fetch(request);
+    return Response.redirect(new URL('/console', url), 302);
+  }
+  if (isConsolePath) return host ? new Response('Not found', { status: 404 }) : consolePage();
+  return env.ASSETS.fetch(request);
 }
 
 const cpItems = (list = []) => list.map((i) => ({ ...i, ticket_no: i.invoice, serial: '', part: i.detail, href: `/care-packs/${i.id}`, age: null }));
@@ -582,6 +778,8 @@ async function runReminders(env, appUrl) {
 export default {
   async fetch(request, env, ctx) {
     try {
+      const url = new URL(request.url);
+      if (!url.pathname.startsWith('/api/')) return await serveStatic(request, env, url);
       if (!env.ENC_KEY) return err(500, 'Server is not configured yet: the ENC_KEY secret is missing.');
       return await handle(request, env, ctx);
     } catch (e) {
