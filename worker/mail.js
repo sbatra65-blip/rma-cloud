@@ -94,9 +94,9 @@ export function reminderEmail({ appName, appUrl, companyName, items, recipientNa
     <h3 style="margin:20px 0 6px;font-size:14px;color:#16263d">${esc(kind)} <span style="color:#5b6b7f;font-weight:400">(${list.length})</span></h3>
     <table style="width:100%;border-collapse:collapse;font-size:13px">${list.slice(0, 40).map((i) => `
       <tr><td style="padding:6px 0;border-bottom:1px solid #e3e8ee">
-        <a href="${esc(appUrl)}/rma/${i.id}" style="color:#16263d;font-weight:700;text-decoration:none">${esc(i.ticket_no)}</a>
+        <a href="${esc(appUrl)}${esc(i.href || `/rma/${i.id}`)}" style="color:#16263d;font-weight:700;text-decoration:none">${esc(i.ticket_no)}</a>
         <span style="color:#5b6b7f"> · ${esc(i.customer)} · ${esc([i.model, i.serial].filter(Boolean).join(' '))}${i.part ? ' · ' + esc(i.part) : ''}</span>
-      </td><td style="padding:6px 0;border-bottom:1px solid #e3e8ee;text-align:right;color:${i.tone === 'late' ? '#c0392b' : '#5b6b7f'};white-space:nowrap">${i.age} d old</td></tr>`).join('')}
+      </td><td style="padding:6px 0;border-bottom:1px solid #e3e8ee;text-align:right;color:${i.tone === 'late' ? '#c0392b' : '#5b6b7f'};white-space:nowrap">${i.age === null || i.age === undefined ? '' : `${i.age} d old`}</td></tr>`).join('')}
     </table>${list.length > 40 ? `<p style="color:#5b6b7f;font-size:12px">…and ${list.length - 40} more</p>` : ''}`).join('');
   const html = shell(appName, `${items.length} RMA${items.length === 1 ? '' : 's'} need attention — ${companyName}`, `
     <p>Hello ${esc(recipientName || '')},</p>

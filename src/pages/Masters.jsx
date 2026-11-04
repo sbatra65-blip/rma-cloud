@@ -7,6 +7,7 @@ const KINDS = {
   oems: { label: 'OEMs', one: 'OEM' },
   products: { label: 'Products', one: 'product' },
   models: { label: 'Models', one: 'model' },
+  cp_types: { label: 'Care pack types', one: 'care pack type' },
 };
 
 export default function Masters({ user, boot, reloadBoot }) {
@@ -19,12 +20,13 @@ export default function Masters({ user, boot, reloadBoot }) {
   const oemName = (id) => m.oems.find((o) => o.id === id)?.name || '—';
   const product = (id) => m.products.find((p) => p.id === id);
 
-  const rows = m[kind].filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
+  const rows = (m[kind] || []).filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
   const sub = (r) => ({
     customers: [r.code, r.city, r.contact_name, r.phone, r.gstin].filter(Boolean).join(' · '),
     oems: r.code,
     products: `${r.code} · ${oemName(r.oem_id)}`,
     models: `${r.name} · ${product(r.product_id)?.name || '—'} · ${oemName(product(r.product_id)?.oem_id)}`,
+    cp_types: `${r.duration_years} year${r.duration_years === 1 ? '' : 's'} of cover`,
   }[kind]);
 
   async function remove(r) {
@@ -45,7 +47,7 @@ export default function Masters({ user, boot, reloadBoot }) {
         {editable && <button className="btn primary" onClick={() => setEdit({ kind, record: { active: true } })}><Icon name="plus" size={18} /> Add {KINDS[kind].one}</button>}
       </div>
       <div className="tabs" role="tablist">
-        {Object.entries(KINDS).map(([k, v]) => <button key={k} role="tab" aria-selected={kind === k} onClick={() => { setKind(k); setQ(''); }}>{v.label} ({m[k].length})</button>)}
+        {Object.entries(KINDS).map(([k, v]) => <button key={k} role="tab" aria-selected={kind === k} onClick={() => { setKind(k); setQ(''); }}>{v.label} ({(m[k] || []).length})</button>)}
       </div>
       <div className="search" style={{ marginBottom: 12 }}><Icon name="search" size={18} /><input type="search" placeholder={`Search ${KINDS[kind].label.toLowerCase()}`} value={q} onChange={(e) => setQ(e.target.value)} /></div>
       {kind === 'models' && !m.products.length && <div className="warnbox" style={{ marginBottom: 12 }}>Add an OEM and a product first; models belong to a product.</div>}
@@ -124,6 +126,7 @@ function EditDialog({ kind, record, masters, onClose, onSaved }) {
             </Field>
             {text('code', 'Model code', { req: true, hint: 'As printed on the RMA, e.g. TE310' })}{text('name', 'Description', { req: true })}
           </>}
+          {kind === 'cp_types' && <>{text('name', 'Name', { req: true, hint: 'e.g. 3 Year' })}{text('duration_years', 'Cover (years)', { req: true, type: 'number', hint: 'Cover ends this many years after the sales invoice date' })}</>}
         </div>
         {record.id && <label className="check"><input type="checkbox" checked={!!f.active} onChange={set('active')} />Active (shown in pick lists)</label>}
         <div className="row end">

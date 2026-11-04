@@ -27,8 +27,15 @@ Runs on Cloudflare Workers + Durable Objects and installs as an app on Android a
   (old tracker sheet or tables exported from the desktop SQL Server), with a dry-run check first.
 - **Masters:** customers, OEMs, products, models. **Audit:** login history, who's signed in now, data activity log.
 
-Not yet in this version (phase 2): Care Pack module (invoices, PO validation, OEM payments) and Zoho Books
-(delivery challans). The challan number can be typed in when dispatching to the customer.
+- **Several parts from one printer on the same day:** the New RMA form takes one printer and any number of faulty parts;
+  each part becomes its own RMA (own number, photos, OEM Excel). "Another part, same printer" on an RMA pre-fills a new one.
+- **Care packs (phase 2):** register sales invoices with printer serials (typed in, read from the invoice PDF, or loaded
+  from Zoho Books), cover end per printer, expired cover blocks new RMAs, RMA form shows cover and can pick a printer
+  from the registry. OEM PO link with serial cross-check (clubbed POs, manual or Zoho, serials pasted or read from
+  XLSX/CSV/PDF), OEM invoice + PDF → 100% verified, OEM payment, deadlines (PO 25 days, payment 40 days by default),
+  pending lists, Admin override and document removal with a permanent log, validation report Excel, CSV export.
+- **Zoho Books per company** (Company settings → Zoho Books): Self Client ID/secret + grant code, stored encrypted.
+  Used for care pack invoices/POs and to create the delivery challan when goods go back to the customer.
 
 ## Deploy from GitHub to Cloudflare (one time)
 

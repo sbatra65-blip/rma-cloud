@@ -75,6 +75,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
   }
 
   return (
+    <>
     <form onSubmit={save} noValidate>
       <div className="page-head"><div><h1>Company settings</h1><p className="muted">Only for {user.company.name}. Other companies have their own settings.</p></div></div>
       {errors.form && <div className="formerror" style={{ marginBottom: 14 }}>{errors.form}</div>}
@@ -134,5 +135,104 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
 
       <div className="savebar"><button className="btn primary" disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
     </form>
+    <CarePackSettings s0={s0} reloadBoot={reloadBoot} />
+    <ZohoSettings s0={s0} reloadBoot={reloadBoot} />
+    </>
+  );
+}
+
+function CarePackSettings({ s0, reloadBoot }) {
+  const toast = useToast();
+  const [f, setF] = useState({
+    invoice_prefix: s0.invoice_prefix || '', carepack_po_deadline_days: s0.carepack_po_deadline_days || '25', carepack_oem_payment_deadline_days: s0.carepack_oem_payment_deadline_days || '40',
+    challan_enabled: s0.challan_enabled !== '0', challan_auto_dispatch: s0.challan_auto_dispatch !== '0',
+    challan_line_description: s0.challan_line_description || '', challan_notes: s0.challan_notes || '',
+  });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setErrors({});
+    try {
+      await post('/api/settings/carepack', f);
+      await reloadBoot();
+      toast('Care pack settings saved');
+    } catch (err) {
+      setErrors({ form: err.message, ...(err.fields || {}) });
+    } finally { setBusy(false); }
+  }
+  return (
+    <form onSubmit={save} noValidate style={{ marginTop: 16 }}>
+      <section className="panel">
+        <h2>Care packs</h2>
+        {errors.form && <div className="formerror">{errors.form}</div>}
+        <div className="fields">
+          <Field label="Sales invoice prefix" error={errors.invoice_prefix} hint="Shown as a hint when loading from Zoho"><input type="text" value={f.invoice_prefix} onChange={set('invoice_prefix')} /></Field>
+          <span />
+          <Field label="OEM PO deadline (days after sales invoice)" error={errors.carepack_po_deadline_days} hint="Contract maximum is 30"><input type="number" min="1" max="30" value={f.carepack_po_deadline_days} onChange={set('carepack_po_deadline_days')} /></Field>
+          <Field label="OEM payment deadline (days after OEM bill)" error={errors.carepack_oem_payment_deadline_days} hint="Contract maximum is 45"><input type="number" min="1" max="45" value={f.carepack_oem_payment_deadline_days} onChange={set('carepack_oem_payment_deadline_days')} /></Field>
+        </div>
+        <h3 style={{ marginTop: 18 }}>Delivery challan (Zoho Books)</h3>
+        <div className="stack">
+          <label className="check"><input type="checkbox" checked={f.challan_enabled} onChange={set('challan_enabled')} />Show "Create delivery challan" when sending goods back to the customer</label>
+          <label className="check"><input type="checkbox" checked={f.challan_auto_dispatch} onChange={set('challan_auto_dispatch')} />Fill the challan number into the dispatch form automatically</label>
+          <div className="fields">
+            <Field label="Challan line description" error={errors.challan_line_description} className="wide" hint="Fill-ins like {{INTERNAL_TICKET}}, {{PRINTER_MODEL}}, {{PRINTER_SERIAL}}, {{FAULTY_PART}}"><textarea rows={2} value={f.challan_line_description} onChange={set('challan_line_description')} /></Field>
+            <Field label="Challan notes" error={errors.challan_notes} className="wide"><textarea rows={2} value={f.challan_notes} onChange={set('challan_notes')} /></Field>
+          </div>
+        </div>
+        <div className="row end" style={{ marginTop: 12 }}><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Save care pack settings'}</button></div>
+      </section>
+    </form>
+  );
+}
+
+function ZohoSettings({ s0, reloadBoot }) {
+  const toast = useToast();
+  const [f, setF] = useState({ dc: s0.zoho_dc || 'in', org_id: s0.zoho_org_id || '', client_id: s0.zoho_client_id || '', client_secret: '' });
+  const [st, setSt] = useState({ connected: !!s0.zoho_connected, secret: !!s0.zoho_secret_set });
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(null);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  async function act(kind, fn) {
+    setBusy(kind);
+    setMsg(null);
+    try {
+      const r = await fn();
+      if (r && 'zoho_connected' in r) setSt({ connected: !!r.zoho_connected, secret: !!r.zoho_secret_set });
+      if (r?.message) setMsg({ ok: true, text: r.message });
+      await reloadBoot();
+      return r;
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+      return null;
+    } finally { setBusy(''); }
+  }
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <div className="spread"><h2>Zoho Books</h2><span className={`pill ${st.connected ? 'ok' : 'warn'}`}>{st.connected ? 'Connected' : 'Not connected'}</span></div>
+      <p className="muted small">Used to load sales invoices and OEM POs for care packs, and to create delivery challans. Each company connects its own Zoho organisation.
+        In <a href="https://api-console.zoho.com" target="_blank" rel="noreferrer">api-console.zoho.com</a> create a <b>Self Client</b>, copy its Client ID and Secret here, then generate a grant code with scope
+        <code className="mono"> ZohoBooks.invoices.READ,ZohoBooks.purchaseorders.READ,ZohoBooks.contacts.READ,ZohoBooks.deliverychallans.CREATE,ZohoBooks.settings.READ</code> and paste it below.</p>
+      {msg && <div className={msg.ok ? 'notice' : 'formerror'} style={{ marginTop: 10 }}>{msg.text}</div>}
+      <form className="fields" style={{ marginTop: 12 }} onSubmit={(e) => { e.preventDefault(); act('save', () => post('/api/settings/zoho', f)).then((r) => { if (r) { toast('Zoho details saved'); setF({ ...f, client_secret: '' }); } }); }}>
+        <Field label="Data centre"><select value={f.dc} onChange={set('dc')}>{[['in', 'India (.in)'], ['com', 'US (.com)'], ['eu', 'Europe (.eu)'], ['au', 'Australia (.com.au)'], ['jp', 'Japan (.jp)'], ['ca', 'Canada (.ca)'], ['sa', 'Saudi (.sa)']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+        <Field label="Organisation ID" hint="Zoho Books → Settings → Organisation profile"><input type="text" value={f.org_id} onChange={set('org_id')} /></Field>
+        <Field label="Client ID"><input type="text" value={f.client_id} onChange={set('client_id')} autoComplete="off" /></Field>
+        <Field label="Client secret" hint={st.secret ? 'Saved (encrypted). Type to replace.' : 'Stored encrypted'}><input type="password" value={f.client_secret} onChange={set('client_secret')} autoComplete="new-password" /></Field>
+        <div className="wide row"><button className="btn ghost" disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save Zoho details'}</button></div>
+      </form>
+      <div className="row" style={{ alignItems: 'flex-end', marginTop: 14 }}>
+        <Field label="Grant code (valid a few minutes)" className="wide"><input type="text" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" /></Field>
+        <button type="button" className="btn primary" disabled={busy === 'connect' || !code.trim()} onClick={() => act('connect', () => post('/api/settings/zoho/connect', { grant_code: code })).then((r) => r && setCode(''))}>{busy === 'connect' ? 'Connecting…' : 'Connect'}</button>
+      </div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <button type="button" className="btn ghost small" disabled={!st.connected || busy === 'test'} onClick={() => act('test', () => post('/api/settings/zoho/test'))}>{busy === 'test' ? 'Testing…' : 'Test connection'}</button>
+        {(st.connected || st.secret) && <button type="button" className="btn danger small" disabled={busy === 'dis'} onClick={() => { if (confirm('Disconnect Zoho Books for this company? The saved secret and token are deleted.')) act('dis', () => del('/api/settings/zoho')); }}>Disconnect</button>}
+      </div>
+    </section>
   );
 }

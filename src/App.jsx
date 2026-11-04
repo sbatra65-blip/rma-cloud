@@ -16,6 +16,10 @@ import Settings from './pages/Settings.jsx';
 import Users from './pages/Users.jsx';
 import Companies from './pages/Companies.jsx';
 import Profile from './pages/Profile.jsx';
+import CarePacks, { CarePackPending, OverrideLog } from './pages/CarePacks.jsx';
+import CarePackRegister from './pages/CarePackRegister.jsx';
+import CarePackDetail from './pages/CarePackDetail.jsx';
+import CarePackPo from './pages/CarePackPo.jsx';
 
 export default function App() {
   return (
@@ -42,7 +46,7 @@ function Shell() {
     return b;
   }, []);
   const refreshReminders = useCallback(() => {
-    get('/api/reminders').then((r) => setReminderCount(r.items.length)).catch(() => {});
+    get('/api/reminders').then((r) => setReminderCount(r.items.length + (r.carePack?.length || 0))).catch(() => {});
   }, []);
 
   const signOut = useCallback(async (reason) => {
@@ -103,6 +107,12 @@ function Shell() {
   else if ((m = route.match(/^\/rma\/(\d+)\/edit$/)) && can.edit(user)) page = <RmaForm {...common} id={m[1]} key={`e${m[1]}`} />;
   else if ((m = route.match(/^\/rma\/(\d+)$/))) page = <RmaDetail {...common} id={m[1]} key={m[1]} />;
   else if (route === '/batches' || route.startsWith('/batches/')) page = <Batches {...common} code={route.split('/')[2]} key={route} />;
+  else if (route === '/care-packs') page = <CarePacks {...common} />;
+  else if (route === '/care-packs/new' && can.manage(user)) page = <CarePackRegister {...common} />;
+  else if (route === '/care-packs/pending') page = <CarePackPending {...common} />;
+  else if (route === '/care-packs/overrides' && can.admin(user)) page = <OverrideLog {...common} />;
+  else if ((m = route.match(/^\/care-packs\/(\d+)\/po$/)) && can.edit(user)) page = <CarePackPo {...common} id={m[1]} key={`po${m[1]}`} />;
+  else if ((m = route.match(/^\/care-packs\/(\d+)$/))) page = <CarePackDetail {...common} id={m[1]} key={`cp${m[1]}`} />;
   else if (route === '/reminders') page = <Reminders {...common} />;
   else if (route === '/reports') page = <Reports {...common} />;
   else if (route === '/import' && can.manage(user)) page = <Import {...common} />;
@@ -118,6 +128,7 @@ function Shell() {
     { to: '/', icon: 'home', label: 'Dashboard' },
     { to: '/rma', icon: 'ticket', label: 'RMAs' },
     { to: '/batches', icon: 'truck', label: 'OEM batches' },
+    { to: '/care-packs', icon: 'shield', label: 'Care packs' },
     { to: '/reminders', icon: 'bell', label: 'Reminders', count: reminderCount },
     { to: '/reports', icon: 'chart', label: 'Reports' },
     { group: 'Data' },
@@ -182,11 +193,12 @@ function Shell() {
 function More({ user, onLogout }) {
   const items = [
     ['/batches', 'truck', 'OEM batches', 'Dispatch RMAs to the OEM together, packing list'],
+    ['/care-packs', 'shield', 'Care packs', 'Printers sold with care packs, OEM PO, OEM invoice, payment'],
     ['/reports', 'chart', 'Reports', 'Filter RMAs and export to Excel'],
-    ['/masters', 'list', 'Masters', 'Customers, OEMs, products and models'],
+    ['/masters', 'list', 'Masters', 'Customers, OEMs, products, models, care pack types'],
     can.manage(user) && ['/import', 'upload', 'Import', 'Bring in RMAs and customers from Excel'],
     can.admin(user) && ['/users', 'users', 'Users & security', 'Logins, roles, sessions, login history'],
-    can.admin(user) && ['/settings', 'gear', 'Company settings', 'Company details, OEM email, Excel template'],
+    can.admin(user) && ['/settings', 'gear', 'Company settings', 'Company details, OEM email, Excel template, care packs, Zoho Books'],
     user.isOwner && ['/companies', 'building', 'Companies', 'Add companies, each with separate logins'],
     ['/profile', 'user', 'My profile', 'Password, recovery codes'],
   ].filter(Boolean);

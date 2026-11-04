@@ -1,4 +1,6 @@
-import { get } from '../api.js';
+import { useState } from 'react';
+import { get, qs } from '../api.js';
+import { CoverNote } from './CarePackLink.jsx';
 import { ErrorPanel, FLOW, Icon, Link, SHORT, Skeleton, Status, ago, can, useLoad } from '../ui.jsx';
 
 export default function Dashboard({ user }) {
@@ -46,6 +48,8 @@ export default function Dashboard({ user }) {
         <div className="stat"><b>{d.avgCloseDays ?? '—'}</b><span>Avg days to close (6 mo)</span></div>
       </div>
 
+      {d.carePack && <CarePackTiles cp={d.carePack} />}
+
       <div className="grid2">
         <section className="panel">
           <div className="spread" style={{ marginBottom: 12 }}><h2>Recently updated</h2><Link to="/rma" className="small">All RMAs</Link></div>
@@ -76,6 +80,32 @@ export default function Dashboard({ user }) {
         </section>
       </div>
     </>
+  );
+}
+
+function CarePackTiles({ cp }) {
+  const [sn, setSn] = useState('');
+  const [cover, setCover] = useState(undefined);
+  async function look(e) {
+    e.preventDefault();
+    if (sn.trim().length < 3) return;
+    try { setCover((await get(`/api/carepack/serial?${qs({ sn: sn.trim() })}`)).device || false); } catch { setCover(false); }
+  }
+  return (
+    <section className="panel" style={{ marginBottom: 14 }}>
+      <div className="spread"><h2>Care packs</h2><Link to="/care-packs" className="small">Registry</Link></div>
+      <form className="search" style={{ margin: '10px 0' }} onSubmit={look}><Icon name="search" size={18} />
+        <input type="search" placeholder="Is this printer covered? Type its serial and press Enter" value={sn} onChange={(e) => { setSn(e.target.value); setCover(undefined); }} aria-label="Check printer cover" /></form>
+      {cover !== undefined && <CoverNote cover={cover} />}
+      <div className="stats" style={{ marginTop: 12 }}>
+        <Link to="/care-packs" className="stat"><b>{cp.devices}</b><span>Printers covered ({cp.batches} invoices)</span></Link>
+        <Link to="/care-packs/pending?tab=po" className={`stat ${cp.poOverdue ? 'hot' : ''}`}><b>{cp.poOverdue + cp.poDueSoon}</b><span>OEM PO overdue / due ≤5d</span></Link>
+        <Link to="/care-packs/pending?tab=docs" className="stat"><b>{cp.docsPending}</b><span>OEM documents pending</span></Link>
+        <Link to="/care-packs/pending?tab=pay" className={`stat ${cp.payOverdue ? 'hot' : ''}`}><b>{cp.payOverdue + cp.payDueSoon}</b><span>OEM payment overdue / due ≤5d</span></Link>
+        <div className="stat"><b>{cp.expiring30}</b><span>Cover ends in 30 days</span></div>
+        <div className="stat"><b>{cp.expired}</b><span>Cover ended</span></div>
+      </div>
+    </section>
   );
 }
 

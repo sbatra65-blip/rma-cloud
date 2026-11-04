@@ -14,6 +14,11 @@ export default function Reminders({ user }) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(i);
   }
+  const cpGroups = new Map();
+  for (const i of data.carePack || []) {
+    if (!cpGroups.has(i.kind)) cpGroups.set(i.kind, []);
+    cpGroups.get(i.kind).push(i);
+  }
   async function test() {
     setBusy(true);
     try {
@@ -28,10 +33,10 @@ export default function Reminders({ user }) {
   return (
     <>
       <div className="page-head">
-        <div><h1>Reminders</h1><p className="muted">RMAs waiting for their next step. Admins and Managers get this list by email at 9 am each day.</p></div>
+        <div><h1>Reminders</h1><p className="muted">RMAs and care packs waiting for their next step. Admins and Managers get this list by email at 9 am each day.</p></div>
         {can.manage(user) && <button className="btn ghost" disabled={busy} onClick={test}><Icon name="mail" size={18} /> {busy ? 'Sending…' : 'Email me this list now'}</button>}
       </div>
-      {!data.items.length ? <Empty icon="check" title="All caught up">No RMA is waiting on you right now.</Empty> : (
+      {!data.items.length && !cpGroups.size ? <Empty icon="check" title="All caught up">No RMA is waiting on you right now.</Empty> : (
         [...groups].map(([kind, list]) => (
           <section key={kind} className="panel">
             <div className="spread" style={{ marginBottom: 10 }}><h2>{kind}</h2><span className="pill accent">{list.length}</span></div>
@@ -47,6 +52,20 @@ export default function Reminders({ user }) {
           </section>
         ))
       )}
+      {[...cpGroups].map(([kind, list]) => (
+        <section key={kind} className="panel">
+          <div className="spread" style={{ marginBottom: 10 }}><h2>{kind}</h2><span className="pill accent">{list.length}</span></div>
+          <div className="tlist">
+            {list.map((i) => (
+              <Link key={`${kind}${i.id}`} to={`/care-packs/${i.id}`} className="tcard" style={{ '--c': i.tone === 'late' ? 'var(--rust)' : 'var(--amber)' }}>
+                <div className="top"><span className="no">{i.invoice}</span>{i.tone === 'late' && <span className="pill bad">Overdue</span>}</div>
+                <h3>{i.customer}</h3>
+                <span className="meta">{i.detail}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ))}
       <p className="muted small" style={{ marginTop: 12 }}>"Awaiting OEM RMA #" shows after {data.awaitingDays} days — change this in Company settings.</p>
     </>
   );

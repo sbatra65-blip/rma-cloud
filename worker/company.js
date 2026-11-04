@@ -4,8 +4,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
+import { CP_DEFAULTS, carePackMethods, migrateCarePack } from './carepack.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const CHUNK = 1_500_000; // bytes per stored file chunk (row limit is 2 MB)
 const TEMPLATE_ID = 'oem-template';
 
@@ -117,6 +118,8 @@ export class Company extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
     const v = Number(this.one("SELECT value FROM meta WHERE key = 'schema'")?.value || 0);
     if (v >= SCHEMA_VERSION) return;
+    if (v < 2) migrateCarePack(this.sql);
+    if (v >= 1) { this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION)); return; }
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_no TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'OPEN',
@@ -203,6 +206,13 @@ export class Company extends DurableObject {
       getSettings: 'read', saveSettings: 'admin', putTemplate: 'admin', deleteTemplate: 'admin', auditLog: 'admin',
       // system (cron)
       reminderDigest: 'system',
+      // care pack (finer role checks inside each method)
+      cpList: 'read', cpRegistry: 'read', cpGet: 'read', cpFindSerial: 'read', cpCustomers: 'read', cpSerials: 'read', cpPending: 'read',
+      cpPoCandidates: 'read', cpGetPdf: 'read', cpDraftGet: 'read', cpOverrideLog: 'read',
+      cpRegister: 'edit', cpZohoPreview: 'edit', cpUpdateHeader: 'edit', cpUpdateProduct: 'edit', cpOverride: 'edit', cpReplaceSerials: 'edit',
+      cpDelete: 'edit', cpOemDetails: 'edit', cpPutPdf: 'edit', cpSetPaid: 'edit', cpRemoveDoc: 'edit', cpPoPreview: 'edit', cpPoConfirm: 'edit',
+      cpZohoPos: 'edit', cpDraftSave: 'edit', cpDraftClear: 'edit', createChallan: 'edit',
+      cpSaveSettings: 'admin', zohoSaveConfig: 'admin', zohoConnect: 'admin', zohoTest: 'admin', zohoDisconnect: 'admin',
     };
     const need = PERMS[method];
     if (!need) return { error: { status: 400, message: 'Unknown action' } };
@@ -229,14 +239,14 @@ export class Company extends DurableObject {
 
   // ---------- Settings ----------
   settings() {
-    const out = { ...DEFAULT_SETTINGS };
+    const out = { ...DEFAULT_SETTINGS, ...CP_DEFAULTS };
     for (const r of this.all("SELECT key, value FROM meta WHERE key LIKE 'set:%'")) out[r.key.slice(4)] = r.value;
     return out;
   }
   getSettings(user) {
     const s = this.settings();
     const tpl = this.one('SELECT name, size, updated_at, updated_by FROM files WHERE id = ?', TEMPLATE_ID);
-    return { ...s, template: tpl || null };
+    return { ...s, ...this.cpSettings(), template: tpl || null };
   }
   saveSettings(user, b) {
     const c = new Checker(b);
@@ -268,6 +278,7 @@ export class Company extends DurableObject {
       statuses: ALL_STATUS.map((s) => ({ value: s, label: label(s) })),
       masters: this.listMasters(user),
       settings: this.getSettings(user),
+      carePack: this.cpMeta(),
     };
   }
 
@@ -278,6 +289,7 @@ export class Company extends DurableObject {
       products: this.all('SELECT * FROM products ORDER BY active DESC, name COLLATE NOCASE'),
       models: this.all('SELECT * FROM models ORDER BY active DESC, code COLLATE NOCASE'),
       customers: this.all('SELECT * FROM customers ORDER BY active DESC, name COLLATE NOCASE'),
+      cp_types: this.all('SELECT * FROM cp_types ORDER BY active DESC, duration_years, name COLLATE NOCASE'),
     };
   }
 
@@ -321,6 +333,11 @@ export class Company extends DurableObject {
       } else {
         this.sql.exec(`INSERT INTO customers (${cols.join(', ')}, active, created_at) VALUES (${cols.map(() => '?').join(',')}, 1, ?)`, ...cols.map((c) => v[c]), now);
       }
+    } else if (kind === 'cp_types') {
+      const v = new Checker(r).text('name', { required: true, max: 80, label: 'Name' }).number('duration_years', { required: true, min: 1, max: 10, int: true, label: 'Duration years' }).bool('active').done();
+      if (this.one('SELECT id FROM cp_types WHERE name = ? AND id != ?', v.name, id || 0)) throw new ValidationError({ name: `Care pack type '${v.name}' already exists.` });
+      if (id) this.sql.exec('UPDATE cp_types SET name = ?, duration_years = ?, active = ? WHERE id = ?', v.name, v.duration_years, v.active, id);
+      else this.sql.exec('INSERT INTO cp_types (name, duration_years, active, created_at) VALUES (?,?,1,?)', v.name, v.duration_years, now);
     } else {
       throw httpError(400, 'Unknown list');
     }
@@ -352,8 +369,10 @@ export class Company extends DurableObject {
     const uses = {
       oems: () => this.one('SELECT COUNT(*) AS n FROM products WHERE oem_id = ?', id).n,
       products: () => this.one('SELECT COUNT(*) AS n FROM models WHERE product_id = ?', id).n,
-      models: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE model_id = ?', id).n,
-      customers: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE customer_id = ?', id).n,
+      models: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE model_id = ?', id).n + this.one('SELECT COUNT(*) AS n FROM cp_batches WHERE model_id = ?', id).n,
+      customers: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE customer_id = ?', id).n
+        + this.one('SELECT COUNT(*) AS n FROM cp_batches WHERE customer_id = ?', id).n,
+      cp_types: () => this.one('SELECT COUNT(*) AS n FROM cp_batches WHERE cp_type_id = ?', id).n,
     }[kind];
     if (!uses) throw httpError(400, 'Unknown list');
     const n = uses();
@@ -481,9 +500,13 @@ export class Company extends DurableObject {
     };
   }
 
-  createTicket(user, { ticket, overrideReason }) {
+  createTicket(user, { ticket, overrideReason, addToCarePack }) {
     const v = this.checkTicket(ticket);
+    const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
+    if (!device && addToCarePack) {
+      this.cpAddOverrideSerial(user, { serial: v.printer_sn, reason: addToCarePack.reason, batchId: addToCarePack.batchId, customer: v.customer_company, model: v.printer_model });
+    }
     const now = Date.now();
     const ticketNo = this.nextTicketNo(user.ticketPrefix || 'INF', istParts(now).ym);
     const row = { ...v, ...dup, ticket_no: ticketNo, status: STATUS.OPEN, created_at: now, updated_at: now, created_by: user.name, updated_by: user.name };
@@ -536,8 +559,9 @@ export class Company extends DurableObject {
       t.printer_sn_norm, t.id).map((r) => ({ ...r, status_label: label(r.status) })) : [];
     const history = t.printer_sn_norm ? this.one('SELECT COUNT(*) AS n FROM tickets WHERE printer_sn_norm = ? AND id != ?', t.printer_sn_norm, t.id).n : 0;
     const del = this.canDelete(user, t);
+    const cover = t.printer_sn ? this.cpFindSerial(user, { sn: t.printer_sn, loose: false }).device : null;
     return {
-      ticket: { ...t, status_label: label(t.status) }, photos, events, sameMachine, otherTicketsOnPrinter: history,
+      ticket: { ...t, status_label: label(t.status) }, photos, events, sameMachine, otherTicketsOnPrinter: history, cover,
       canDelete: del.ok, deleteHint: del.reason, nextActions: this.nextActions(t),
     };
   }
@@ -689,7 +713,8 @@ export class Company extends DurableObject {
       counts, open: openRows.length, ages, closedThisMonth, createdThisMonth,
       avgCloseDays: avgClose ? Math.round(avgClose / 86400000) : null,
       recent, topParts,
-      reminders: this.reminders(user).items.length,
+      reminders: this.reminders(user).items.length + this.cpReminders().length,
+      carePack: this.cpDashboard(),
       batchReady: counts.OEM_RMA_RECEIVED,
       lastWeekOfMonth: Number(today().slice(8, 10)) >= lastDay - 6,
       total: Object.values(counts).reduce((a, b) => a + b, 0),
@@ -717,13 +742,14 @@ export class Company extends DurableObject {
         items.push({ ...base, kind: `Goods back from OEM — send to customer${waited >= 2 ? ` (${waited} days)` : ''}`, tone: waited >= 2 ? 'late' : 'todo' });
       }
     }
-    return { items, awaitingDays: chase };
+    return { items, awaitingDays: chase, carePack: this.cpReminders() };
   }
 
   // For the 9 am email: reminders plus settings, so the Worker can send one digest per company.
   reminderDigest(user) {
     const s = this.settings();
-    return { enabled: s.reminder_emails !== '0', extraTo: splitEmails(s.reminder_extra_to), ...this.reminders(user) };
+    const r = this.reminders(user);
+    return { enabled: s.reminder_emails !== '0', extraTo: splitEmails(s.reminder_extra_to), ...r };
   }
 
   // ---------- OEM Excel + email ----------
@@ -979,6 +1005,17 @@ export class Company extends DurableObject {
     return this.all('SELECT * FROM import_log ORDER BY at DESC LIMIT 50');
   }
 
+  cpSaveSettings(user, b) {
+    const c = new Checker(b).text('invoice_prefix', { max: 40, label: 'Invoice prefix' })
+      .number('carepack_po_deadline_days', { required: true, min: 1, max: 30, int: true, label: 'PO deadline (days)' })
+      .number('carepack_oem_payment_deadline_days', { required: true, min: 1, max: 45, int: true, label: 'OEM payment deadline (days)' })
+      .bool('challan_enabled').bool('challan_auto_dispatch').text('challan_line_description', { max: 500, label: 'Challan line' }).text('challan_notes', { max: 1000, label: 'Challan notes' });
+    const v = c.done();
+    for (const [k, val] of Object.entries(v)) this.sql.exec('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', `set:${k}`, val === null ? '' : typeof val === 'boolean' ? (val ? '1' : '0') : String(val));
+    this.audit(user, 'update', 'carepack_settings', null, v);
+    return this.getSettings(user);
+  }
+
   auditLog(user, { limit = 300 } = {}) {
     return this.all('SELECT * FROM audit ORDER BY at DESC LIMIT ?', Math.min(Number(limit) || 300, 1000));
   }
@@ -1061,3 +1098,5 @@ export function parseLooseDate(v) {
   if (Number.isNaN(ms)) return null;
   return { date, ms };
 }
+
+Object.assign(Company.prototype, carePackMethods);

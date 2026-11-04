@@ -281,7 +281,7 @@ async function handle(request, env, ctx) {
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
-    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason }));
+    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack }));
   }
   if (path === '/api/rma/check-duplicates' && method === 'POST') {
     const b = await body(request);
@@ -329,6 +329,55 @@ async function handle(request, env, ctx) {
     if (!sent.ok) return respond({ error: sent.error }, 502);
     await ccall(env, user, 'recordOemEmail', { id: m[1], to: [...to, ...cc] });
     return respond({ ok: true, to, cc });
+  }
+
+  m = path.match(/^\/api\/rma\/(\d{1,12})\/challan$/);
+  if (m && method === 'POST') return respond(await ccall(env, user, 'createChallan', { id: m[1] }));
+
+  // ---------- Care Pack ----------
+  if (path.startsWith('/api/carepack')) {
+    const q = Object.fromEntries(url.searchParams);
+    if (path === '/api/carepack' && method === 'GET') return respond(await ccall(env, user, 'cpList', q));
+    if (path === '/api/carepack/registry' && method === 'GET') return respond(await ccall(env, user, 'cpRegistry', q));
+    if (path === '/api/carepack/serial' && method === 'GET') return respond(await ccall(env, user, 'cpFindSerial', { sn: q.sn, loose: q.loose !== '0' }));
+    if (path === '/api/carepack/customers' && method === 'GET') return respond(await ccall(env, user, 'cpCustomers', q));
+    if (path === '/api/carepack/serials' && method === 'GET') return respond(await ccall(env, user, 'cpSerials', q));
+    if (path === '/api/carepack/pending' && method === 'GET') return respond(await ccall(env, user, 'cpPending'));
+    if (path === '/api/carepack/overrides' && method === 'GET') return respond(await ccall(env, user, 'cpOverrideLog'));
+    if (path === '/api/carepack/register' && method === 'POST') return respond(await ccall(env, user, 'cpRegister', await body(request, 1024 * 1024)));
+    if (path === '/api/carepack/zoho-preview' && method === 'POST') return respond(await ccall(env, user, 'cpZohoPreview', await body(request)));
+    if (path === '/api/carepack/zoho-pos' && method === 'GET') return respond(await ccall(env, user, 'cpZohoPos', q));
+    if (path === '/api/carepack/po-preview' && method === 'POST') return respond(await ccall(env, user, 'cpPoPreview', await body(request, 1024 * 1024)));
+    if (path === '/api/carepack/po-confirm' && method === 'POST') return respond(await ccall(env, user, 'cpPoConfirm', await body(request, 1024 * 1024)));
+    if (path === '/api/carepack/delete' && method === 'POST') return respond(await ccall(env, user, 'cpDelete', await body(request)));
+    if (path === '/api/carepack/draft') {
+      if (method === 'GET') return respond({ draft: await ccall(env, user, 'cpDraftGet') });
+      if (method === 'POST') return respond(await ccall(env, user, 'cpDraftSave', { data: (await body(request, 512 * 1024)).data }));
+      if (method === 'DELETE') return respond(await ccall(env, user, 'cpDraftClear'));
+    }
+    m = path.match(/^\/api\/carepack\/(\d{1,12})$/);
+    if (m && method === 'GET') return respond(await ccall(env, user, 'cpGet', { id: m[1] }));
+    m = path.match(/^\/api\/carepack\/(\d{1,12})\/po-candidates$/);
+    if (m && method === 'GET') return respond(await ccall(env, user, 'cpPoCandidates', { id: m[1] }));
+    m = path.match(/^\/api\/carepack\/(\d{1,12})\/(header|product|override|serials|oem|paid|remove)$/);
+    if (m && method === 'POST') {
+      const fn = { header: 'cpUpdateHeader', product: 'cpUpdateProduct', override: 'cpOverride', serials: 'cpReplaceSerials', oem: 'cpOemDetails', paid: 'cpSetPaid', remove: 'cpRemoveDoc' }[m[2]];
+      return respond(await ccall(env, user, fn, { ...(await body(request, 256 * 1024)), id: m[1] }));
+    }
+    m = path.match(/^\/api\/carepack\/(\d{1,12})\/pdf$/);
+    if (m && method === 'GET') {
+      const r = await ccall(env, user, 'cpGetPdf', { id: m[1] });
+      return raw(r.bytes, { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${r.name.replace(/"/g, '')}"`,
+        'Content-Security-Policy': "default-src 'none'; object-src 'self'; frame-ancestors 'self'" });
+    }
+    if (m && method === 'POST') {
+      const bytes = await request.arrayBuffer();
+      if (bytes.byteLength > 15 * 1024 * 1024) throw new ValidationError({ file: 'PDF is larger than 15 MB' });
+      if (String.fromCharCode(...new Uint8Array(bytes.slice(0, 5))) !== '%PDF-') throw new ValidationError({ file: 'Only PDF files are accepted for OEM invoices.' });
+      const name = decodeURIComponent(request.headers.get('X-File-Name') || 'oem-invoice.pdf').replace(/[^\w .()-]/g, '_').slice(0, 120);
+      return respond(await ccall(env, user, 'cpPutPdf', { id: m[1], name, bytes }));
+    }
+    return err(404, 'Not found');
   }
 
   // Photos
@@ -410,9 +459,9 @@ async function handle(request, env, ctx) {
   if (path === '/api/import/customers' && method === 'POST') return respond(await ccall(env, user, 'importCustomers', await body(request, 4 * 1024 * 1024)));
 
   // Masters
-  m = path.match(/^\/api\/masters\/(oems|products|models|customers)$/);
+  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types)$/);
   if (m && method === 'POST') return respond(await ccall(env, user, 'saveMaster', { kind: m[1], record: await body(request) }));
-  m = path.match(/^\/api\/masters\/(oems|products|models|customers)\/(\d{1,12})$/);
+  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types)\/(\d{1,12})$/);
   if (m && method === 'DELETE') return respond(await ccall(env, user, 'deleteMaster', { kind: m[1], id: m[2] }));
 
   // Settings
@@ -429,15 +478,22 @@ async function handle(request, env, ctx) {
     return respond(out);
   }
 
+  if (path === '/api/settings/carepack' && method === 'POST') return respond(await ccall(env, user, 'cpSaveSettings', await body(request)));
+  if (path === '/api/settings/zoho' && method === 'POST') return respond(await ccall(env, user, 'zohoSaveConfig', await body(request)));
+  if (path === '/api/settings/zoho' && method === 'DELETE') return respond(await ccall(env, user, 'zohoDisconnect'));
+  if (path === '/api/settings/zoho/connect' && method === 'POST') return respond(await ccall(env, user, 'zohoConnect', await body(request)));
+  if (path === '/api/settings/zoho/test' && method === 'POST') return respond(await ccall(env, user, 'zohoTest'));
+
   // Reminder email now (to me), for checking email works
   if (path === '/api/reminders/test' && method === 'POST') {
     const d = await ccall(env, { ...user, role: 'System' }, 'reminderDigest');
-    const mail = d.items.length
-      ? reminderEmail({ appName, appUrl: url.origin, companyName: user.companyName, items: d.items, recipientName: user.name })
+    const all = [...d.items, ...cpItems(d.carePack)];
+    const mail = all.length
+      ? reminderEmail({ appName, appUrl: url.origin, companyName: user.companyName, items: all, recipientName: user.name })
       : { subject: `${appName} test email`, html: `<p>Hello ${user.name}, emails from ${appName} are working. No RMAs need attention right now.</p>`, text: 'Emails are working.' };
     const sent = await sendMail(env, { to: user.email, ...mail });
     if (!sent.ok) return respond({ ok: false, error: sent.error }, 502);
-    return respond({ ok: true, to: user.email, items: d.items.length });
+    return respond({ ok: true, to: user.email, items: all.length });
   }
 
   // ---------- Admin: users, sessions, logs (own company only) ----------
@@ -496,6 +552,8 @@ async function handle(request, env, ctx) {
   return err(404, 'Not found');
 }
 
+const cpItems = (list = []) => list.map((i) => ({ ...i, ticket_no: i.invoice, serial: '', part: i.detail, href: `/care-packs/${i.id}`, age: null }));
+
 // Daily job: one digest per company to its Admins and Managers (plus any extra addresses set).
 async function runReminders(env, appUrl) {
   const appName = env.APP_NAME || 'RMA Cloud';
@@ -504,17 +562,18 @@ async function runReminders(env, appUrl) {
   for (const c of companies) {
     const sys = { userId: null, name: 'System', role: 'System', companyId: c.companyId, companyName: c.name, ticketPrefix: c.ticketPrefix };
     const d = await ccall(env, sys, 'reminderDigest');
-    if (!d.enabled || !d.items.length) continue;
+    const items = [...d.items, ...cpItems(d.carePack)];
+    if (!d.enabled || !items.length) continue;
     const people = [...c.people, ...d.extraTo.map((email) => ({ email, name: '' }))];
     const seen = new Set();
     const sentTo = [];
     for (const p of people) {
       if (seen.has(p.email)) continue;
       seen.add(p.email);
-      const r = await sendMail(env, { to: p.email, ...reminderEmail({ appName, appUrl, companyName: c.name, items: d.items, recipientName: p.name }) });
+      const r = await sendMail(env, { to: p.email, ...reminderEmail({ appName, appUrl, companyName: c.name, items, recipientName: p.name }) });
       sentTo.push({ to: p.email, ok: r.ok, error: r.error });
     }
-    report.push({ company: c.code, items: d.items.length, sentTo });
+    report.push({ company: c.code, items: items.length, sentTo });
   }
   console.log('reminders', JSON.stringify(report));
   return report;

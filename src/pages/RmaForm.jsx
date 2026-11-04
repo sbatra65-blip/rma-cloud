@@ -1,56 +1,85 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, uploadPhoto } from '../api.js';
-import { ErrorPanel, Field, Icon, Link, Skeleton, Status, navigate, todayISO, useToast } from '../ui.jsx';
+import { ErrorPanel, Field, Icon, Link, Skeleton, Status, fmtDate, navigate, query, todayISO, useToast } from '../ui.jsx';
+import { CarePackPicker, CoverNote } from './CarePackLink.jsx';
 
-const EMPTY = {
+// Fields shared by every part raised for this printer.
+const SHARED = {
   customer_id: '', customer_company: '', customer_contact_name: '', customer_email: '', customer_phone: '', po_number: '',
   customer_address: '', customer_city: '', customer_state: '', customer_postal: '', customer_country: 'India',
   ship_to_company: '', ship_to_address: '', ship_to_contact_name: '', ship_to_email: '', ship_to_phone: '',
-  model_id: '', printer_model: '', printer_sn: '', faulty_part: '', faulty_part_sn: '', faulty_part_no: '',
-  failure_description: '', tph_mileage: '', printer_mileage: '', fw_version: '', flash_initialized: '',
+  model_id: '', printer_model: '', printer_sn: '', printer_mileage: '', fw_version: '', flash_initialized: '',
   purchase_date: '', delivery_to_user_date: '',
 };
+// Fields that belong to one faulty part (one RMA each).
+const PART = { faulty_part: '', faulty_part_sn: '', faulty_part_no: '', tph_mileage: '', failure_description: '' };
 const PARTS = ['Head', 'Platen roller', 'Main board', 'Power supply', 'Cutter', 'Peeler', 'Motor', 'Sensor', 'Display', 'Whole printer'];
+const newPart = () => ({ ...PART, key: Math.random().toString(36).slice(2), photos: [] });
+const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+const normSn = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
 
 export default function RmaForm({ user, boot, id, onChange }) {
   const toast = useToast();
   const editing = !!id;
-  const [f, setF] = useState(EMPTY);
-  const [loaded, setLoaded] = useState(!editing);
+  const [f, setF] = useState(SHARED);
+  const [parts, setParts] = useState([newPart()]);
+  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [ticketNo, setTicketNo] = useState('');
   const [status, setStatus] = useState('');
   const [errors, setErrors] = useState({});
-  const [busy, setBusy] = useState(false);
-  const [dup, setDup] = useState({ blocks: [], sameMachine: [] });
+  const [busy, setBusy] = useState('');
+  const [dups, setDups] = useState({});
   const [override, setOverride] = useState({ on: false, reason: '' });
-  const [photos, setPhotos] = useState([]);
   const [showShip, setShowShip] = useState(false);
-  const fileRef = useRef(null);
+  const [cover, setCover] = useState(null);
+  const [cpAdd, setCpAdd] = useState({ reason: '', batchId: '' });
 
+  // Load the ticket (edit) or copy customer + printer from another RMA (?from=ID, "raise another part").
   useEffect(() => {
-    if (!editing) return;
-    get(`/api/rma/${id}`).then((r) => {
+    const src = editing ? id : query().from;
+    if (!src) { setLoaded(true); return; }
+    get(`/api/rma/${src}`).then((r) => {
       const t = r.ticket;
       const next = {};
-      for (const k of Object.keys(EMPTY)) next[k] = t[k] === null || t[k] === undefined ? '' : String(t[k]);
+      for (const k of Object.keys(SHARED)) next[k] = t[k] === null || t[k] === undefined ? '' : String(t[k]);
       setF(next);
-      setTicketNo(t.ticket_no);
-      setStatus(t.status);
       setShowShip(!!(t.ship_to_company || t.ship_to_address));
+      if (editing) {
+        const p = newPart();
+        for (const k of Object.keys(PART)) p[k] = t[k] === null || t[k] === undefined ? '' : String(t[k]);
+        setParts([p]);
+        setTicketNo(t.ticket_no);
+        setStatus(t.status);
+      }
       setLoaded(true);
     }).catch(setLoadError);
   }, [id, editing]);
 
-  // Live duplicate check while typing the serial / part (new RMAs only).
+  // Care pack cover for this serial (blocks expired cover).
   useEffect(() => {
-    if (editing || !(f.printer_sn.trim() || f.faulty_part_sn.trim())) { setDup({ blocks: [], sameMachine: [] }); return undefined; }
+    if (!f.printer_sn.trim()) { setCover(null); return undefined; }
     const t = setTimeout(() => {
-      post('/api/rma/check-duplicates', { printer_sn: f.printer_sn, faulty_part: f.faulty_part, faulty_part_no: f.faulty_part_no, faulty_part_sn: f.faulty_part_sn })
-        .then(setDup).catch(() => {});
+      get(`/api/carepack/serial?sn=${encodeURIComponent(f.printer_sn)}`).then((r) => setCover(r.device || false)).catch(() => setCover(null));
     }, 400);
     return () => clearTimeout(t);
-  }, [f.printer_sn, f.faulty_part, f.faulty_part_no, f.faulty_part_sn, editing]);
+  }, [f.printer_sn]);
+
+  // Live duplicate check per part while typing (new RMAs only).
+  const dupKey = parts.map((p) => `${p.key}|${p.faulty_part}|${p.faulty_part_no}|${p.faulty_part_sn}`).join('§');
+  useEffect(() => {
+    if (editing || !f.printer_sn.trim()) { setDups({}); return undefined; }
+    const t = setTimeout(async () => {
+      const out = {};
+      for (const p of parts) {
+        try {
+          out[p.key] = await post('/api/rma/check-duplicates', { printer_sn: f.printer_sn, faulty_part: p.faulty_part, faulty_part_no: p.faulty_part_no, faulty_part_sn: p.faulty_part_sn });
+        } catch { /* ignore while typing */ }
+      }
+      setDups(out);
+    }, 450);
+    return () => clearTimeout(t);
+  }, [f.printer_sn, dupKey, editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const masters = boot.masters;
   const modelOptions = useMemo(() => {
@@ -66,21 +95,23 @@ export default function RmaForm({ user, boot, id, onChange }) {
   if (!loaded) return <Skeleton rows={6} />;
 
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const setPart = (key, k, v) => setParts((ps) => ps.map((p) => (p.key === key ? { ...p, [k]: v } : p)));
   const pickCustomer = (c) => setF({
     ...f, customer_id: String(c.id), customer_company: c.name,
     customer_contact_name: c.contact_name || f.customer_contact_name, customer_email: c.email || f.customer_email,
     customer_phone: c.phone || f.customer_phone, customer_address: c.address || f.customer_address, customer_city: c.city || f.customer_city,
     customer_state: c.state || f.customer_state, customer_postal: c.postal || f.customer_postal, customer_country: c.country || 'India',
   });
+  const pickDevice = (d) => setF((x) => ({
+    ...x, printer_sn: d.serial_number, printer_model: d.printer_model || x.printer_model, customer_company: d.customer_name || x.customer_company,
+    customer_city: d.customer_city || x.customer_city, purchase_date: x.purchase_date || d.invoice_date || '',
+  }));
 
-  function addPhotos(list) {
-    const next = [...photos];
-    for (const file of list) {
-      if (next.length >= 20) break;
-      next.push({ file, url: URL.createObjectURL(file) });
-    }
-    setPhotos(next);
-  }
+  const blocked = parts.filter((p) => dups[p.key]?.blocks?.length);
+  const sameMachine = editing ? [] : [...new Map(Object.values(dups).flatMap((d) => d?.sameMachine || []).map((t) => [t.id, t])).values()]
+    .filter((t) => !blocked.some((p) => dups[p.key].blocks.some((b) => b.ticket.id === t.id)));
+  const expired = cover && cover.expired;
+  const notInCarePack = cover === false;
 
   async function submit(e) {
     e.preventDefault();
@@ -88,34 +119,84 @@ export default function RmaForm({ user, boot, id, onChange }) {
     if (!f.customer_company.trim()) errs.customer_company = 'Company name is required';
     if (!f.printer_model.trim()) errs.printer_model = 'Product model is required';
     if (!f.printer_sn.trim()) errs.printer_sn = 'Product serial number is required';
-    if (!f.faulty_part.trim()) errs.faulty_part = 'Faulty part is required';
-    if (!f.failure_description.trim()) errs.failure_description = 'Failure description is required';
-    if (Object.keys(errs).length) errs.form = 'Please fill in the highlighted fields.';
-    if (!editing && dup.blocks.length && !(override.on && override.reason.trim())) {
-      errs.form = user.dupOverride ? 'This looks like a duplicate open RMA. Tick the override box and give a reason, or close the other RMA first.'
-        : 'This looks like a duplicate open RMA. Close the other RMA first, or ask an Admin to raise it with an override.';
+    parts.forEach((p, i) => {
+      if (!p.faulty_part.trim()) errs[`p${i}_faulty_part`] = 'Faulty part is required';
+      if (!p.failure_description.trim()) errs[`p${i}_failure_description`] = 'Failure description is required';
+    });
+    // The same physical part twice in one form (same part, and no different part serial / number to tell them apart).
+    for (let i = 0; i < parts.length; i++) {
+      for (let j = i + 1; j < parts.length; j++) {
+        const a = parts[i]; const b = parts[j];
+        if (!norm(a.faulty_part) || norm(a.faulty_part) !== norm(b.faulty_part)) continue;
+        const diffSn = normSn(a.faulty_part_sn) && normSn(b.faulty_part_sn) && normSn(a.faulty_part_sn) !== normSn(b.faulty_part_sn);
+        const diffNo = norm(a.faulty_part_no) && norm(b.faulty_part_no) && norm(a.faulty_part_no) !== norm(b.faulty_part_no);
+        if (!diffSn && !diffNo) errs[`p${j}_faulty_part`] = `Same as part ${i + 1}. If they really are two separate ${a.faulty_part} units, enter each one's part serial number.`;
+      }
+      if (normSn(parts[i].faulty_part_sn)) {
+        const k = parts.findIndex((q, j) => j > i && normSn(q.faulty_part_sn) === normSn(parts[i].faulty_part_sn));
+        if (k > 0) errs[`p${k}_faulty_part_sn`] = `Part serial already used on part ${i + 1}`;
+      }
     }
+    if (expired) errs.printer_sn = `Care pack / warranty for this serial ended on ${fmtDate(cover.warranty_end)}. Expired cover cannot start a new RMA.`;
+    if (Object.keys(errs).length) errs.form = 'Please fix the highlighted fields.';
+    if (!errs.form && !editing && blocked.length && !(override.on && override.reason.trim())) {
+      errs.form = user.dupOverride ? 'A part here is already on an open RMA. Tick the override box and give a reason, or remove that part.'
+        : 'A part here is already on an open RMA. Remove it, close the other RMA, or ask an Admin.';
+    }
+    if (!errs.form && !editing && notInCarePack && cpAdd.on && !cpAdd.reason.trim()) errs.form = 'Give a reason for adding this serial to the care pack registry, or untick the box.';
     setErrors(errs);
     if (Object.keys(errs).length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    setBusy(true);
-    try {
-      const body = { ticket: f, overrideReason: override.on ? override.reason : undefined };
-      const r = await post(editing ? `/api/rma/${id}` : '/api/rma', body);
-      const tid = r.ticket.id;
-      let failed = 0;
-      for (const p of photos) {
-        try { await uploadPhoto(tid, p.file, 'INBOUND'); } catch { failed++; }
+
+    if (editing) {
+      setBusy('save');
+      try {
+        const r = await post(`/api/rma/${id}`, { ticket: { ...f, ...strip(parts[0]) } });
+        onChange?.();
+        toast('RMA saved');
+        navigate(`/rma/${r.ticket.id}`, { replace: true });
+      } catch (err) {
+        setErrors({ form: err.message, ...prefixFields(err.fields, 0) });
+      } finally {
+        setBusy('');
       }
-      onChange?.();
-      toast(editing ? 'RMA saved' : `RMA ${r.ticket.ticket_no} raised${photos.length ? ` with ${photos.length - failed} photo${photos.length - failed === 1 ? '' : 's'}` : ''}`);
-      if (failed) toast(`${failed} photo${failed === 1 ? '' : 's'} could not be uploaded. Add them again on the RMA.`, true);
-      navigate(`/rma/${tid}`, { replace: true });
+      return;
+    }
+
+    // One RMA per part, raised one after another. Stops at the first failure so nothing is half-done silently.
+    const created = [];
+    let photoFails = 0;
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        setBusy(`Raising ${i + 1} of ${parts.length}…`);
+        const p = parts[i];
+        const body = {
+          ticket: { ...f, ...strip(p) },
+          overrideReason: override.on && dups[p.key]?.blocks?.length ? override.reason : undefined,
+          addToCarePack: i === 0 && notInCarePack && cpAdd.on ? { reason: cpAdd.reason, batchId: cpAdd.batchId || null } : undefined,
+        };
+        const r = await post('/api/rma', body);
+        created.push(r.ticket);
+        for (const ph of p.photos) {
+          try { await uploadPhoto(r.ticket.id, ph.file, 'INBOUND'); } catch { photoFails++; }
+        }
+      }
     } catch (err) {
-      if (err.data?.code === 'duplicate') setDup(err.data.duplicates);
-      setErrors({ form: err.message, ...(err.fields || {}) });
+      const i = created.length;
+      setErrors({ form: `${created.length ? `Raised ${created.map((t) => t.ticket_no).join(', ')}. ` : ''}Part ${i + 1} (${parts[i].faulty_part}) was not raised: ${err.message}`, ...prefixFields(err.fields, i) });
+      if (created.length) { setParts((ps) => ps.slice(created.length)); onChange?.(); }
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } finally {
-      setBusy(false);
+      setBusy('');
+      return;
+    }
+    setBusy('');
+    onChange?.();
+    if (photoFails) toast(`${photoFails} photo${photoFails === 1 ? '' : 's'} could not be uploaded. Add them on the RMA.`, true);
+    if (created.length === 1) {
+      toast(`RMA ${created[0].ticket_no} raised`);
+      navigate(`/rma/${created[0].id}`, { replace: true });
+    } else {
+      toast(`${created.length} RMAs raised: ${created.map((t) => t.ticket_no).join(', ')}`);
+      navigate(`/rma?q=${encodeURIComponent(created[0].printer_sn)}`, { replace: true });
     }
   }
 
@@ -125,35 +206,36 @@ export default function RmaForm({ user, boot, id, onChange }) {
         <div>
           <Link to={editing ? `/rma/${id}` : '/rma'} className="small muted" style={{ textDecoration: 'none' }}>← {editing ? ticketNo : 'RMAs'}</Link>
           <h1>{editing ? 'Edit RMA' : 'New RMA'}</h1>
-          {!editing && <p className="muted">Number given on save: {user.company.ticketPrefix}-RMA-{todayISO().slice(0, 7).replace('-', '')}-…</p>}
+          {!editing && <p className="muted">Several faulty parts from one printer? Add each part below — each gets its own RMA number and OEM form.</p>}
           {editing && status && <p style={{ marginTop: 6 }}><Status s={status} /></p>}
         </div>
       </div>
       {errors.form && <div className="formerror" role="alert" style={{ marginBottom: 14 }}>{errors.form}</div>}
 
-      {!editing && (dup.blocks.length > 0 || dup.sameMachine.length > 0) && (
+      {!editing && (blocked.length > 0 || sameMachine.length > 0) && (
         <div className="stack" style={{ marginBottom: 14 }}>
-          {dup.blocks.length > 0 && (
+          {blocked.length > 0 && (
             <div className="dupbox" role="alert">
               <b><Icon name="alert" size={18} style={{ verticalAlign: '-3px' }} /> Possible duplicate — blocked</b>
-              <ul>{dup.blocks.map((b) => <li key={b.ticket.id}>{b.reason} <Link to={`/rma/${b.ticket.id}`}>Open {b.ticket.ticket_no}</Link></li>)}</ul>
+              <ul>{blocked.flatMap((p) => dups[p.key].blocks.map((b) => (
+                <li key={`${p.key}${b.ticket.id}`}><b>{p.faulty_part || 'Part'}:</b> {b.reason} <Link to={`/rma/${b.ticket.id}`}>Open {b.ticket.ticket_no}</Link></li>)))}</ul>
               {user.dupOverride ? (
                 <>
                   <label className="check"><input type="checkbox" checked={override.on} onChange={(e) => setOverride({ ...override, on: e.target.checked })} />
                     I've checked this is a different physical part and want to raise it anyway</label>
                   {override.on && (
-                    <Field label="Override reason" required error={errors.overrideReason} hint="Saved on the RMA with your name">
+                    <Field label="Override reason" required hint="Saved on the RMA with your name">
                       <input type="text" maxLength={500} value={override.reason} onChange={(e) => setOverride({ ...override, reason: e.target.value })} />
                     </Field>
                   )}
                 </>
-              ) : <p className="small">Only an Admin or a user allowed to override duplicates can raise this.</p>}
+              ) : <p className="small">Only an Admin or a user allowed to override duplicates can raise this part.</p>}
             </div>
           )}
-          {dup.sameMachine.length > 0 && (
+          {sameMachine.length > 0 && (
             <div className="warnbox">
-              This printer already has {dup.sameMachine.length} open RMA{dup.sameMachine.length === 1 ? '' : 's'} for other parts:{' '}
-              {dup.sameMachine.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/rma/${t.id}`}>{t.ticket_no}</Link> ({t.faulty_part || 'part not set'})</span>)}. That's allowed.
+              This printer already has open RMA{sameMachine.length === 1 ? '' : 's'} for other parts:{' '}
+              {sameMachine.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/rma/${t.id}`}>{t.ticket_no}</Link> ({t.faulty_part || 'part not set'})</span>)}. That's allowed.
             </div>
           )}
         </div>
@@ -192,7 +274,8 @@ export default function RmaForm({ user, boot, id, onChange }) {
       </section>
 
       <section className="panel">
-        <div className="section-title"><i>2</i><h2>Product and fault</h2></div>
+        <div className="section-title"><i>2</i><h2>Printer</h2></div>
+        {!editing && <div style={{ marginBottom: 12 }}><CarePackPicker onPick={pickDevice} /></div>}
         <div className="fields three">
           <Field label="Product model" required error={errors.printer_model}>
             <Suggest value={f.printer_model} onChange={(v) => setF({ ...f, printer_model: v, model_id: '' })} options={modelOptions}
@@ -202,59 +285,96 @@ export default function RmaForm({ user, boot, id, onChange }) {
             <input type="text" className="upper" autoCapitalize="characters" value={f.printer_sn} onChange={set('printer_sn')} />
           </Field>
           <Field label="Purchase date" error={errors.purchase_date}><input type="date" max={todayISO()} value={f.purchase_date} onChange={set('purchase_date')} /></Field>
-          <Field label="Faulty part" required error={errors.faulty_part}>
-            <Suggest value={f.faulty_part} onChange={(v) => setF({ ...f, faulty_part: v })} options={PARTS.map((p) => ({ id: p, label: p }))}
-              onPick={(p) => setF({ ...f, faulty_part: p.label })} placeholder="e.g. Head" />
-          </Field>
-          <Field label="Faulty part serial number"><input type="text" className="upper" autoCapitalize="characters" value={f.faulty_part_sn} onChange={set('faulty_part_sn')} /></Field>
-          <Field label="Faulty part number"><input type="text" value={f.faulty_part_no} onChange={set('faulty_part_no')} /></Field>
-          <Field label="TPH mileage (m)" error={errors.tph_mileage}><input type="number" inputMode="decimal" min="0" step="0.01" value={f.tph_mileage} onChange={set('tph_mileage')} /></Field>
           <Field label="Printer mileage (m)" error={errors.printer_mileage}><input type="number" inputMode="decimal" min="0" step="0.01" value={f.printer_mileage} onChange={set('printer_mileage')} /></Field>
           <Field label="Firmware version"><input type="text" value={f.fw_version} onChange={set('fw_version')} /></Field>
           <Field label="Flash initialised">
             <select value={f.flash_initialized} onChange={set('flash_initialized')}><option value="">—</option><option>Yes</option><option>No</option></select>
           </Field>
           <Field label="Delivery to user date" error={errors.delivery_to_user_date}><input type="date" max={todayISO()} value={f.delivery_to_user_date} onChange={set('delivery_to_user_date')} /></Field>
-          <Field label="Failure description" required error={errors.failure_description} className="wide" hint="Goes into the OEM Excel form and email">
-            <textarea value={f.failure_description} onChange={set('failure_description')} />
-          </Field>
         </div>
+        <CoverNote cover={cover} />
+        {!editing && notInCarePack && f.printer_sn.trim().length >= 4 && (
+          <div className="stack" style={{ marginTop: 10 }}>
+            <label className="check small"><input type="checkbox" checked={!!cpAdd.on} onChange={(e) => setCpAdd({ ...cpAdd, on: e.target.checked })} />
+              Also add this serial to the care pack registry (it's missing from the import)</label>
+            {cpAdd.on && <Field label="Reason" required hint="Stored on the care pack device with your name">
+              <input type="text" value={cpAdd.reason} onChange={(e) => setCpAdd({ ...cpAdd, reason: e.target.value })} placeholder="e.g. SN missing from import — confirmed on printer label" />
+            </Field>}
+          </div>
+        )}
       </section>
 
-      {!editing && (
-        <section className="panel">
-          <div className="section-title"><i>3</i><h2>Inbound photos</h2></div>
-          <p className="muted small" style={{ marginBottom: 12 }}>Photos of the faulty part as received. The first five go into the OEM Excel form. You can add more later.</p>
-          <div className="dropzone">
-            <Icon name="camera" size={30} />
-            <div className="row" style={{ justifyContent: 'center' }}>
-              <button type="button" className="btn ghost" onClick={() => { fileRef.current.setAttribute('capture', 'environment'); fileRef.current.click(); }}>
-                <Icon name="camera" size={18} /> Take photo</button>
-              <button type="button" className="btn ghost" onClick={() => { fileRef.current.removeAttribute('capture'); fileRef.current.click(); }}>
-                <Icon name="upload" size={18} /> Choose photos</button>
-            </div>
-            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { addPhotos([...e.target.files]); e.target.value = ''; }} />
+      {parts.map((p, i) => (
+        <section key={p.key} className="panel">
+          <div className="spread" style={{ marginBottom: 12 }}>
+            <div className="section-title" style={{ margin: 0 }}><i>{editing ? 3 : i + 3}</i><h2>{editing ? 'Faulty part' : parts.length > 1 ? `Faulty part ${i + 1}` : 'Faulty part'}</h2></div>
+            {!editing && parts.length > 1 && <button type="button" className="btn danger small" onClick={() => setParts(parts.filter((x) => x.key !== p.key))}><Icon name="trash" size={16} /> Remove part</button>}
           </div>
-          {photos.length > 0 && (
-            <div className="photos" style={{ marginTop: 12 }}>
-              {photos.map((p, i) => (
-                <div key={p.url} className="photo">
-                  <img src={p.url} alt={`Photo ${i + 1}`} />
-                  {i < 5 && <span className="n">{i + 1}</span>}
-                  <button type="button" className="iconbtn" aria-label="Remove photo" onClick={() => setPhotos(photos.filter((x) => x !== p))}
-                    style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,.55)', color: '#fff', padding: 4 }}><Icon name="x" size={16} /></button>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="fields three">
+            <Field label="Faulty part" required error={errors[`p${i}_faulty_part`]}>
+              <Suggest value={p.faulty_part} onChange={(v) => setPart(p.key, 'faulty_part', v)} options={PARTS.map((x) => ({ id: x, label: x }))}
+                onPick={(x) => setPart(p.key, 'faulty_part', x.label)} placeholder="e.g. Head" />
+            </Field>
+            <Field label="Faulty part serial number" error={errors[`p${i}_faulty_part_sn`]}><input type="text" className="upper" autoCapitalize="characters" value={p.faulty_part_sn} onChange={(e) => setPart(p.key, 'faulty_part_sn', e.target.value)} /></Field>
+            <Field label="Faulty part number" error={errors[`p${i}_faulty_part_no`]}><input type="text" value={p.faulty_part_no} onChange={(e) => setPart(p.key, 'faulty_part_no', e.target.value)} /></Field>
+            <Field label="TPH mileage (m)" error={errors[`p${i}_tph_mileage`]}><input type="number" inputMode="decimal" min="0" step="0.01" value={p.tph_mileage} onChange={(e) => setPart(p.key, 'tph_mileage', e.target.value)} /></Field>
+            <Field label="Failure description" required error={errors[`p${i}_failure_description`]} className="wide" hint="Goes into this part's OEM Excel form and email">
+              <textarea value={p.failure_description} onChange={(e) => setPart(p.key, 'failure_description', e.target.value)} />
+            </Field>
+          </div>
+          {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
         </section>
+      ))}
+      {!editing && (
+        <button type="button" className="btn ghost block" style={{ marginTop: 14 }} onClick={() => setParts([...parts, newPart()])}>
+          <Icon name="plus" size={18} /> Add another faulty part from this printer</button>
       )}
 
       <div className="savebar">
         <Link to={editing ? `/rma/${id}` : '/rma'} className="btn ghost">Cancel</Link>
-        <button className="btn primary" disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Raise RMA'}</button>
+        <button className="btn primary" disabled={!!busy}>{busy ? (busy === 'save' ? 'Saving…' : busy) : editing ? 'Save changes' : parts.length > 1 ? `Raise ${parts.length} RMAs` : 'Raise RMA'}</button>
       </div>
     </form>
+  );
+}
+
+function strip(p) {
+  const o = {};
+  for (const k of Object.keys(PART)) o[k] = p[k];
+  return o;
+}
+function prefixFields(fields, i) {
+  const o = {};
+  for (const [k, v] of Object.entries(fields || {})) o[k in PART ? `p${i}_${k}` : k] = v;
+  return o;
+}
+
+function PartPhotos({ part, onChange }) {
+  const ref = useRef(null);
+  const add = (list) => onChange([...part.photos, ...[...list].slice(0, 20 - part.photos.length).map((file) => ({ file, url: URL.createObjectURL(file) }))]);
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="spread">
+        <span className="small"><b>Inbound photos</b> <span className="muted">— the first five go into this part's OEM form</span></span>
+        <div className="row tight">
+          <button type="button" className="btn ghost small" onClick={() => { ref.current.setAttribute('capture', 'environment'); ref.current.click(); }}><Icon name="camera" size={16} /> Take photo</button>
+          <button type="button" className="btn ghost small" onClick={() => { ref.current.removeAttribute('capture'); ref.current.click(); }}><Icon name="upload" size={16} /> Choose</button>
+        </div>
+        <input ref={ref} type="file" accept="image/*" multiple hidden onChange={(e) => { add(e.target.files); e.target.value = ''; }} />
+      </div>
+      {part.photos.length > 0 && (
+        <div className="photos" style={{ marginTop: 10 }}>
+          {part.photos.map((ph, i) => (
+            <div key={ph.url} className="photo">
+              <img src={ph.url} alt={`Photo ${i + 1}`} />
+              {i < 5 && <span className="n">{i + 1}</span>}
+              <button type="button" className="iconbtn" aria-label="Remove photo" onClick={() => onChange(part.photos.filter((x) => x !== ph))}
+                style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,.55)', color: '#fff', padding: 4 }}><Icon name="x" size={16} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

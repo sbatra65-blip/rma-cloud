@@ -196,6 +196,72 @@ ok(r.status === 422 && r.data.fields?.gstin, 'GSTIN validated');
 r = await owner('POST', '/api/import/customers', { rows: [{ name: 'Acme Logistics', city: 'Delhi' }, { name: 'Beta Retail', email: 'ops@beta.in' }] });
 ok(r.data.added === 2 && r.data.masters.customers[0].code.startsWith('C'), 'customer import with auto codes');
 
+
+console.log('Several parts from one printer, same day');
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'TEBT7770001', faulty_part: 'Head', faulty_part_sn: 'HX-1' } });
+const mp1 = r.data.ticket;
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'TEBT7770001', faulty_part: 'Main board', faulty_part_sn: 'MB-9', failure_description: 'No power' } });
+ok(r.status === 200 && r.data.sameMachine.some((t) => t.id === mp1.id), 'second part on same printer same day allowed, linked as same machine');
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'TEBT7770001', faulty_part: 'Platen roller', faulty_part_sn: '' } });
+ok(r.status === 200, 'third part (no part serial) allowed');
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'TEBT7770001', faulty_part: 'platen  ROLLER', faulty_part_sn: '' } });
+ok(r.status === 409, 'same part type again with no serial blocked');
+r = await owner('GET', `/api/rma/${mp1.id}/email`);
+ok(r.data.fileName === 'TE310_TEBT7770001_Head.xlsx', 'each part gets its own Excel name');
+
+console.log('Care Pack');
+const cp = (o = {}) => ({ invoice_number: 'IS-GST-2627-0300', invoice_date: '2026-10-01', customer_name: 'Acme Logistics', source: 'manual',
+  products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'S/N: CPX0001, CPX0002', qty: 2 }], ...o });
+r = await owner('POST', '/api/carepack/register', cp({ products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'CPX0001', qty: 2 }] }));
+ok(r.status === 422 && r.data.fields?.p0_serials, 'qty must equal serial count');
+r = await owner('POST', '/api/carepack/register', cp({ products: [{ printer_model: 'TE310', oem_brand: 'Printronix', care_pack_type: '3 Year', serial_text: 'CPX0001, CPX0002', qty: 2 }] }));
+ok(r.status === 422 && /TSC Auto ID model/.test(r.data.error), 'brand that contradicts model blocked');
+r = await owner('POST', '/api/carepack/register', cp({ invoice_date: '2020-01-01', products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '1 Year', serial_text: 'OLD1', qty: 1 }] }));
+ok(r.status === 422 && /already ended/.test(r.data.error), 'expired care pack cannot be registered');
+r = await owner('POST', '/api/carepack/register', cp({ products: [
+  { printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'S/N: CPX0001, CPX0002', qty: 2 },
+  { printer_model: 'T6304E', oem_brand: 'Printronix', care_pack_type: '5 Year', serial_text: 't6ev 900001', qty: 1 }] }));
+ok(r.status === 200 && r.data.ids.length === 2, 'manual register: 2 product sets');
+const cpId = r.data.ids[0];
+r = await owner('POST', '/api/carepack/register', cp({ invoice_number: 'IS-GST-2627-0301', products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'cpx0002', qty: 1 }] }));
+ok(r.status === 409 && /CPX0002 \(invoice IS-GST-2627-0300\)/.test(r.data.error), 'serial already registered elsewhere blocked');
+r = await owner('POST', '/api/carepack/register', cp({ products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'NEW0009', qty: 1 }] }));
+ok(r.status === 409 && /already exists/.test(r.data.error), 'same invoice cannot be registered twice');
+r = await owner('GET', '/api/carepack/serial?sn=cpx 0001');
+ok(r.data.device?.warranty_end === '2029-10-01' && !r.data.device.expired, 'serial lookup + 3-year cover end');
+r = await owner('GET', `/api/carepack/${cpId}`);
+ok(r.data.canDelete && r.data.canEditDevices, 'fresh batch editable and deletable');
+
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'CPX0001', faulty_part: 'Head', faulty_part_sn: 'ZZ1' } });
+ok(r.status === 200 && r.data.cover?.serial_number === 'CPX0001', 'RMA shows care pack cover');
+r = await owner('GET', `/api/carepack/${cpId}`);
+ok(!r.data.canDelete && /linked to RMA/.test(r.data.deleteHint), 'batch delete blocked once an RMA uses its serial');
+r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'NOTINCP9', faulty_part: 'Head', faulty_part_sn: 'ZZ2' }, addToCarePack: { reason: 'SN missing from import' } });
+ok(r.status === 200 && r.data.cover?.serial_number === 'NOTINCP9' && r.data.cover.overridden, 'RMA adds missing serial to care pack (override)', JSON.stringify(r.data).slice(0, 300));
+
+// PO: manual with serials missing → blocked; then perfect match
+const poIn = (o = {}) => ({ batchId: cpId, mode: 'manual', po: { number: 'PO-2627-0087', vendor: 'TSC AUTO ID', currency: 'USD', qty: 2 }, ...o });
+r = await owner('POST', '/api/carepack/po-preview', poIn({ serials: ['CPX0001'] }));
+ok(r.status === 200 && !r.data.allMatch && r.data.matches[0].missing[0] === 'CPX0002', 'PO preview shows missing serial');
+r = await owner('POST', '/api/carepack/po-confirm', poIn({ serials: ['CPX0001'] }));
+ok(r.status === 422, 'mismatched PO not linked without Accept Anyway');
+r = await owner('POST', '/api/carepack/po-confirm', poIn({ serials: ['CPX0001', 'CPX0002', 'OTHER77'] }));
+ok(r.status === 200 && r.data.linked === 1, 'perfect (clubbed) PO linked');
+r = await owner('GET', `/api/carepack/${cpId}`);
+ok(r.data.batch.status === 'PO_VALIDATED' && !r.data.canEditDevices && r.data.batch.po_matched, 'serials locked after PO');
+r = await owner('POST', `/api/carepack/${cpId}/oem`, { oem_invoice_number: 'TSC-INV-55', oem_invoice_date: '2026-10-20', oem_amount: 1200, oem_currency: 'USD' });
+r = await owner('POST', `/api/carepack/${cpId}/pdf`, new TextEncoder().encode('%PDF-1.4 fake'), { headers: { 'X-File-Name': 'oem.pdf' } });
+ok(r.status === 200 && r.data.batch.status === 'COMPLETE' && r.data.batch.verified, '100% verified after PO + OEM invoice + PDF');
+r = await owner('POST', `/api/carepack/${cpId}/paid`, { paid: true });
+r = await owner('POST', `/api/carepack/${cpId}/remove`, { kind: 'po', reason: 'wrong', confirmed: true });
+ok(r.status === 409 && /payment is still recorded/.test(r.data.error), 'remove order enforced (payment first)');
+for (const kind of ['payment', 'invoice', 'po']) r = await owner('POST', `/api/carepack/${cpId}/remove`, { kind, reason: 'Wrong PO linked', confirmed: true });
+ok(r.status === 200 && r.data.batch.status === 'IMPORTED' && r.data.audits.length === 3, 'payment → invoice → PO removed with 3 audit rows');
+r = await owner('GET', '/api/carepack/pending');
+ok(r.status === 200 && r.data.noPo.length >= 2, 'pending report');
+r = await owner('GET', '/api/dashboard');
+ok(r.data.carePack.devices === 4 && r.data.carePack.batches === 3, 'dashboard care pack counts', r.data.carePack);
+
 console.log('Users and roles (company INF)');
 r = await owner('POST', '/api/admin/users', { name: 'Ravi Tech', email: 'ravi@example.com', role: 'Technician' });
 ok(r.status === 200 && r.data.link.includes('/invite#token='), 'invite technician (link returned)');
@@ -246,6 +312,10 @@ r = await priya('POST', '/api/rma', { ticket: { ...base } });
 ok(r.status === 200 && r.data.ticket.ticket_no.startsWith('SCP-RMA-'), 'SCP numbering + same serial allowed in other company');
 r = await priya('GET', `/api/rma/${t1.id}`);
 ok(r.status === 404 || (r.data?.ticket?.customer_company !== 'Acme Logistics' || r.data.ticket.ticket_no.startsWith('SCP')), 'INF ticket id not readable from SCP');
+r = await priya('GET', '/api/carepack');
+ok(r.data.rows.length === 0 && r.data.total === 0, 'SCP sees none of INF\'s care packs');
+r = await priya('GET', '/api/carepack/serial?sn=CPX0001');
+ok(!r.data.device, 'INF care pack serial not visible from SCP');
 r = await priya('GET', '/api/owner/companies');
 ok(r.status === 403, 'SCP Admin cannot list all companies');
 r = await priya('GET', '/api/admin/users');

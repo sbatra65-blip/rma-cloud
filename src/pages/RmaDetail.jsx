@@ -4,6 +4,7 @@ import { blobToBase64, fillOemTemplate } from '../excel.js';
 import {
   Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, Stepper, ageDays, can, copyText, fmtDate, fmtMs, navigate, todayISO, useLoad, useToast,
 } from '../ui.jsx';
+import { CoverNote } from './CarePackLink.jsx';
 
 const ACTIONS = {
   mark_sent: { label: 'Mark sent to OEM', icon: 'mail', cls: 'ghost', help: 'Use this if you emailed the OEM outside the app.' },
@@ -27,7 +28,7 @@ export async function buildOemExcel(ticketId, inboundPhotos) {
   return { ...out, fileName: ctx.fileName, ctx };
 }
 
-export default function RmaDetail({ user, id, onChange }) {
+export default function RmaDetail({ user, boot, id, onChange }) {
   const toast = useToast();
   const [data, reload, error] = useLoad(() => get(`/api/rma/${id}`), [id]);
   const [tab, setTab] = useState('details');
@@ -81,6 +82,7 @@ export default function RmaDetail({ user, id, onChange }) {
           </p>
         </div>
         <div className="row noprint">
+          {editable && <Link to={`/rma/new?from=${t.id}`} className="btn ghost small" title="Same printer, another faulty part"><Icon name="plus" size={16} /> Another part, same printer</Link>}
           {editable && <Link to={`/rma/${t.id}/edit`} className="btn ghost small"><Icon name="edit" size={16} /> Edit</Link>}
           {data.canDelete && <button className="btn danger small" onClick={() => setDlg('delete')}><Icon name="trash" size={16} /> Delete</button>}
         </div>
@@ -111,6 +113,7 @@ export default function RmaDetail({ user, id, onChange }) {
         </p>
       </section>
 
+      {data.cover !== undefined && t.printer_sn && <CoverNote cover={data.cover || false} />}
       {sameMachine.length > 0 && (
         <div className="warnbox" style={{ marginTop: 14 }}>
           Other open RMAs on this printer: {sameMachine.map((s, i) => <span key={s.id}>{i ? ', ' : ''}<Link to={`/rma/${s.id}`}>{s.ticket_no}</Link> ({s.faulty_part || '—'}, {s.status_label})</span>)}
@@ -197,7 +200,7 @@ export default function RmaDetail({ user, id, onChange }) {
         </section>
       )}
 
-      {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} onClose={() => setDlg(null)} after={after} />}
+      {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} settings={boot?.settings} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'email' && <EmailDialog ticket={t} inbound={inbound} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'draft' && <DraftDialog ticket={t} onClose={() => setDlg(null)} />}
       <Dialog open={dlg === 'delete'} onClose={() => setDlg(null)} title={`Delete ${t.ticket_no}?`}>
@@ -212,7 +215,20 @@ export default function RmaDetail({ user, id, onChange }) {
   );
 }
 
-function ActionDialog({ action, ticket, onClose, after }) {
+function ActionDialog({ action, ticket, settings, onClose, after }) {
+  const toast = useToast();
+  const [challanBusy, setChallanBusy] = useState(false);
+  const challanOk = settings?.challan_enabled !== '0' && settings?.zoho_connected;
+  async function makeChallan() {
+    setChallanBusy(true);
+    try {
+      const r = await post(`/api/rma/${ticket.id}/challan`);
+      if (r.autoDispatch) setD((x) => ({ ...x, challan_number: r.number, challan_date: todayISO() }));
+      toast(`Delivery challan ${r.number} created in Zoho Books${r.autoDispatch ? ' and filled in' : ''}.`);
+    } catch (e) {
+      toast(e.message, true);
+    } finally { setChallanBusy(false); }
+  }
   const [d, setD] = useState({
     oem_rma_number: '', oem_rma_assign_date: todayISO(), goods_received_date: todayISO(),
     dispatch_to_customer_date: todayISO(), challan_number: '', challan_date: todayISO(), dispatch_docket: '', closure_remarks: '',
@@ -257,6 +273,7 @@ function ActionDialog({ action, ticket, onClose, after }) {
             <Field label="Delivery challan number" hint="From Zoho Books or your challan book"><input type="text" value={d.challan_number} onChange={set('challan_number')} /></Field>
             <Field label="Challan date"><input type="date" max={todayISO()} value={d.challan_date} onChange={set('challan_date')} /></Field>
           </div>
+          {challanOk && <div><button type="button" className="btn ghost small" disabled={challanBusy} onClick={makeChallan}><Icon name="file" size={16} /> {challanBusy ? 'Creating…' : 'Create delivery challan in Zoho Books'}</button></div>}
           <Field label="Courier / docket number"><input type="text" value={d.dispatch_docket} onChange={set('dispatch_docket')} /></Field>
         </>}
         {(action === 'close' || action === 'close_returned') && <>

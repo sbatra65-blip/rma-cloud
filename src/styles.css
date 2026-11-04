@@ -408,3 +408,12 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
   .sidenav, .topbar, .bottomnav, .savebar, .actionbar, .noprint { display: none !important; }
   .app { display: block; } main { padding: 0; max-width: none; } .panel { box-shadow: none; border: 1px solid #ccc; }
 }
+
+/* Care packs */
+.warntext { color: var(--amber); font-weight: 700; }
+.wide-field { grid-column: 1 / -1; }
+.panel > .warnbox, .panel > .formerror, .panel > .notice { margin-bottom: 10px; }
+.cp-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.flowline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.flowline span { padding: 4px 10px; border-radius: 999px; background: var(--line); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
+.flowline span.done { background: var(--ok-tint); color: var(--ok); }
