@@ -1,0 +1,341 @@
+@page "/admin/users"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject AuthService Auth
+@inject UserSessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>Users — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">User accounts</h1>
+        <p class="page-hero-sub">Users for your signed-in company only. Create users, enable/disable access, force password change, set expiry policy.</p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/admin/sessions" class="btn btn-ghost">Active sessions</a>
+        <a href="/settings" class="btn btn-ghost">Settings</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_error)) { <div class="error-msg">@_error</div> }
+@if (!string.IsNullOrEmpty(_ok)) { <div class="success-msg">@_ok</div> }
+
+<div class="card">
+    <div class="card-title">Password policy (global)</div>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Force password change after (days). 0 = never</label>
+            <input class="form-control" type="number" min="0" @bind="_globalExpiry" />
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="btn btn-primary btn-sm" type="button" disabled="@_busy" @onclick="SavePolicy">Save policy</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Create user</div>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Username</label>
+            <input class="form-control" @bind="_newUser" />
+        </div>
+        <div class="form-group">
+            <label>Display name</label>
+            <input class="form-control" @bind="_newDisplay" />
+        </div>
+        <div class="form-group">
+            <label>Role</label>
+            <select class="form-control" @bind="_newRole">
+                @foreach (var r in AppRoles.All) { <option value="@r">@r</option> }
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Temporary password</label>
+            <input class="form-control" type="password" @bind="_newPass" />
+        </div>
+        <div class="form-group">
+            <label>Password expiry days (blank = global)</label>
+            <input class="form-control" type="number" min="0" @bind="_newExpiry" />
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="btn btn-primary" type="button" disabled="@_busy" @onclick="Create">Create user</button>
+    </div>
+</div>
+
+@if (_pwdUser != null)
+{
+    <div class="card">
+        <div class="card-title">Set password — @_pwdUser.DisplayName (<code>@_pwdUser.UserName</code>)</div>
+        <p class="help-text">
+            The user signs in straight away with this password. Their open sessions are ended.
+            Tell them the new password in person or by phone.
+        </p>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>New password (min 8 characters)</label>
+                <input class="form-control" type="password" autocomplete="new-password" @bind="_pwdNew" @bind:event="oninput" />
+            </div>
+            <div class="form-group">
+                <label>Confirm new password</label>
+                <input class="form-control" type="password" autocomplete="new-password" @bind="_pwdConfirm" @bind:event="oninput" />
+            </div>
+        </div>
+        <label class="check-row">
+            <input type="checkbox" @bind="_pwdMustChange" />
+            Ask the user to choose their own password at next sign-in
+        </label>
+        @if (!string.IsNullOrEmpty(_pwdConfirm) && _pwdNew != _pwdConfirm)
+        {
+            <div class="error-msg">Passwords do not match.</div>
+        }
+        <div class="form-actions">
+            <button class="btn btn-ghost" type="button" disabled="@_busy" @onclick="CloseSetPassword">Cancel</button>
+            <button class="btn btn-primary" type="button"
+                    disabled="@(_busy || _pwdNew.Length < 8 || _pwdNew != _pwdConfirm)"
+                    @onclick="SaveSetPassword">Save password</button>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-title">All users (@_users.Count)</div>
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Display</th>
+                    <th>Role</th>
+                    <th>Enabled</th>
+                    <th>Must change pwd</th>
+                    <th>Pwd changed</th>
+                    <th>Expiry days</th>
+                    <th title="May create an RMA even when a duplicate open RMA exists (with a reason)">Duplicate RMA override</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var u in _users)
+                {
+                    <tr>
+                        <td><code>@u.UserName</code></td>
+                        <td>@u.DisplayName</td>
+                        <td>@u.Role</td>
+                        <td>@(u.IsEnabled ? "Yes" : "No")</td>
+                        <td>@(u.MustChangePassword ? "Yes" : "No")</td>
+                        <td>@(u.PasswordChangedAt?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                        <td>@(u.PasswordExpiryDays?.ToString() ?? "global")</td>
+                        <td style="white-space:nowrap">
+                            @if (AppRoles.CanOverride(u.Role))
+                            {
+                                <span class="muted">Always (Admin)</span>
+                            }
+                            else if (string.Equals(u.Role, AppRoles.Viewer, StringComparison.OrdinalIgnoreCase))
+                            {
+                                <span class="muted">No (Viewer)</span>
+                            }
+                            else if (_dupOverrideIds.Contains(u.Id))
+                            {
+                                <span class="ok-text">Yes</span>
+                                <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                        @onclick="@(() => SetDupOverride(u, false))">Revoke</button>
+                            }
+                            else
+                            {
+                                <span class="muted">No</span>
+                                <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                        @onclick="@(() => SetDupOverride(u, true))">Grant</button>
+                            }
+                        </td>
+                        <td style="white-space:nowrap">
+                            @if (u.IsEnabled)
+                            {
+                                <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                        @onclick="@(() => SetEnabled(u.Id, false))">Disable</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                        @onclick="@(() => SetEnabled(u.Id, true))">Enable</button>
+                            }
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => ForceChange(u.Id))">Force pwd change</button>
+                            @if (u.Id != _adminUserId)
+                            {
+                                <button class="btn btn-warning btn-sm" type="button" disabled="@_busy"
+                                        @onclick="@(() => OpenSetPassword(u))">Set password</button>
+                            }
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => KickUser(u.Id))">End sessions</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="help-text">
+        Disable blocks login and ends active sessions (poka-yoke). Set password lets the Admin choose the user's new password
+        (optionally forcing them to change it at next sign-in) and ends their sessions; it is logged in Activity.
+        Force password change ends sessions so the user must sign in and update the password.
+        <strong>Duplicate RMA override</strong>: Admins always have it; grant it only to trusted users.
+        Every override records the user, time, and reason on the RMA. Grants and revokes are logged in Activity.
+    </p>
+</div>
+
+@code {
+    List<AppUser> _users = new();
+    HashSet<int> _dupOverrideIds = new();
+    AppUser? _pwdUser;
+    string _pwdNew = "", _pwdConfirm = "";
+    bool _pwdMustChange;
+    int _adminUserId;
+    string? _error, _ok;
+    bool _busy;
+    int _globalExpiry = 90;
+
+    string _newUser = "", _newDisplay = "", _newRole = AppRoles.Technician, _newPass = "";
+    int? _newExpiry;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        if (!await Session.IsAdminAsync())
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+        var uid = Session.GetUserId();
+        if (uid is null or <= 0)
+        {
+            Nav.NavigateTo("/login", true);
+            return;
+        }
+        _adminUserId = uid.Value;
+        _globalExpiry = await Auth.GetGlobalPasswordExpiryDaysAsync();
+        await Reload();
+    }
+
+    async Task Reload()
+    {
+        _users = await Auth.ListUsersAsync(_adminUserId);
+        _dupOverrideIds = await Auth.GetDuplicateRmaOverrideUserIdsAsync();
+    }
+
+    async Task SetDupOverride(AppUser u, bool allowed)
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.SetDuplicateRmaOverrideAsync(_adminUserId, u.Id, allowed);
+            _ok = allowed
+                ? $"{u.DisplayName} can now override duplicate RMAs (with a reason)."
+                : $"Duplicate RMA override removed for {u.DisplayName}.";
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SavePolicy()
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.SetGlobalPasswordExpiryDaysAsync(_globalExpiry, _adminUserId);
+            _ok = "Password expiry policy saved.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task Create()
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.CreateUserAsync(_adminUserId, _newUser, _newDisplay, _newRole, _newPass, _newExpiry);
+            _ok = $"User '{_newUser}' created for this company.";
+            _newUser = _newDisplay = _newPass = "";
+            _newExpiry = null;
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SetEnabled(int id, bool enabled)
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.SetUserEnabledAsync(_adminUserId, id, enabled);
+            _ok = enabled ? "User enabled." : "User disabled — sessions ended.";
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task ForceChange(int id)
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.SetUserPasswordPolicyAsync(_adminUserId, id, null, mustChangePassword: true);
+            _ok = "User must change password on next login — sessions ended.";
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    void OpenSetPassword(AppUser u)
+    {
+        _error = _ok = null;
+        _pwdUser = u;
+        _pwdNew = _pwdConfirm = "";
+        _pwdMustChange = false;
+    }
+
+    void CloseSetPassword()
+    {
+        _pwdUser = null;
+        _pwdNew = _pwdConfirm = "";
+    }
+
+    async Task SaveSetPassword()
+    {
+        if (_pwdUser == null) return;
+        if (_pwdNew != _pwdConfirm)
+        {
+            _error = "Passwords do not match.";
+            return;
+        }
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.AdminResetPasswordAsync(_adminUserId, _pwdUser.Id, _pwdNew, forceChange: _pwdMustChange);
+            _ok = _pwdMustChange
+                ? $"Password set for {_pwdUser.DisplayName}. They will be asked to choose their own password at next sign-in."
+                : $"Password set for {_pwdUser.DisplayName}. They can sign in with it now.";
+            CloseSetPassword();
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task KickUser(int id)
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await Auth.RevokeAllSessionsForUserByAdminAsync(_adminUserId, id);
+            _ok = "All sessions ended for that user.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,697 @@
+@page "/rma/{TicketId:int}"
+@inject AppDbContext Db
+@inject PhotoService PhotoSvc
+@inject ExcelService ExcelSvc
+@inject ZohoService ZohoSvc
+@inject CarePackService CarePack
+@inject TicketService TicketSvc
+@inject UserSessionService Session
+@inject OemEmailService OemEmail
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Services
+@using RMASystem.Models
+
+<PageTitle>@(_ticket?.InternalTicketNo ?? "RMA Detail") — RMA System</PageTitle>
+
+@if (_ticket == null)
+{
+    <div class="card"><p>Loading...</p></div>
+}
+else
+{
+    <div class="card">
+        <div class="card-header-row">
+            <div style="display:flex;align-items:center;gap:10px">
+                <span class="card-title" style="margin:0;border:none;padding:0">
+                    @_ticket.InternalTicketNo
+                </span>
+                <StatusBadge Status="@_ticket.Status" />
+                @if (_ticket.IsImported)
+                {
+                    <span class="badge badge-imported">Imported</span>
+                }
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <a href="/edit-rma/@_ticket.Id" class="btn btn-ghost btn-sm">✏ Edit</a>
+                <a href="/rma" class="btn btn-ghost btn-sm">← List</a>
+                @if (_canDelete)
+                {
+                    @if (!_confirmDelete)
+                    {
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="StartDelete" disabled="@_working">
+                            Delete
+                        </button>
+                    }
+                    else
+                    {
+                        <span class="muted" style="font-size:11px">@_deleteHint</span>
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="() => _confirmDelete = false">Cancel</button>
+                        <button class="btn btn-danger btn-sm" type="button" @onclick="ConfirmDelete" disabled="@_working">
+                            Confirm delete
+                        </button>
+                    }
+                }
+            </div>
+        </div>
+
+        <div class="detail-actions">
+            <button class="btn btn-primary btn-sm" @onclick="GenerateAndSaveExcel" disabled="@_working">
+                📄 Generate / Save OEM Excel
+            </button>
+            <button class="btn btn-ghost btn-sm" @onclick="RegenerateExcel" disabled="@_working">
+                ↻ Regenerate OEM Excel
+            </button>
+            @if (!string.IsNullOrEmpty(_ticket.ExcelFilePath))
+            {
+                <button class="btn btn-ghost btn-sm" @onclick="SaveExcelAs" disabled="@_working">
+                    ⬇ Save Excel As…
+                </button>
+                <button class="btn btn-primary btn-sm" @onclick="SendOemEmail"
+                        disabled="@(_working || !_canSendOemEmail)"
+                        title="@_sendEmailHint">
+                    ✉ Send Email to OEM
+                </button>
+                <button class="btn btn-ghost btn-sm" @onclick="OpenEmailDraft" disabled="@_working"
+                        title="Build a draft to paste into Zoho Mail (no SMTP / Zoho tokens)">
+                    📋 Copy draft for Zoho Mail
+                </button>
+            }
+            else
+            {
+                <button class="btn btn-ghost btn-sm" disabled title="Generate OEM Excel first">
+                    ✉ Send Email to OEM
+                </button>
+                <button class="btn btn-ghost btn-sm" @onclick="OpenEmailDraft" disabled="@_working"
+                        title="Draft uses model / serial / part even before Excel is saved">
+                    📋 Copy draft for Zoho Mail
+                </button>
+            }
+
+            @if (_ticket.Status == RMAStatus.Open || _ticket.Status == RMAStatus.AwaitingOemRma)
+            {
+                <button class="btn btn-warning btn-sm" @onclick="@(() => _showOemModal = true)">
+                    ✏ Enter OEM RMA#
+                </button>
+                <button class="btn btn-ghost btn-sm"
+                        @onclick="@(() => UpdateStatus(RMAStatus.AwaitingOemRma))">
+                    📧 Mark Sent to OEM
+                </button>
+            }
+
+            @if (_ticket.Status == RMAStatus.OemRmaReceived)
+            {
+                <button class="btn btn-success btn-sm"
+                        @onclick="@(() => UpdateStatus(RMAStatus.GoodsReceivedFromOem))">
+                    📦 Mark Goods Received from OEM
+                </button>
+            }
+
+            @if (_ticket.Status == RMAStatus.GoodsReceivedFromOem)
+            {
+                <button class="btn btn-primary btn-sm" @onclick="CreateChallan" disabled="@_working">
+                    📋 Create Delivery Challan (Zoho)
+                </button>
+                <button class="btn btn-success btn-sm"
+                        @onclick="@(() => UpdateStatus(RMAStatus.DispatchedToCustomer))">
+                    🚚 Mark Dispatched to Customer
+                </button>
+            }
+
+            @if (_ticket.Status == RMAStatus.DispatchedToCustomer)
+            {
+                <button class="btn btn-success btn-sm"
+                        @onclick="@(() => CloseTicket(RMAStatus.Closed, "REPAIRED"))">
+                    ✅ Close RMA (Repaired)
+                </button>
+                <button class="btn btn-ghost btn-sm"
+                        @onclick="@(() => CloseTicket(RMAStatus.ClosedReturned, "RETURNED"))">
+                    ↩ Customer Returned Goods
+                </button>
+            }
+        </div>
+
+        @if (!string.IsNullOrEmpty(_statusMsg))
+        {
+            <div class="@(_isError ? "error-msg" : "success-msg")" style="margin-bottom:12px">
+                @_statusMsg
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_ticket.ExcelFilePath))
+        {
+            <div class="help-text" style="margin-bottom:12px">
+                OEM Excel path (stored for email):
+                <code class="sn" title="@_ticket.ExcelFilePath">@_ticket.ExcelFilePath</code>
+                @if (_ticket.OemEmailSentAt != null)
+                {
+                    <span class="ok-text" style="margin-left:8px">
+                        Email sent @_ticket.OemEmailSentAt?.ToString("dd-MMM-yyyy HH:mm")
+                        @if (!string.IsNullOrWhiteSpace(_ticket.OemEmailSentBy))
+                        {
+                            <text> by @_ticket.OemEmailSentBy</text>
+                        }
+                    </span>
+                }
+            </div>
+        }
+
+        <div class="tabs">
+            @foreach (var tab in _tabNames)
+            {
+                <div class="tab @(_activeTab == tab ? "active" : "")"
+                     @onclick="@(() => SwitchTab(tab))">@tab</div>
+            }
+        </div>
+
+        @if (_activeTab == "Info")
+        {
+            <div class="info-grid">
+                @InfoRow("Internal Ticket #",    _ticket.InternalTicketNo)
+                @InfoRow("Created",              _ticket.CreatedAt.ToString("dd-MMM-yyyy HH:mm"))
+                @InfoRow("Customer",             _ticket.CustomerCompany)
+                @InfoRow("Contact",              _ticket.CustomerContactName)
+                @InfoRow("Email",                _ticket.CustomerEmail)
+                @InfoRow("Phone",                _ticket.CustomerPhone)
+                @InfoRow("PO Number",            _ticket.PoNumber)
+                @InfoRow("Address",              BuildAddress())
+                @InfoRow("Printer Model",        _ticket.PrinterModel)
+                <div class="info-row">
+                    <div class="lbl">Printer SN</div>
+                    <div class="val">
+                        @(_ticket.PrinterSn ?? "—")
+                        @if (_cpInfo != null)
+                        {
+                            <span class="badge badge-cp-imported" style="margin-left:8px">Care Pack</span>
+                            <div class="help-text" style="margin-top:4px">
+                                @_cpInfo.CarePackType · @_cpInfo.OemBrand · Sales inv: @_cpInfo.InvoiceNumber
+                                @if (!string.IsNullOrWhiteSpace(_cpInfo.OemInvoiceNumber))
+                                {
+                                    <span> · OEM inv: <strong>@_cpInfo.OemInvoiceNumber</strong></span>
+                                }
+                                · <a href="/care-packs/@_cpInfo.BatchId">Open batch</a>
+                                @if (_cpInfo.Overridden) { <span class="badge badge-override">Override</span> }
+                            </div>
+                        }
+                    </div>
+                </div>
+                @InfoRow("Faulty Part",          _ticket.FaultyPart)
+                @InfoRow("Faulty Part SN",       _ticket.FaultyPartSn)
+                @InfoRow("Faulty Part Number",   _ticket.FaultyPartNo)
+                @InfoRow("Failure Description",  _ticket.FailureDescription)
+                @if (!string.IsNullOrWhiteSpace(_ticket.DuplicateOpenReason))
+                {
+                    @InfoRow("Duplicate-part override reason", _ticket.DuplicateOpenReason)
+                    @InfoRow("Duplicate-part override by",
+                        $"{_ticket.DuplicateOpenBy ?? "—"} · {_ticket.DuplicateOpenAt?.ToString("dd-MMM-yyyy HH:mm")}")
+                }
+                @InfoRow("TPH Mileage (M)",      _ticket.TphMileage?.ToString())
+                @InfoRow("Printer Mileage (M)",  _ticket.PrinterMileage?.ToString())
+                @InfoRow("FW Version",           _ticket.FwVersion)
+                @InfoRow("Flash Initialized",    _ticket.FlashInitialized)
+                @InfoRow("Purchase Date",        _ticket.PurchaseDate?.ToString("dd-MMM-yyyy"))
+                @InfoRow("OEM RMA #",            _ticket.OemRmaNumber ?? "Pending")
+            </div>
+
+            @if (_sameMachineOpen.Count > 0)
+            {
+                <div class="section-hdr" style="margin-top:16px">Other open RMAs on this printer</div>
+                <div class="tbl-wrap">
+                    <table>
+                        <thead>
+                            <tr><th>Ticket</th><th>Status</th><th>Faulty part</th><th>Part SN</th><th>Created</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in _sameMachineOpen)
+                            {
+                                <tr>
+                                    <td><a href="/rma/@r.Id">@r.InternalTicketNo</a></td>
+                                    <td>@RMAStatus.Label(r.Status)</td>
+                                    <td>@(r.FaultyPart ?? "—")</td>
+                                    <td><code class="sn">@(r.FaultyPartSn ?? "—")</code></td>
+                                    <td>@r.CreatedAt.ToString("dd-MMM-yyyy")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+
+        @if (_activeTab == "Inbound Photos")
+        {
+            <div style="margin-bottom:12px">
+                <label for="inbound-file-input">
+                    <div class="drop-zone" style="padding:16px">
+                        📸 Click to add INBOUND photos (damaged goods from customer)
+                    </div>
+                </label>
+                <InputFile id="inbound-file-input" OnChange="OnInboundPhotos"
+                           multiple accept=".jpg,.jpeg,.png,.webp,.bmp,image/jpeg,image/png,image/webp,image/*"
+                           style="display:none" />
+                <p class="help-text" style="margin-top:8px">
+                    JPEG / JPG / PNG / WebP supported. You can add photos anytime — including after Excel generation.
+                    When an OEM Excel already exists, it is regenerated automatically so photos embed into the form.
+                </p>
+            </div>
+            <PhotoGrid Photos="@_inboundPhotos" OnDelete="DeletePhoto" />
+        }
+
+        @if (_activeTab == "Outbound Photos")
+        {
+            <div style="margin-bottom:12px">
+                <label for="outbound-file-input">
+                    <div class="drop-zone" style="padding:16px">
+                        📸 Click to add OUTBOUND photos (goods received from OEM)
+                    </div>
+                </label>
+                <InputFile id="outbound-file-input" OnChange="OnOutboundPhotos"
+                           multiple accept=".jpg,.jpeg,.png,.webp,.bmp,image/jpeg,image/png,image/webp,image/*"
+                           style="display:none" />
+                <p class="help-text" style="margin-top:8px">JPEG / JPG / PNG / WebP supported.</p>
+            </div>
+            <PhotoGrid Photos="@_outboundPhotos" OnDelete="DeletePhoto" />
+        }
+
+        @if (_activeTab == "OEM & Challan")
+        {
+            <div class="info-grid">
+                @InfoRow("OEM RMA Number",         _ticket.OemRmaNumber ?? "Not yet assigned")
+                @InfoRow("OEM RMA Assign Date",    _ticket.OemRmaAssignDate?.ToString("dd-MMM-yyyy"))
+                @InfoRow("Dispatched to OEM",      _ticket.OemDispatchDate?.ToString("dd-MMM-yyyy"))
+                @InfoRow("Batch ID",               _ticket.BatchDispatchId)
+                @InfoRow("Zoho Challan #",         _ticket.ZohoChallanNumber ?? "Not created yet")
+                @InfoRow("Challan Created",        _ticket.ChallanCreatedAt?.ToString("dd-MMM-yyyy HH:mm"))
+                @InfoRow("Dispatched to Customer", _ticket.DispatchToCustomerDate?.ToString("dd-MMM-yyyy"))
+                @InfoRow("Closed At",              _ticket.ClosedAt?.ToString("dd-MMM-yyyy HH:mm"))
+                @InfoRow("Closure Type",           _ticket.ClosureType)
+                @InfoRow("Closure Remarks",        _ticket.ClosureRemarks)
+            </div>
+        }
+    </div>
+}
+
+@if (_showOemModal)
+{
+    <div class="modal-overlay" @onclick="@(() => _showOemModal = false)">
+        <div class="modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h2>Enter OEM RMA Number</h2>
+                <button class="close-btn" @onclick="@(() => _showOemModal = false)">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>OEM RMA Number (from TSC email)</label>
+                    <input class="form-control" @bind="_oemRmaInput"
+                           placeholder="e.g. TEBT25160178-RMA" />
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="@(() => _showOemModal = false)">Cancel</button>
+                <button class="btn btn-primary" @onclick="SaveOemRma">Save</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showDraftModal && _draft != null)
+{
+    <div class="modal-overlay" @onclick="@(() => _showDraftModal = false)">
+        <div class="modal" style="max-width:720px;width:94vw" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h2>OEM email draft (paste into Zoho Mail)</h2>
+                <button class="close-btn" @onclick="@(() => _showDraftModal = false)">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="help-text" style="margin-top:0">
+                    No Zoho tokens required. Copy subject and body into a new Zoho Mail message.
+                    Attach the OEM Excel file manually (<code>@(_draft.Subject).xlsx</code> if generated).
+                    @(string.IsNullOrWhiteSpace(_draft.ToHint) ? "" : $" Suggested To: {_draft.ToHint}")
+                </p>
+                <div class="form-group">
+                    <label>Subject</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input class="form-control" @bind="_draftSubject" />
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="CopyDraftSubject">Copy</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Plain text body</label>
+                    <textarea class="form-control" rows="12" @bind="_draftPlain"></textarea>
+                    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" type="button" @onclick="CopyDraftPlain">Copy plain text</button>
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="CopyDraftHtml">Copy HTML</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>HTML (advanced)</label>
+                    <textarea class="form-control" rows="8" @bind="_draftHtml"></textarea>
+                </div>
+                @if (!string.IsNullOrEmpty(_draftCopyMsg))
+                {
+                    <p class="success-inline">@_draftCopyMsg</p>
+                }
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @onclick="@(() => _showDraftModal = false)">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int TicketId { get; set; }
+
+    RMATicket?     _ticket;
+    string         _activeTab   = "Info";
+    bool           _working, _showOemModal, _showDraftModal, _isError, _canDelete, _confirmDelete, _canSendOemEmail;
+    string         _oemRmaInput = "";
+    string         _statusMsg   = "";
+    string         _deleteHint  = "";
+    string         _sendEmailHint = "Generate OEM Excel first";
+    string         _draftSubject = "", _draftPlain = "", _draftHtml = "", _draftCopyMsg = "";
+    OemEmailDraft? _draft;
+    List<RMAPhoto> _inboundPhotos  = new();
+    List<RMAPhoto> _outboundPhotos = new();
+    CarePackSerialOption? _cpInfo;
+    List<RMATicket> _sameMachineOpen = new();
+
+    readonly string[] _tabNames = { "Info", "Inbound Photos", "Outbound Photos", "OEM & Challan" };
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        _ticket = await Db.RMATickets
+            .Include(t => t.Photos)
+            .FirstOrDefaultAsync(t => t.Id == TicketId);
+
+        if (_ticket != null)
+        {
+            _inboundPhotos  = _ticket.Photos.Where(p => p.Direction == "INBOUND").OrderBy(p => p.CapturedAt).ToList();
+            _outboundPhotos = _ticket.Photos.Where(p => p.Direction == "OUTBOUND").OrderBy(p => p.CapturedAt).ToList();
+            _cpInfo = await CarePack.FindSerialAsync(_ticket.PrinterSn);
+            _sameMachineOpen = await TicketSvc.ListOpenOnSameMachineAsync(_ticket.PrinterSn, _ticket.Id);
+            var (ok, reason) = await TicketSvc.CanDeleteTicketAsync(_ticket.Id);
+            _canDelete = ok;
+            _deleteHint = reason;
+            var (sendOk, sendReason) = await OemEmail.CanSendAsync(_ticket);
+            _canSendOemEmail = sendOk;
+            _sendEmailHint = sendReason;
+        }
+        else
+        {
+            _canDelete = false;
+            _deleteHint = "";
+            _canSendOemEmail = false;
+            _sendEmailHint = "Ticket not found.";
+        }
+        _confirmDelete = false;
+    }
+
+    async Task StartDelete()
+    {
+        if (_ticket == null) return;
+        var (ok, reason) = await TicketSvc.CanDeleteTicketAsync(_ticket.Id);
+        _canDelete = ok;
+        _deleteHint = reason;
+        if (!ok)
+        {
+            ShowMsg(reason, true);
+            return;
+        }
+        _confirmDelete = true;
+    }
+
+    async Task ConfirmDelete()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            var no = _ticket.InternalTicketNo;
+            await TicketSvc.DeleteTicketAsync(_ticket.Id);
+            Nav.NavigateTo("/rma");
+            // Navigation leaves page; message won't show — ok
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _working = false; _confirmDelete = false; }
+    }
+
+    void SwitchTab(string tab) => _activeTab = tab;
+
+    async Task UpdateStatus(string status)
+    {
+        if (_ticket == null) return;
+        _ticket.Status    = status;
+        _ticket.UpdatedAt = DateTime.Now;
+        Db.Update(_ticket);
+        await Db.SaveChangesAsync();
+        ShowMsg("Status updated to: " + RMAStatus.Label(status));
+    }
+
+    async Task CloseTicket(string status, string closureType)
+    {
+        if (_ticket == null) return;
+        _ticket.Status      = status;
+        _ticket.ClosedAt    = DateTime.Now;
+        _ticket.ClosureType = closureType;
+        _ticket.UpdatedAt   = DateTime.Now;
+        Db.Update(_ticket);
+        await Db.SaveChangesAsync();
+        ShowMsg("Ticket closed.");
+    }
+
+    async Task SaveOemRma()
+    {
+        if (_ticket == null || string.IsNullOrWhiteSpace(_oemRmaInput)) return;
+        _ticket.OemRmaNumber     = _oemRmaInput.Trim();
+        _ticket.OemRmaAssignDate = DateOnly.FromDateTime(DateTime.Now);
+        _ticket.Status           = RMAStatus.OemRmaReceived;
+        _ticket.UpdatedAt        = DateTime.Now;
+        Db.Update(_ticket);
+        await Db.SaveChangesAsync();
+        _showOemModal = false;
+        ShowMsg("OEM RMA number saved.");
+    }
+
+    async Task GenerateAndSaveExcel()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            await ExcelSvc.GenerateRmaFormAsync(_ticket);
+            await Reload();
+            await SaveExcelAs();
+        }
+        catch (Exception ex) { ShowMsg("Error: " + ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    async Task RegenerateExcel()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            await ExcelSvc.GenerateRmaFormAsync(_ticket);
+            await Reload();
+            ShowMsg("OEM Excel regenerated.");
+        }
+        catch (Exception ex) { ShowMsg("Error: " + ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    async Task SaveExcelAs()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            var (bytes, fileName) = await ExcelSvc.GetOemExcelBytesAsync(_ticket);
+            var b64 = Convert.ToBase64String(bytes);
+            var result = await Js.InvokeAsync<SaveFileResult>(
+                "rmaSaveFile",
+                fileName,
+                b64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+            await Reload();
+            if (result?.ok == true)
+            {
+                ShowMsg(result.mode == "picker"
+                    ? $"Excel saved as {fileName} (choose location)."
+                    : $"Excel downloaded as {fileName}. Use browser Save As if needed.");
+            }
+            else if (result?.mode == "cancelled")
+            {
+                ShowMsg("Save cancelled.");
+            }
+            else
+            {
+                ShowMsg($"Excel ready: {fileName}");
+            }
+        }
+        catch (Exception ex) { ShowMsg("Save error: " + ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    class SaveFileResult
+    {
+        public bool ok { get; set; }
+        public string? mode { get; set; }
+    }
+
+    async Task CreateChallan()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            var (_, num) = await ZohoSvc.CreateChallanAsync(_ticket);
+            await Reload();
+            ShowMsg("Delivery Challan created: " + num);
+        }
+        catch (Exception ex) { ShowMsg("Challan error: " + ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    async Task OnInboundPhotos(InputFileChangeEventArgs e)
+    {
+        if (_ticket == null) return;
+        foreach (var file in e.GetMultipleFiles(50))
+        {
+            await using var s = file.OpenReadStream(50 * 1024 * 1024);
+            await PhotoSvc.SavePhotoAsync(_ticket, s, file.Name, "INBOUND");
+        }
+        await Reload();
+        if (_ticket != null && !string.IsNullOrWhiteSpace(_ticket.ExcelFilePath))
+        {
+            try
+            {
+                await ExcelSvc.GenerateRmaFormAsync(_ticket);
+                await Reload();
+                ShowMsg("Photos uploaded — OEM Excel regenerated with new photos.");
+            }
+            catch (Exception ex)
+            {
+                ShowMsg("Photos uploaded, but Excel refresh failed: " + ex.Message, true);
+            }
+        }
+        else
+            ShowMsg("Photos uploaded. Generate OEM Excel when ready.");
+    }
+
+    async Task OnOutboundPhotos(InputFileChangeEventArgs e)
+    {
+        if (_ticket == null) return;
+        foreach (var file in e.GetMultipleFiles(50))
+        {
+            await using var s = file.OpenReadStream(50 * 1024 * 1024);
+            await PhotoSvc.SavePhotoAsync(_ticket, s, file.Name, "OUTBOUND");
+        }
+        await Reload();
+        ShowMsg("Outbound photos uploaded.");
+    }
+
+    async Task SendOemEmail()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        try
+        {
+            await OemEmail.SendOemRmaEmailAsync(_ticket.Id);
+            await Reload();
+            ShowMsg("OEM email sent with Excel attachment.");
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    async Task OpenEmailDraft()
+    {
+        if (_ticket == null) return;
+        _working = true;
+        _draftCopyMsg = "";
+        try
+        {
+            _draft = await OemEmail.BuildCopyDraftAsync(_ticket);
+            _draftSubject = _draft.Subject;
+            _draftPlain = _draft.PlainBody;
+            _draftHtml = _draft.HtmlBody;
+            _showDraftModal = true;
+        }
+        catch (Exception ex) { ShowMsg("Draft error: " + ex.Message, true); }
+        finally { _working = false; }
+    }
+
+    async Task CopyDraftSubject() => await CopyTextAsync(_draftSubject, "Subject copied.");
+    async Task CopyDraftPlain() => await CopyTextAsync(_draftPlain, "Plain body copied — paste into Zoho Mail.");
+    async Task CopyDraftHtml() => await CopyTextAsync(_draftHtml, "HTML copied.");
+
+    async Task CopyTextAsync(string text, string okMsg)
+    {
+        try
+        {
+            var ok = await Js.InvokeAsync<bool>("rmaCopyText", text ?? "");
+            _draftCopyMsg = ok ? okMsg : "Copy failed — select the text and Ctrl+C.";
+        }
+        catch
+        {
+            _draftCopyMsg = "Copy failed — select the text and Ctrl+C.";
+        }
+    }
+
+    async Task DeletePhoto(int photoId)
+    {
+        await PhotoSvc.DeletePhotoAsync(photoId);
+        await Reload();
+        if (_ticket != null && !string.IsNullOrWhiteSpace(_ticket.ExcelFilePath) &&
+            _inboundPhotos.Count >= 0)
+        {
+            try
+            {
+                await ExcelSvc.GenerateRmaFormAsync(_ticket);
+                await Reload();
+                ShowMsg("Photo deleted — OEM Excel refreshed.");
+                return;
+            }
+            catch { /* ignore refresh failure */ }
+        }
+        ShowMsg("Photo deleted.");
+    }
+
+    void ShowMsg(string msg, bool isError = false)
+    {
+        _statusMsg = msg;
+        _isError   = isError;
+        StateHasChanged();
+    }
+
+    string BuildAddress()
+    {
+        if (_ticket == null) return "";
+        return string.Join(", ",
+            new[] { _ticket.CustomerAddress, _ticket.CustomerCity,
+                    _ticket.CustomerPostal, _ticket.CustomerCountry }
+            .Where(s => !string.IsNullOrEmpty(s)));
+    }
+
+    RenderFragment InfoRow(string label, string? value) => __builder =>
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "info-row");
+            __builder.OpenElement(2, "div");
+            __builder.AddAttribute(3, "class", "lbl");
+            __builder.AddContent(4, label);
+            __builder.CloseElement();
+            __builder.OpenElement(5, "div");
+            __builder.AddAttribute(6, "class", "val");
+            __builder.AddContent(7, value);
+            __builder.CloseElement();
+        __builder.CloseElement();
+    };
+}

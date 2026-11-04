@@ -1,0 +1,802 @@
+@inject CarePackService CarePack
+@inject CarePackDraftStore Drafts
+@inject UserSessionService Session
+@inject CompanyService Companies
+@inject MasterDataService Masters
+@inject NavigationManager Nav
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="error-msg">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_ok))
+{
+    <div class="success-msg">@_ok</div>
+}
+@if (_draftBanner)
+{
+    <div class="alert-banner" style="margin-bottom:12px">
+        Temporary draft restored from @_draftSavedAt?.ToString("dd-MMM-yyyy HH:mm")
+        — continue editing, then Register. This is <strong>not</strong> a registered care pack yet.
+        <button class="btn btn-ghost btn-sm" type="button" @onclick="DiscardDraft" style="margin-left:8px">Discard draft</button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-title">1. @(PreferPdfUpload ? "Optional — prefill from sales invoice PDF" : "Optional — upload PDF to prefill (or skip)")</div>
+    <p class="help-text">
+        @if (PreferPdfUpload)
+        {
+            <text>Upload a text-based GST / sales invoice PDF to fill the form below. You can still edit every field before Register.</text>
+        }
+        else
+        {
+            <text>
+                Manual entry does not require a PDF or Zoho. Skip this step and type invoice / products / serials below.
+                Upload a PDF only if you want fields prefilled.
+            </text>
+        }
+        Registration is blocked if the invoice number or any product serial already exists.
+        Form data is auto-saved as a temporary draft.
+    </p>
+    <InputFile OnChange="OnPdfSelected" accept=".pdf,application/pdf" />
+    @if (!string.IsNullOrEmpty(_pdfName))
+    {
+        <span class="muted" style="margin-left:8px">@_pdfName</span>
+    }
+    <div class="form-actions" style="margin-top:12px">
+        <button class="btn @(PreferPdfUpload ? "btn-primary" : "btn-ghost")" type="button" @onclick="ParsePdf" disabled="@(_busy || _pdfBytes == null)">
+            @if (_busy) { <span class="spinner"></span> }
+            Read PDF &amp; fill form
+        </button>
+    </div>
+    @if (_pdfWarnings.Count > 0)
+    {
+        @foreach (var w in _pdfWarnings)
+        {
+            <div class="alert-banner" style="margin-top:8px">@w</div>
+        }
+    }
+</div>
+
+<div class="card">
+    <div class="card-title">2. Invoice (type or edit)</div>
+    <p class="help-text">
+        PDF values are prefilled. You may change the register invoice number, products, OEM, model, and period.
+        @if (!string.IsNullOrWhiteSpace(_sourceInvoiceNo))
+        {
+            <span>Source PDF invoice: <code>@_sourceInvoiceNo</code></span>
+        }
+    </p>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>Register as invoice number *</label>
+            <input class="form-control" @bind="_invoiceNo" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                   placeholder="@(_invoicePrefix)0235" />
+            <span class="help-text">Prefix pre-filled — type the ending digits</span>
+        </div>
+        <div class="form-group">
+            <label>Invoice date</label>
+            <input class="form-control" type="date" @bind="_invDate" @bind:after="QueueSaveDraft" />
+        </div>
+        <div class="form-group">
+            <label>Customer *</label>
+            <MasterPicker Kind="customer" Value="_customerId" ValueChanged="OnCustomerIdChanged"
+                          SelectedChanged="OnCustomerSelected"
+                          Placeholder="— Select or add customer —" />
+        </div>
+        <div class="form-group">
+            <label>Customer name</label>
+            <input class="form-control" @bind="_customer" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                   placeholder="Filled from master, or type" />
+        </div>
+        <div class="form-group">
+            <label>City (manual)</label>
+            <input class="form-control" @bind="_city" @bind:event="oninput" @bind:after="QueueSaveDraft" />
+        </div>
+    </div>
+    @if (InvoiceNumberChanged)
+    {
+        <div class="form-group" style="margin-top:8px">
+            <label>Invoice # edit reason @(string.IsNullOrWhiteSpace(_irn) ? "" : "* (IRN)")</label>
+            <input class="form-control" @bind="_invoiceEditReason" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                   placeholder="Why is the registered invoice number different from the PDF?" />
+        </div>
+    }
+</div>
+
+<div class="card">
+    <div class="card-title">3. Products on this invoice</div>
+    <p class="help-text">
+        Each product is stored separately with its own product serial numbers and care pack length.
+        Use <strong>Add product</strong> for additional lines on the same invoice.
+    </p>
+
+    @for (var pi = 0; pi < _products.Count; pi++)
+    {
+        var p = _products[pi];
+        var pIndex = pi;
+        <div class="product-sn-panel">
+            <div class="product-sn-hdr">
+                <strong>Product @(pIndex + 1)</strong>
+                <div>
+                    @if (_products.Count > 1)
+                    {
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="() => RemoveProduct(pIndex)">Remove</button>
+                    }
+                </div>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>OEM *</label>
+                    <MasterPicker Kind="oem" Value="p.OemVendorId" ValueChanged="id => OnOemPicked(p, id)"
+                                  Placeholder="— Select or add OEM —" />
+                </div>
+                <div class="form-group">
+                    <label>Product *</label>
+                    <MasterPicker Kind="product" ParentId="p.OemVendorId" Value="p.ProductId"
+                                  ValueChanged="id => OnProductPicked(p, id)"
+                                  Placeholder="— Select or add product —" />
+                </div>
+                <div class="form-group">
+                    <label>Model *</label>
+                    <MasterPicker Kind="model" ParentId="p.ProductId" Value="p.ProductModelId"
+                                  ValueChanged="id => OnModelPicked(p, id)"
+                                  Placeholder="— Select or add model —" />
+                </div>
+                <div class="form-group">
+                    <label>Product Model *</label>
+                    <input class="form-control" @bind="p.ProductModel" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                           placeholder="Filled from model master" />
+                </div>
+                <div class="form-group">
+                    <label>OEM Brand</label>
+                    <input class="form-control" @bind="p.OemBrand" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                           placeholder="Filled from OEM master" />
+                </div>
+                <div class="form-group">
+                    <label>Care pack type *</label>
+                    <MasterPicker Kind="carepacktype" Value="p.CarePackTypeId"
+                                  ValueChanged="id => OnCarePackTypePicked(p, id)"
+                                  Placeholder="— Select or add type —" />
+                </div>
+                <div class="form-group">
+                    <label>Product line / item</label>
+                    <input class="form-control" @bind="p.ProductItemName" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                           placeholder="Optional description" />
+                </div>
+                <div class="form-group">
+                    <label>Care pack item</label>
+                    <input class="form-control" @bind="p.CarePackItemName" @bind:event="oninput" @bind:after="QueueSaveDraft"
+                           placeholder="Comprehensive Care Pack…" />
+                </div>
+                <div class="form-group">
+                    <label>Quantity *</label>
+                    <input class="form-control" type="number" min="1" value="@p.Qty"
+                           @onchange="e => ChangeQty(p, e.Value?.ToString())" />
+                </div>
+            </div>
+
+            <div class="section-hdr">Product Serial Numbers *</div>
+            <div class="form-group" style="margin-top:0">
+                <label>Paste all serial numbers for this product (top — easy access)</label>
+                <textarea class="form-control" rows="3" @bind="p.PasteBlock" @bind:event="oninput"
+                          placeholder="Paste all serials — qty updates automatically"></textarea>
+            </div>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:6px;margin-bottom:10px">
+                <button class="btn btn-primary btn-sm" type="button" @onclick="() => ApplyPaste(p)">
+                    Apply paste → set qty &amp; slots
+                </button>
+                <span class="muted">@p.FilledCount / @p.Qty filled · qty follows paste count</span>
+            </div>
+            @for (var si = 0; si < p.SerialSlots.Count; si++)
+            {
+                var sIndex = si;
+                <div class="form-group" style="margin-bottom:8px">
+                    <label>Product Serial Number @(sIndex + 1) of @p.Qty</label>
+                    <input class="form-control" value="@p.SerialSlots[sIndex]"
+                           placeholder="e.g. T6EV…"
+                           @onchange="e => SetSlot(p, sIndex, e.Value?.ToString())" />
+                </div>
+            }
+        </div>
+    }
+
+    <div class="form-actions" style="justify-content:flex-start">
+        <button class="btn btn-primary" type="button" @onclick="AddProduct">+ Add product</button>
+        <button class="btn btn-ghost" type="button" @onclick="SaveDraftNow" disabled="@_busy">
+            Save draft now
+        </button>
+        @if (!string.IsNullOrEmpty(_draftHint))
+        {
+            <span class="muted">@_draftHint</span>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">4. Optional — IRN / notes</div>
+    <div class="form-grid">
+        <div class="form-group">
+            <label>IRN</label>
+            <input class="form-control" @bind="_irn" />
+        </div>
+        <div class="form-group">
+            <label>Ack No.</label>
+            <input class="form-control" @bind="_ackNo" />
+        </div>
+        <div class="form-group">
+            <label>Notes</label>
+            <input class="form-control" @bind="_notes" placeholder="e.g. Entered from PDF — Zoho error" />
+        </div>
+    </div>
+    @if (_isAdmin)
+    {
+        <label class="check-row" style="margin-top:12px">
+            <input type="checkbox" @bind="_markOverride" />
+            Mark as Admin Override (IRN-locked / known mismatch on paper invoice)
+        </label>
+        @if (_markOverride)
+        {
+            <div class="form-group" style="margin-top:8px">
+                <label>Override reason</label>
+                <textarea class="form-control" rows="2" @bind="_overrideReason"></textarea>
+            </div>
+        }
+    }
+    <div class="form-actions">
+        <button class="btn btn-success" @onclick="Save" disabled="@(_busy || !_products.Any() || _products.Any(p => !p.IsComplete))">
+            @if (_busy) { <span class="spinner"></span> }
+            Register @_products.Count product(s)
+        </button>
+    </div>
+    @if (_products.Any(p => !p.IsComplete))
+    {
+        <div class="alert-banner danger" style="margin-top:10px">
+            Every product needs Product Model, care pack length, and one Product Serial Number per unit.
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>When true, PDF upload is emphasized; when false (default Manual), typing is primary.</summary>
+    [Parameter] public bool PreferPdfUpload { get; set; }
+
+    bool _isAdmin, _busy, _markOverride, _draftBanner;
+    string _invoicePrefix = "IS-GST-2627-";
+    string _invoiceNo = "IS-GST-2627-", _customer = "", _city = "";
+    int _customerId;
+    string _sourceInvoiceNo = "", _invoiceEditReason = "";
+    string _irn = "", _ackNo = "", _notes = "", _overrideReason = "";
+    string? _error, _ok, _pdfName, _draftHint, _userName;
+    DateTime? _invDate = DateTime.Today;
+    DateTime? _draftSavedAt;
+    byte[]? _pdfBytes;
+    List<string> _pdfWarnings = new();
+    List<ProductRow> _products = [ProductRow.Empty()];
+    CancellationTokenSource? _draftCts;
+
+    bool InvoiceNumberChanged =>
+        !string.IsNullOrWhiteSpace(_sourceInvoiceNo) &&
+        !string.Equals(_invoiceNo?.Trim(), _sourceInvoiceNo.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    bool IsPrefixOnly(string? inv)
+    {
+        var t = (inv ?? "").Trim();
+        var p = (_invoicePrefix ?? "").Trim().TrimEnd('-');
+        return string.IsNullOrWhiteSpace(t) ||
+               string.Equals(t, _invoicePrefix.Trim(), StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(t, p, StringComparison.OrdinalIgnoreCase);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (name, role) = await Session.GetCurrentAsync();
+        _userName = name;
+        _isAdmin = AppRoles.CanOverride(role);
+        _invoicePrefix = await Companies.GetActiveInvoicePrefixAsync();
+        _invoiceNo = _invoicePrefix;
+        await TryRestoreDraftAsync();
+    }
+
+    async Task TryRestoreDraftAsync()
+    {
+        var draft = await Drafts.LoadPdfDraftAsync(_userName ?? "");
+        if (draft == null || draft.Products.Count == 0) return;
+        // Ignore empty prefix-only drafts
+        if (string.IsNullOrWhiteSpace(draft.InvoiceNumber) || IsPrefixOnly(draft.InvoiceNumber))
+            return;
+
+        _invoiceNo = draft.InvoiceNumber;
+        _sourceInvoiceNo = draft.SourceInvoiceNumber ?? "";
+        _invoiceEditReason = draft.InvoiceEditReason ?? "";
+        _customer = draft.CustomerName ?? "";
+        _city = draft.CustomerCity ?? "";
+        _customerId = 0;
+        if (!string.IsNullOrWhiteSpace(_customer))
+        {
+            var cust = await Masters.FindCustomerByNameAsync(_customer);
+            if (cust != null)
+            {
+                _customerId = cust.Id;
+                if (string.IsNullOrWhiteSpace(_city)) _city = cust.City ?? "";
+            }
+        }
+        _invDate = draft.InvoiceDate ?? DateTime.Today;
+        _irn = draft.Irn ?? "";
+        _ackNo = draft.IrnAckNo ?? "";
+        _notes = draft.Notes ?? "";
+        _markOverride = draft.MarkAsOverride;
+        _overrideReason = draft.OverrideReason ?? "";
+        _products = draft.Products.Select(p =>
+        {
+            var row = new ProductRow
+            {
+                ProductItemName = p.ProductItemName,
+                CarePackItemName = p.CarePackItemName,
+                ProductModel = p.ProductModel,
+                OemBrand = string.IsNullOrWhiteSpace(p.OemBrand) ? "" : p.OemBrand,
+                CarePackType = string.IsNullOrWhiteSpace(p.CarePackType) ? "3 Year" : p.CarePackType,
+                PasteBlock = p.PasteBlock ?? "",
+            };
+            row.ResizeSlots(Math.Max(1, p.Qty));
+            for (var i = 0; i < row.SerialSlots.Count && i < p.SerialSlots.Count; i++)
+                row.SerialSlots[i] = p.SerialSlots[i] ?? "";
+            return row;
+        }).ToList();
+        if (_products.Count == 0) _products = [ProductRow.Empty()];
+        foreach (var row in _products)
+            await TryMatchProductMastersAsync(row);
+        _draftBanner = true;
+        _draftSavedAt = draft.SavedAt;
+        _ok = "Draft restored — review and Register when ready.";
+    }
+
+    void QueueSaveDraft()
+    {
+        _ = SaveDraftDebouncedAsync();
+    }
+
+    async Task SaveDraftDebouncedAsync()
+    {
+        _draftCts?.Cancel();
+        _draftCts = new CancellationTokenSource();
+        var token = _draftCts.Token;
+        try
+        {
+            await Task.Delay(400, token);
+            await PersistDraftAsync();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    async Task SaveDraftNow()
+    {
+        await PersistDraftAsync();
+        _draftHint = $"Draft saved {DateTime.Now:HH:mm:ss}";
+    }
+
+    async Task PersistDraftAsync()
+    {
+        try
+        {
+            var draft = new CarePackPdfDraft
+            {
+                InvoiceNumber = _invoiceNo,
+                SourceInvoiceNumber = _sourceInvoiceNo,
+                InvoiceEditReason = _invoiceEditReason,
+                CustomerName = _customer,
+                CustomerCity = _city,
+                InvoiceDate = _invDate,
+                Irn = _irn,
+                IrnAckNo = _ackNo,
+                Notes = _notes,
+                MarkAsOverride = _markOverride,
+                OverrideReason = _overrideReason,
+                Products = _products.Select(p => new CarePackPdfDraftProduct
+                {
+                    ProductItemName = p.ProductItemName,
+                    CarePackItemName = p.CarePackItemName,
+                    ProductModel = p.ProductModel,
+                    OemBrand = p.OemBrand,
+                    CarePackType = p.CarePackType,
+                    Qty = p.Qty,
+                    SerialSlots = p.SerialSlots.ToList(),
+                    PasteBlock = p.PasteBlock,
+                }).ToList(),
+            };
+            await Drafts.SavePdfDraftAsync(_userName ?? "", draft);
+            _draftSavedAt = draft.SavedAt;
+            _draftHint = $"Draft auto-saved {DateTime.Now:HH:mm:ss}";
+        }
+        catch
+        {
+            // Draft is best-effort — never block registration UI
+        }
+    }
+
+    async Task DiscardDraft()
+    {
+        await Drafts.ClearPdfDraftAsync(_userName ?? "");
+        _draftBanner = false;
+        _draftHint = "Draft discarded.";
+        _invoiceNo = _invoicePrefix;
+        _sourceInvoiceNo = _invoiceEditReason = "";
+        _customer = _city = _irn = _ackNo = _notes = _overrideReason = "";
+        _customerId = 0;
+        _markOverride = false;
+        _invDate = DateTime.Today;
+        _products = [ProductRow.Empty()];
+        _ok = null;
+    }
+
+    async Task OnPdfSelected(InputFileChangeEventArgs e)
+    {
+        _error = _ok = null;
+        _pdfWarnings.Clear();
+        var file = e.File;
+        if (file.Size > 15 * 1024 * 1024)
+        {
+            _error = "PDF too large (max 15 MB).";
+            return;
+        }
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(15 * 1024 * 1024).CopyToAsync(ms);
+        _pdfBytes = ms.ToArray();
+        _pdfName = file.Name;
+    }
+
+    async Task ParsePdf()
+    {
+        if (_pdfBytes == null) return;
+        _busy = true; _error = _ok = null; _pdfWarnings.Clear();
+        try
+        {
+            await using var ms = new MemoryStream(_pdfBytes);
+            var p = CarePack.PreviewSalesInvoicePdf(ms);
+            _pdfWarnings = p.Warnings;
+            if (!string.IsNullOrWhiteSpace(p.InvoiceNumber))
+            {
+                _invoiceNo = p.InvoiceNumber;
+                _sourceInvoiceNo = p.InvoiceNumber;
+                _invoiceEditReason = "";
+            }
+            if (!string.IsNullOrWhiteSpace(p.CustomerName))
+                _customer = p.CustomerName!;
+            if (!string.IsNullOrWhiteSpace(p.CustomerCity))
+                _city = p.CustomerCity!;
+            _customerId = 0;
+            if (!string.IsNullOrWhiteSpace(_customer))
+            {
+                var cust = await Masters.FindCustomerByNameAsync(_customer);
+                if (cust != null)
+                {
+                    _customerId = cust.Id;
+                    if (string.IsNullOrWhiteSpace(_city)) _city = cust.City ?? "";
+                }
+            }
+            if (p.InvoiceDate.HasValue)
+                _invDate = p.InvoiceDate.Value.ToDateTime(TimeOnly.MinValue);
+            if (!string.IsNullOrWhiteSpace(p.Irn)) _irn = p.Irn!;
+            if (!string.IsNullOrWhiteSpace(p.IrnAckNo)) _ackNo = p.IrnAckNo!;
+            if (string.IsNullOrWhiteSpace(_notes))
+                _notes = $"Imported from PDF: {_pdfName}";
+
+            var first = _products[0];
+            if (!string.IsNullOrWhiteSpace(p.PrinterItemName))
+                first.ProductItemName = p.PrinterItemName!;
+            if (!string.IsNullOrWhiteSpace(p.CarePackItemName))
+                first.CarePackItemName = p.CarePackItemName!;
+            if (!string.IsNullOrWhiteSpace(p.PrinterModel))
+                first.ProductModel = p.PrinterModel!;
+            if (!string.IsNullOrWhiteSpace(p.OemBrand))
+                first.OemBrand = p.OemBrand!;
+            if (!string.IsNullOrWhiteSpace(p.CarePackType))
+                first.CarePackType = p.CarePackType!;
+            var qty = p.Qty > 0 ? p.Qty : Math.Max(1, p.SerialNumbers.Count);
+            first.ResizeSlots(qty);
+            for (var i = 0; i < Math.Min(first.Qty, p.SerialNumbers.Count); i++)
+                first.SerialSlots[i] = p.SerialNumbers[i];
+            await TryMatchProductMastersAsync(first);
+
+            _ok = $"PDF read — review products below ({p.SerialNumbers.Count} serial(s) on first product). Add more products if the invoice has them.";
+            await PersistDraftAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    void AddProduct()
+    {
+        _products.Add(ProductRow.Empty());
+        QueueSaveDraft();
+    }
+
+    async Task OnCustomerIdChanged(int id)
+    {
+        _customerId = id;
+        QueueSaveDraft();
+        await Task.CompletedTask;
+    }
+
+    async Task OnCustomerSelected(MasterPicker.Option? opt)
+    {
+        if (opt == null || opt.Id <= 0) return;
+        var list = await Masters.ListCustomersAsync();
+        var c = list.FirstOrDefault(x => x.Id == opt.Id);
+        if (c == null) return;
+        _customer = c.Name;
+        if (!string.IsNullOrWhiteSpace(c.City)) _city = c.City!;
+        QueueSaveDraft();
+    }
+
+    async Task OnOemPicked(ProductRow p, int id)
+    {
+        p.OemVendorId = id;
+        p.ProductId = 0;
+        p.ProductModelId = 0;
+        if (id > 0)
+        {
+            var oems = await Masters.ListOemsAsync(activeOnly: false);
+            var oem = oems.FirstOrDefault(o => o.Id == id);
+            if (oem != null) p.OemBrand = oem.Name;
+        }
+        QueueSaveDraft();
+    }
+
+    async Task OnProductPicked(ProductRow p, int id)
+    {
+        p.ProductId = id;
+        p.ProductModelId = 0;
+        if (id > 0)
+        {
+            var products = await Masters.ListProductsAsync(p.OemVendorId > 0 ? p.OemVendorId : null, activeOnly: false);
+            var prod = products.FirstOrDefault(x => x.Id == id);
+            if (prod != null)
+            {
+                if (string.IsNullOrWhiteSpace(p.ProductItemName))
+                    p.ProductItemName = prod.Name;
+                if (prod.OemVendor != null)
+                {
+                    p.OemVendorId = prod.OemVendorId;
+                    p.OemBrand = prod.OemVendor.Name;
+                }
+            }
+        }
+        QueueSaveDraft();
+    }
+
+    async Task OnModelPicked(ProductRow p, int id)
+    {
+        p.ProductModelId = id;
+        if (id > 0)
+        {
+            var models = await Masters.ListModelsAsync(p.ProductId > 0 ? p.ProductId : null, activeOnly: false);
+            var m = models.FirstOrDefault(x => x.Id == id);
+            if (m != null)
+            {
+                p.ProductModel = m.Code;
+                p.ProductId = m.ProductId;
+                if (m.Product?.OemVendor != null)
+                {
+                    p.OemVendorId = m.Product.OemVendorId;
+                    p.OemBrand = m.Product.OemVendor.Name;
+                }
+            }
+        }
+        QueueSaveDraft();
+    }
+
+    async Task OnCarePackTypePicked(ProductRow p, int id)
+    {
+        p.CarePackTypeId = id;
+        if (id > 0)
+        {
+            var types = await Masters.ListCarePackTypesAsync(activeOnly: false);
+            var t = types.FirstOrDefault(x => x.Id == id);
+            if (t != null)
+            {
+                p.CarePackType = t.Name;
+                p.DurationYears = t.DurationYears;
+            }
+        }
+        QueueSaveDraft();
+    }
+
+    async Task TryMatchProductMastersAsync(ProductRow row)
+    {
+        try
+        {
+            var (oem, product, model) = await Masters.ResolveOemProductModelAsync(row.OemBrand, row.ProductModel);
+            if (oem != null)
+            {
+                row.OemVendorId = oem.Id;
+                row.OemBrand = oem.Name;
+            }
+            if (product != null)
+            {
+                row.ProductId = product.Id;
+                row.OemVendorId = product.OemVendorId;
+            }
+            if (model != null)
+            {
+                row.ProductModelId = model.Id;
+                row.ProductId = model.ProductId;
+                row.ProductModel = model.Code;
+                if (model.Product != null)
+                {
+                    row.OemVendorId = model.Product.OemVendorId;
+                    if (model.Product.OemVendor != null)
+                        row.OemBrand = model.Product.OemVendor.Name;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(row.CarePackType))
+            {
+                var types = await Masters.ListCarePackTypesAsync();
+                var t = types.FirstOrDefault(x =>
+                    string.Equals(x.Name, row.CarePackType, StringComparison.OrdinalIgnoreCase));
+                if (t != null)
+                {
+                    row.CarePackTypeId = t.Id;
+                    row.DurationYears = t.DurationYears;
+                }
+            }
+        }
+        catch { /* best-effort match */ }
+    }
+
+    void RemoveProduct(int index)
+    {
+        if (_products.Count <= 1 || index < 0 || index >= _products.Count) return;
+        _products.RemoveAt(index);
+        QueueSaveDraft();
+    }
+
+    void ChangeQty(ProductRow p, string? raw)
+    {
+        if (!int.TryParse(raw, out var q) || q < 1) q = 1;
+        p.ResizeSlots(q);
+        QueueSaveDraft();
+    }
+
+    void SetSlot(ProductRow p, int idx, string? value)
+    {
+        if (idx < 0 || idx >= p.SerialSlots.Count) return;
+        p.SerialSlots[idx] = (value ?? "").Trim().ToUpperInvariant();
+        QueueSaveDraft();
+    }
+
+    void ApplyPaste(ProductRow p)
+    {
+        _error = null;
+        var parsed = SerialNumberParser.Parse(p.PasteBlock);
+        if (parsed.SerialNumbers.Count == 0)
+            parsed = SerialNumberParser.ExtractFromLooseText(p.PasteBlock);
+        if (parsed.SerialNumbers.Count == 0)
+        {
+            _error = "No valid serial numbers in paste for this product.";
+            return;
+        }
+        p.ResizeSlots(parsed.SerialNumbers.Count);
+        for (var i = 0; i < p.SerialSlots.Count; i++)
+            p.SerialSlots[i] = i < parsed.SerialNumbers.Count ? parsed.SerialNumbers[i] : "";
+        p.PasteBlock = "";
+        QueueSaveDraft();
+    }
+
+    async Task Save()
+    {
+        _error = _ok = null;
+        if (_products.Any(p => !p.IsComplete))
+        {
+            _error = "Every product needs Product Model, care pack length, and one serial per unit.";
+            return;
+        }
+
+        var allSn = _products.SelectMany(p => p.FilledSerials).ToList();
+        var dup = allSn.GroupBy(s => s, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+        if (dup != null)
+        {
+            _error = $"Serial '{dup.Key}' is used on more than one product.";
+            return;
+        }
+
+        if (InvoiceNumberChanged && !string.IsNullOrWhiteSpace(_irn) &&
+            string.IsNullOrWhiteSpace(_invoiceEditReason) && string.IsNullOrWhiteSpace(_overrideReason))
+        {
+            _error = "Invoice number was changed on an IRN invoice. Enter an edit/override reason before register.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await PersistDraftAsync(); // keep latest if register fails
+            var sourceInv = InvoiceNumberChanged
+                ? _sourceInvoiceNo.Trim()
+                : (string.IsNullOrWhiteSpace(_sourceInvoiceNo) ? null : _sourceInvoiceNo.Trim());
+            var notes = _notes;
+            if (InvoiceNumberChanged)
+            {
+                var audit = $"Source PDF invoice: {_sourceInvoiceNo.Trim()}";
+                if (!string.IsNullOrWhiteSpace(_invoiceEditReason))
+                    audit += $"\nInvoice edit: {_invoiceEditReason.Trim()}";
+                notes = string.IsNullOrWhiteSpace(notes) ? audit : $"{notes}\n{audit}";
+            }
+
+            var batches = await CarePack.CreateManualBatchesAsync(new ManualCarePackMultiRequest
+            {
+                InvoiceNumber = _invoiceNo,
+                SourceInvoiceNumber = InvoiceNumberChanged ? sourceInv : null,
+                CustomerId = _customerId > 0 ? _customerId : null,
+                CustomerName = _customer,
+                CustomerCity = _city,
+                InvoiceDate = _invDate.HasValue ? DateOnly.FromDateTime(_invDate.Value) : null,
+                Irn = _irn,
+                IrnAckNo = _ackNo,
+                Notes = notes,
+                MarkAsOverride = _markOverride || InvoiceNumberChanged,
+                OverrideReason = string.IsNullOrWhiteSpace(_overrideReason)
+                    ? _invoiceEditReason
+                    : _overrideReason,
+                Products = _products.Select((p, i) => new ManualCarePackProductEntry
+                {
+                    LineSetIndex = i + 1,
+                    ProductItemName = p.ProductItemName,
+                    CarePackItemName = p.CarePackItemName,
+                    ProductModel = p.ProductModel,
+                    OemBrand = p.OemBrand,
+                    CarePackType = p.CarePackType,
+                    OemVendorId = p.OemVendorId > 0 ? p.OemVendorId : null,
+                    ProductId = p.ProductId > 0 ? p.ProductId : null,
+                    ProductModelId = p.ProductModelId > 0 ? p.ProductModelId : null,
+                    CarePackTypeId = p.CarePackTypeId > 0 ? p.CarePackTypeId : null,
+                    DurationYears = p.DurationYears > 0 ? p.DurationYears : null,
+                    Qty = p.Qty,
+                    Serials = p.FilledSerials,
+                }).ToList(),
+            });
+            await Drafts.ClearPdfDraftAsync(_userName ?? "");
+            Nav.NavigateTo(batches.Count > 0 ? $"/care-packs/{batches[0].Id}" : "/care-packs");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    sealed class ProductRow
+    {
+        public int OemVendorId { get; set; }
+        public int ProductId { get; set; }
+        public int ProductModelId { get; set; }
+        public int CarePackTypeId { get; set; }
+        public int DurationYears { get; set; }
+        public string ProductItemName { get; set; } = "";
+        public string CarePackItemName { get; set; } = "";
+        public string ProductModel { get; set; } = "";
+        public string OemBrand { get; set; } = "";
+        public string CarePackType { get; set; } = "3 Year";
+        public int Qty { get; set; } = 1;
+        public List<string> SerialSlots { get; set; } = [""];
+        public string PasteBlock { get; set; } = "";
+
+        public int FilledCount => SerialSlots.Count(s => !string.IsNullOrWhiteSpace(s));
+        public List<string> FilledSerials =>
+            SerialSlots.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        public bool IsComplete =>
+            !string.IsNullOrWhiteSpace(ProductModel)
+            && !string.IsNullOrWhiteSpace(CarePackType)
+            && Qty > 0
+            && FilledCount == Qty
+            && FilledSerials.Distinct(StringComparer.OrdinalIgnoreCase).Count() == Qty;
+
+        public static ProductRow Empty() => new();
+
+        public void ResizeSlots(int qty)
+        {
+            Qty = Math.Max(1, qty);
+            while (SerialSlots.Count < Qty) SerialSlots.Add("");
+            if (SerialSlots.Count > Qty)
+                SerialSlots = SerialSlots.Take(Qty).ToList();
+        }
+    }
+}

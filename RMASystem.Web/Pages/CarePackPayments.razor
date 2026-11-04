@@ -1,0 +1,136 @@
+@page "/care-packs/payments"
+@inject CarePackService CarePack
+@inject UserSessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>OEM Payments — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">OEM invoice payments</h1>
+        <p class="page-hero-sub">
+            Mark each OEM / vendor invoice as <strong>Paid</strong> or <strong>Not paid</strong>.
+            Supports <strong>USD</strong> (overseas OEM) and <strong>INR</strong> (local purchase).
+            No bank / UTR / SWIFT details required.
+            Only invoices with a linked OEM PO and OEM invoice number appear here.
+        </p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/care-packs/pending" class="btn btn-ghost">Deadlines</a>
+        <a href="/care-packs" class="btn btn-ghost">Care Packs</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_error)) { <div class="error-msg">@_error</div> }
+@if (!string.IsNullOrEmpty(_ok)) { <div class="success-msg">@_ok</div> }
+
+<div class="card">
+    <div class="card-title">Payment status</div>
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>OEM PO</th>
+                    <th>Sales inv.</th>
+                    <th>OEM invoice</th>
+                    <th>Bill date</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_rows.Count == 0)
+                {
+                    <tr><td colspan="7" class="empty-cell">No PO-validated OEM invoices yet.</td></tr>
+                }
+                else
+                {
+                    @foreach (var b in _rows)
+                    {
+                        <tr>
+                            <td><code>@(b.PurchaseOrderNumber ?? "—")</code></td>
+                            <td>
+                                <a href="/care-packs/@b.Id">@b.InvoiceNumber</a>
+                            </td>
+                            <td>@(b.OemInvoiceNumber ?? "—")</td>
+                            <td>@(b.OemInvoiceDate?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                            <td>@(b.OemInvoiceAmount?.ToString("N2") ?? "—") @(b.OemInvoiceCurrency)</td>
+                            <td>
+                                @if (b.OemInvoicePaid)
+                                {
+                                    <span class="ok-text">Paid</span>
+                                    @if (b.OemInvoicePaidAt != null)
+                                    {
+                                        <span class="muted"> · @b.OemInvoicePaidAt.Value.ToString("dd-MMM-yyyy")</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(b.OemInvoicePaidBy))
+                                    {
+                                        <span class="muted"> · @b.OemInvoicePaidBy</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="text-danger">Not paid</span>
+                                }
+                            </td>
+                            <td>
+                                @if (_canEdit)
+                                {
+                                    @if (b.OemInvoicePaid)
+                                    {
+                                        <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                                @onclick="() => SetPaid(b.Id, false)">
+                                            Mark not paid
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-primary btn-sm" type="button" disabled="@_busy"
+                                                @onclick="() => SetPaid(b.Id, true)">
+                                            Mark paid
+                                        </button>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    List<CarePackBatch> _rows = new();
+    string? _error, _ok, _userName;
+    bool _busy, _canEdit;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        var (name, role) = await Session.GetCurrentAsync();
+        _userName = name;
+        _canEdit = AppRoles.CanValidatePo(role);
+        await Reload();
+    }
+
+    async Task Reload()
+    {
+        _rows = await CarePack.ListPayableOemInvoicesAsync();
+    }
+
+    async Task SetPaid(int batchId, bool paid)
+    {
+        _error = _ok = null;
+        _busy = true;
+        try
+        {
+            await CarePack.SetOemInvoicePaidAsync(batchId, paid, _userName);
+            _ok = paid ? "Marked as paid." : "Marked as not paid.";
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,27 @@
+---
+description: Global poka-yoke — mistake-proof all RMA System features (never bypass gates casually)
+alwaysApply: true
+---
+
+# Poka-Yoke (global — all RMA System work)
+
+Poka-yoke = design so wrong data, wrong status, or incomplete verification cannot slip through. Apply this to **every** feature (RMA, Care Pack, Batch, Zoho, Settings, installers), not only Care Pack.
+
+## Non-negotiables
+
+1. **Detect, don’t silently fix** — Surface mismatches, missing docs, bad status transitions, and API failures. Never hide errors to make a flow “succeed.”
+2. **Block by default** — Dangerous or irreversible actions stay blocked until rules pass. Bypass only via an **explicit** Admin (or documented role) path with reason + confirmation + audit trail.
+3. **Fail closed** — Prefer a clear error and stop over allowing incomplete or wrong registration/dispatch/verification.
+4. **Document / process chain** — Once a later step is recorded (PO, OEM invoice/PDF, dispatch, RMA on SN, etc.), lock earlier edits and block unsafe deletes. Do not reopen chains without an audited override.
+5. **Verification is complete only when evidence exists** — Example: Care Pack “100% verified” requires PO linked + OEM invoice number + OEM invoice PDF. Do not mark complete on partial data.
+6. **Roles matter** — Respect Admin / Manager / Technician / Viewer (and any future roles). Viewers stay read-only. Do not weaken role checks for UI convenience.
+7. **External systems stay truthful** — Zoho/IRN/source invoices are not “corrected” in place. Store originals; register corrected values separately with audit when override is allowed.
+8. **Config over hard-coding** — Instance names, tokens, paths belong in `config.ini` / settings. Do not hard-code secrets or environment-specific servers in code.
+9. **Convenience never removes gates** — Do not delete validation, skip status checks, or auto-accept mismatches just to make a button appear or a demo pass.
+
+## When implementing anything new
+
+- List the mistake you are preventing before coding.
+- Add the gate in **service/domain** logic (not only UI disable).
+- Keep an audit path for any override.
+- For Care Pack specifics, also follow `.cursor/rules/carepack-poka-yoke.mdc` and `RMASystem.Web/Docs/PO_Validation_Document.md` / `CarePack_Override_Note.md`.

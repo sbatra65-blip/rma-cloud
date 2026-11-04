@@ -1,0 +1,84 @@
+@page "/admin/override-log"
+@inject CarePackService CarePack
+@inject UserSessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>Override Log — RMA System</PageTitle>
+
+@if (!_isAdmin)
+{
+    <div class="alert-banner danger">Admin only. Your role cannot view the override log.</div>
+}
+else
+{
+    <div class="page-hero care-hero">
+        <div>
+            <h1 class="page-hero-title">Care Pack Override Log</h1>
+            <p class="page-hero-sub">Read-only audit of all Admin overrides. Entries cannot be deleted.</p>
+        </div>
+        <a href="/care-packs" class="btn btn-ghost">← Care Packs</a>
+    </div>
+
+    <div class="card">
+        <div class="tbl-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Invoice</th>
+                        <th>Serial</th>
+                        <th>Invoice Brand</th>
+                        <th>Registered Brand</th>
+                        <th>By</th>
+                        <th>Date</th>
+                        <th>Reason</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_loading)
+                    {
+                        <tr><td colspan="8" class="empty-cell">Loading…</td></tr>
+                    }
+                    else if (!_rows.Any())
+                    {
+                        <tr><td colspan="8" class="empty-cell">No overrides recorded yet.</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var d in _rows)
+                        {
+                            <tr>
+                                <td>@d.Batch.InvoiceNumber</td>
+                                <td><code class="sn">@d.SerialNumber</code></td>
+                                <td>@(d.InvoiceBrandDetected ?? "—")</td>
+                                <td>@(d.OemBrand ?? "—")</td>
+                                <td>@(d.OverrideBy ?? "—")</td>
+                                <td class="date-cell">@(d.OverrideAt?.ToString("dd-MMM-yyyy HH:mm") ?? "—")</td>
+                                <td class="reason-cell">@(d.OverrideReason ?? "—")</td>
+                                <td>
+                                    <button class="btn btn-ghost btn-sm"
+                                            @onclick="@(() => Nav.NavigateTo($"/care-packs/{d.CarePackBatchId}"))">
+                                        Open
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    bool _isAdmin, _loading = true;
+    List<CarePackDevice> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isAdmin = await Session.IsAdminAsync();
+        if (_isAdmin)
+            _rows = await CarePack.GetOverrideLogAsync();
+        _loading = false;
+    }
+}

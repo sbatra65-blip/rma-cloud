@@ -1,0 +1,150 @@
+@page "/reminders"
+@inject AppDbContext Db
+@inject CarePackService CarePack
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Models
+
+<PageTitle>Reminders — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Reminders</h1>
+        <p class="page-hero-sub">Open RMA follow-ups and Care Pack deadlines that need attention.</p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/rma/reports" class="btn btn-ghost">RMA reports</a>
+        <a href="/care-packs/pending" class="btn btn-ghost">Care Pack pending</a>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+    <div class="card-title">RMA follow-ups</div>
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Reminder</th>
+                    <th>Ticket</th>
+                    <th>Customer</th>
+                    <th>Serial</th>
+                    <th>Age</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_rmaReminders.Count == 0)
+                {
+                    <tr><td colspan="6" class="empty-cell">No open RMA reminders.</td></tr>
+                }
+                else
+                {
+                    @foreach (var r in _rmaReminders)
+                    {
+                        <tr>
+                            <td>@r.Kind</td>
+                            <td><a href="/rma/@r.TicketId">@r.TicketNo</a></td>
+                            <td>@r.Customer</td>
+                            <td><code class="sn">@r.Serial</code></td>
+                            <td>@r.AgeDays d</td>
+                            <td><a class="btn btn-sm btn-primary" href="/rma/@r.TicketId">Open</a></td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Care Pack reminders</div>
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Reminder</th>
+                    <th>Invoice</th>
+                    <th>Customer</th>
+                    <th>Detail</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_cpReminders.Count == 0)
+                {
+                    <tr><td colspan="5" class="empty-cell">No Care Pack reminders.</td></tr>
+                }
+                else
+                {
+                    @foreach (var r in _cpReminders)
+                    {
+                        <tr>
+                            <td>@r.Kind</td>
+                            <td>@r.Invoice</td>
+                            <td>@r.Customer</td>
+                            <td>@r.Detail</td>
+                            <td><a class="btn btn-sm btn-ghost" href="/care-packs/@r.BatchId">Open</a></td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    record RmaRem(string Kind, int TicketId, string TicketNo, string Customer, string Serial, int AgeDays);
+    record CpRem(string Kind, int BatchId, string Invoice, string Customer, string Detail);
+
+    List<RmaRem> _rmaReminders = new();
+    List<CpRem> _cpReminders = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var today = DateTime.Today;
+        var open = await Db.RMATickets.AsNoTracking()
+            .Where(t => t.Status == RMAStatus.Open || t.Status == RMAStatus.AwaitingOemRma ||
+                        t.Status == RMAStatus.OemRmaReceived)
+            .OrderBy(t => t.CreatedAt)
+            .Take(200)
+            .ToListAsync();
+
+        foreach (var t in open)
+        {
+            var age = (int)(today - t.CreatedAt.Date).TotalDays;
+            if (t.Status == RMAStatus.Open && string.IsNullOrWhiteSpace(t.ExcelFilePath))
+                _rmaReminders.Add(new("Generate OEM Excel", t.Id, t.InternalTicketNo, t.CustomerCompany ?? "—", t.PrinterSn ?? "—", age));
+            else if (t.Status == RMAStatus.Open || (t.Status == RMAStatus.AwaitingOemRma && t.OemEmailSentAt == null))
+                _rmaReminders.Add(new("Send / follow OEM email", t.Id, t.InternalTicketNo, t.CustomerCompany ?? "—", t.PrinterSn ?? "—", age));
+            else if (t.Status == RMAStatus.AwaitingOemRma && age >= 3)
+                _rmaReminders.Add(new("Awaiting OEM RMA # (≥3 days)", t.Id, t.InternalTicketNo, t.CustomerCompany ?? "—", t.PrinterSn ?? "—", age));
+            else if (t.Status == RMAStatus.OemRmaReceived && t.OemDispatchDate == null)
+                _rmaReminders.Add(new("OEM RMA received — dispatch pending", t.Id, t.InternalTicketNo, t.CustomerCompany ?? "—", t.PrinterSn ?? "—", age));
+        }
+
+        var (poLimit, payLimit) = await CarePack.GetDeadlineLimitsAsync();
+        var batches = await CarePack.ListBatchesAsync();
+        foreach (var b in batches)
+        {
+            if (string.IsNullOrWhiteSpace(b.PurchaseOrderNumber) && b.InvoiceDate != null)
+            {
+                var due = CarePackDeadlines.PoDueDate(b.InvoiceDate, poLimit);
+                var rem = CarePackDeadlines.DaysRemaining(due);
+                if (due != null && rem <= 5)
+                    _cpReminders.Add(new(rem < 0 ? "PO overdue" : "PO due soon", b.Id, b.InvoiceNumber, b.CustomerName ?? "—",
+                        $"Due {due:dd-MMM-yyyy} ({rem}d)"));
+            }
+            if (!string.IsNullOrWhiteSpace(b.OemInvoiceNumber) && !b.OemInvoicePaid && b.OemInvoiceDate != null)
+            {
+                var due = CarePackDeadlines.PaymentDueDate(b.OemInvoiceDate, payLimit);
+                var rem = CarePackDeadlines.DaysRemaining(due);
+                if (due != null && rem <= 5)
+                    _cpReminders.Add(new(rem < 0 ? "OEM payment overdue" : "OEM payment due soon", b.Id, b.InvoiceNumber, b.CustomerName ?? "—",
+                        $"{b.OemInvoiceNumber} · due {due:dd-MMM-yyyy}"));
+            }
+            if (!string.IsNullOrWhiteSpace(b.PurchaseOrderNumber) && !b.VerificationComplete)
+                _cpReminders.Add(new("OEM docs / verification pending", b.Id, b.InvoiceNumber, b.CustomerName ?? "—",
+                    string.IsNullOrWhiteSpace(b.OemInvoiceNumber) ? "OEM invoice missing" : "PDF / verification incomplete"));
+        }
+    }
+}

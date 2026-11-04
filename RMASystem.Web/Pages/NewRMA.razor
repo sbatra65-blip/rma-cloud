@@ -1,0 +1,988 @@
+@page "/new-rma"
+@page "/edit-rma/{TicketId:int}"
+@inject AppDbContext Db
+@inject TicketService TicketSvc
+@inject PhotoService PhotoSvc
+@inject CarePackService CarePack
+@inject CompanyService Companies
+@inject MasterDataService Masters
+@inject UserSessionService Session
+@inject AuthService Auth
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Services
+@using RMASystem.Models
+<PageTitle>@(TicketId.HasValue ? "Edit RMA" : "New RMA") — RMA System</PageTitle>
+
+<div class="card">
+    <div class="card-header-row">
+        <span class="card-title">
+            @(TicketId.HasValue ? "Edit: " + _ticket.InternalTicketNo : "Create New RMA Ticket")
+        </span>
+        <a href="/" class="btn btn-ghost btn-sm">← Back</a>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_loadError))
+    {
+        <div class="error-msg">@_loadError</div>
+    }
+
+    <EditForm Model="_ticket" OnSubmit="HandleSubmit">
+
+        @if (_prefillLocked && _selectedCp != null)
+        {
+            <div class="alert-banner" style="margin-bottom:14px">
+                <strong>Device locked from dashboard search</strong>
+                — client, serial, and model are filled from Care Pack. Enter fault / mileage / photos below.
+                <button type="button" class="btn btn-sm btn-ghost" style="margin-left:8px" @onclick="UnlockPrefill">
+                    Change device…
+                </button>
+            </div>
+            <div class="section-hdr">Device (from Care Pack)</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Client</label>
+                    <input class="form-control" value="@(_ticket.CustomerCompany ?? "")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>City</label>
+                    <input class="form-control" value="@(_ticket.CustomerCity ?? "")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>Product Model</label>
+                    <input class="form-control" value="@(_ticket.PrinterModel ?? "")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>Product Serial</label>
+                    <input class="form-control" value="@(_ticket.PrinterSn ?? "")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>Sales Invoice</label>
+                    <input class="form-control" value="@_selectedCp.InvoiceNumber" readonly />
+                </div>
+                <div class="form-group">
+                    <label>Care Pack / Warranty</label>
+                    <input class="form-control"
+                           value="@($"{_selectedCp.CarePackType ?? "—"} · {(_selectedCp.WarrantyEnd?.ToString("dd-MMM-yyyy") ?? "—")}")"
+                           readonly />
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="section-hdr">Partner / Customer Details</div>
+            <div class="form-grid">
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Client * (from Care Pack invoices)</label>
+                    <input class="form-control" value="@_clientFilter" @oninput="OnClientFilterChanged"
+                           placeholder="Type to filter clients…" autocomplete="off" />
+                    <select class="form-control" style="margin-top:8px" value="@_selectedClient"
+                            @onchange="OnClientDropdownChanged">
+                        <option value="">— Select a client —</option>
+                        @foreach (var c in _clientOptions)
+                        {
+                            <option value="@c">@c</option>
+                        }
+                    </select>
+                    <p class="help-text" style="margin-top:6px">
+                        Type to narrow the list, then select a client. All printer serials for that client appear below.
+                    </p>
+                    @if (!string.IsNullOrWhiteSpace(_selectedClient))
+                    {
+                        <p class="help-text" style="margin-top:4px">
+                            Selected client: <strong>@_selectedClient</strong>
+                            · @_filteredSerials.Count serial(s) listed
+                        </p>
+                    }
+                </div>
+                <div class="form-group">
+                    <label>Customer master</label>
+                    <MasterPicker Kind="customer" Value="_customerId" ValueChanged="OnCustomerPicked"
+                                  Placeholder="— Select or add customer —" />
+                    <p class="help-text">Select from master or + to add. City stays manual below.</p>
+                </div>
+                <div class="form-group">
+                    <label>Company Name *</label>
+                    <InputText @bind-Value="_ticket.CustomerCompany" class="form-control" placeholder="Filled from client, or type manually" />
+                </div>
+                <div class="form-group">
+                    <label>Contact Name</label>
+                    <InputText @bind-Value="_ticket.CustomerContactName" class="form-control" placeholder="Contact person" />
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <InputText @bind-Value="_ticket.CustomerEmail" class="form-control" placeholder="email@company.com" />
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <InputText @bind-Value="_ticket.CustomerPhone" class="form-control" placeholder="+91 XXXXXXXXXX" />
+                </div>
+                <div class="form-group">
+                    <label>PO Number</label>
+                    <InputText @bind-Value="_ticket.PoNumber" class="form-control" placeholder="Customer PO#" />
+                </div>
+                <div class="form-group">
+                    <label>Address</label>
+                    <InputText @bind-Value="_ticket.CustomerAddress" class="form-control" placeholder="Street address" />
+                </div>
+                <div class="form-group">
+                    <label>City</label>
+                    <InputText @bind-Value="_ticket.CustomerCity" class="form-control" placeholder="City" />
+                </div>
+                <div class="form-group">
+                    <label>Postal Code</label>
+                    <InputText @bind-Value="_ticket.CustomerPostal" class="form-control" placeholder="110001" />
+                </div>
+                <div class="form-group">
+                    <label>Country</label>
+                    <InputText @bind-Value="_ticket.CustomerCountry" class="form-control" placeholder="India" />
+                </div>
+            </div>
+        }
+
+        @if (!_prefillLocked)
+        {
+            <div class="section-hdr">Ship-To Details (if different)</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Ship-To Company</label>
+                    <InputText @bind-Value="_ticket.ShipToCompany" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Address</label>
+                    <InputText @bind-Value="_ticket.ShipToAddress" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Contact</label>
+                    <InputText @bind-Value="_ticket.ShipToContactName" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Email</label>
+                    <InputText @bind-Value="_ticket.ShipToEmail" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Phone</label>
+                    <InputText @bind-Value="_ticket.ShipToPhone" class="form-control" />
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="section-hdr">Contact &amp; Ship-To (optional)</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Contact Name</label>
+                    <InputText @bind-Value="_ticket.CustomerContactName" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <InputText @bind-Value="_ticket.CustomerEmail" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Phone</label>
+                    <InputText @bind-Value="_ticket.CustomerPhone" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>PO Number</label>
+                    <InputText @bind-Value="_ticket.PoNumber" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Company</label>
+                    <InputText @bind-Value="_ticket.ShipToCompany" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <label>Ship-To Phone</label>
+                    <InputText @bind-Value="_ticket.ShipToPhone" class="form-control" />
+                </div>
+            </div>
+        }
+
+        <div class="section-hdr">Product &amp; Fault Details</div>
+        <div class="form-grid">
+            @if (!_prefillLocked)
+            {
+                <div class="form-group">
+                    <label>OEM</label>
+                    <MasterPicker Kind="oem" Value="_oemId" ValueChanged="OnOemPicked"
+                                  Placeholder="— Select or add OEM —" />
+                </div>
+                <div class="form-group">
+                    <label>Product</label>
+                    <MasterPicker Kind="product" ParentId="_oemId" Value="_productId" ValueChanged="OnProductPicked"
+                                  Placeholder="— Select or add product —" />
+                </div>
+                <div class="form-group">
+                    <label>Model master</label>
+                    <MasterPicker Kind="model" ParentId="_productId" Value="_modelId" ValueChanged="OnModelPicked"
+                                  Placeholder="— Select or add model —" />
+                </div>
+                <div class="form-group">
+                    <label>Product Model *</label>
+                    <InputText @bind-Value="_ticket.PrinterModel" @bind-Value:after="RefreshOpenConflictsAsync"
+                               class="form-control" placeholder="Filled from model master, or type" />
+                </div>
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Product Serial Number * (from Care Pack)</label>
+                    @if (string.IsNullOrWhiteSpace(_selectedClient))
+                    {
+                        <p class="help-text">Select a client above to list their serial numbers.</p>
+                    }
+                    else
+                    {
+                        <input class="form-control" value="@_snFilter" @oninput="OnSnFilterChanged"
+                               placeholder="Filter this client's serials — e.g. T6EV…" />
+                        <p class="help-text" style="margin-top:6px">
+                            Showing serials for <strong>@_selectedClient</strong>. Select a row to use on this RMA.
+                        </p>
+                        <div class="tbl-wrap" style="margin-top:8px;max-height:320px;overflow:auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>Serial</th>
+                                        <th>Model</th>
+                                        <th>Invoice</th>
+                                        <th>Care pack</th>
+                                        <th>Warranty</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (!_filteredSerials.Any())
+                                    {
+                                        <tr><td colspan="6" class="empty-cell">No serials for this client — try another client or use override below.</td></tr>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var s in _filteredSerials)
+                                        {
+                                            <tr class="@(s.IsExpired ? "row-cp-expired" : string.Equals(_snPick, s.SerialNumber, StringComparison.OrdinalIgnoreCase) ? "row-highlight" : "")">
+                                                <td>
+                                                @if (s.IsExpired)
+                                                {
+                                                    <span class="muted">Expired</span>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-primary"
+                                                            @onclick="() => SelectSerialAsync(s)">Select</button>
+                                                }
+                                                </td>
+                                                <td><code class="sn">@s.SerialNumber</code>@(s.Overridden ? " *" : "")</td>
+                                                <td>@(s.PrinterModel ?? "—")</td>
+                                                <td><a href="/care-packs/@s.BatchId" target="_blank">@s.InvoiceNumber</a></td>
+                                                <td>@(s.CarePackType ?? "—")</td>
+                                                <td>
+                                                    @(s.WarrantyEnd?.ToString("dd-MMM-yyyy") ?? "—")
+                                                    @if (s.IsExpired)
+                                                    {
+                                                        <span class="badge badge-cp-expired">Expired</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    @if (_selectedCp != null && !_snOther)
+                    {
+                        <p class="help-text" style="margin-top:6px">
+                            Selected: <strong>@_selectedCp.SerialNumber</strong>
+                            · @(_selectedCp.OemBrand ?? "—")
+                            · <a href="/care-packs/@_selectedCp.BatchId">@_selectedCp.InvoiceNumber</a>
+                        </p>
+                    }
+                    <div style="margin-top:8px">
+                        <button type="button" class="btn btn-ghost btn-sm" @onclick="StartOverride">
+                            Not in list — add serial as override…
+                        </button>
+                    </div>
+                </div>
+                @if (_snOther)
+                {
+                    <div class="form-group">
+                        <label>New serial (override) *</label>
+                        <input class="form-control" @bind="_overrideSn" @bind:event="oninput" @bind:after="RefreshOpenConflictsAsync" placeholder="Enter printer serial" />
+                    </div>
+                    <div class="form-group">
+                        <label>Save into care pack invoice</label>
+                        <select class="form-control" @bind="_attachBatchId">
+                            <option value="0">— Create RMA-ADD registry entry —</option>
+                            @foreach (var b in _cpBatches)
+                            {
+                                <option value="@b.Id">@b.InvoiceNumber · @(b.CustomerName ?? "") · @(b.PrinterModel ?? "")</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-group" style="grid-column:1/-1">
+                        <label>Override reason * (stored on care pack device)</label>
+                        <textarea class="form-control" rows="2" @bind="_overrideReason"
+                                  placeholder="e.g. SN missing from import — confirmed on printer label"></textarea>
+                    </div>
+                }
+            }
+            <div class="form-group">
+                <label>Faulty Part *</label>
+                <InputText @bind-Value="_ticket.FaultyPart" @bind-Value:after="RefreshOpenConflictsAsync" class="form-control" placeholder="e.g. TPH, PCBA" />
+            </div>
+            <div class="form-group">
+                <label>Faulty Part SN</label>
+                <InputText @bind-Value="_ticket.FaultyPartSn" @bind-Value:after="RefreshOpenConflictsAsync" class="form-control" />
+            </div>
+            <div class="form-group">
+                <label>Faulty Part Number</label>
+                <InputText @bind-Value="_ticket.FaultyPartNo" @bind-Value:after="RefreshOpenConflictsAsync" class="form-control" />
+            </div>
+            <div class="form-group">
+                <label>TPH Mileage (M)</label>
+                <InputNumber @bind-Value="_ticket.TphMileage" class="form-control" placeholder="0.00" />
+            </div>
+            <div class="form-group">
+                <label>Printer Mileage (M)</label>
+                <InputNumber @bind-Value="_ticket.PrinterMileage" class="form-control" placeholder="0.00" />
+            </div>
+            <div class="form-group">
+                <label>Firmware Version</label>
+                <InputText @bind-Value="_ticket.FwVersion" class="form-control" placeholder="V1.00 EZ" />
+            </div>
+            <div class="form-group">
+                <label>Flash Initialized</label>
+                <InputSelect @bind-Value="_ticket.FlashInitialized" class="form-control">
+                    <option value="">-- Select --</option>
+                    <option value="Done">Done</option>
+                    <option value="Not Done">Not Done</option>
+                </InputSelect>
+            </div>
+            <div class="form-group">
+                <label>Purchase Date</label>
+                <InputDate @bind-Value="_ticket.PurchaseDate" class="form-control" />
+            </div>
+            <div class="form-group">
+                <label>Delivery to User Date</label>
+                <InputDate @bind-Value="_ticket.DeliveryToUserDate" class="form-control" />
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-top:12px">
+            <label>Failure Description *</label>
+            <InputTextArea @bind-Value="_ticket.FailureDescription" class="form-control"
+                           rows="3" placeholder="Describe the fault in detail..." />
+        </div>
+
+        @if (!TicketId.HasValue && _dupCheck.IsBlocked)
+        {
+            <div class="alert-banner danger" style="margin-top:14px">
+                <strong>Duplicate RMA blocked</strong>
+                <span>— see the reason above the <a href="#dup-panel">Create RMA Ticket</a> button.</span>
+            </div>
+        }
+
+        @if (!TicketId.HasValue && _dupCheck.SameMachineOpen.Count > 0)
+        {
+            <div class="dup-panel info" style="margin-top:14px">
+                <div class="dup-panel-title">Other open RMAs on this machine</div>
+                <p>
+                    These are for different parts. You can still create this RMA for
+                    <strong>@(_ticket.FaultyPart ?? "the selected part")</strong>.
+                </p>
+                <ul>
+                    @foreach (var c in _dupCheck.SameMachineOpen) { @ConflictItem(c) }
+                </ul>
+            </div>
+        }
+
+        @if (!TicketId.HasValue)
+        {
+            <div class="section-hdr">Inbound Photos (Damaged Goods from Customer)</div>
+            <label for="photo-input-file">
+                <div class="drop-zone">
+                    <div class="drop-icon">📸</div>
+                    <div class="drop-text">Click to select photos</div>
+                    <div class="drop-sub">JPEG, JPG, PNG, WebP · Multiple files at once</div>
+                </div>
+            </label>
+            <InputFile id="photo-input-file" OnChange="OnPhotosSelected"
+                       multiple accept=".jpg,.jpeg,.png,.webp,.bmp,image/jpeg,image/png,image/webp,image/*"
+                       style="display:none" />
+
+            @if (_pendingPhotos.Any())
+            {
+                <div class="photo-grid">
+                    @for (int i = 0; i < _pendingPhotos.Count; i++)
+                    {
+                        var idx = i;
+                        var file = _pendingPhotos[i];
+                        <div class="photo-thumb pending">
+                            @if (!string.IsNullOrEmpty(file.PreviewUrl))
+                            {
+                                <img class="photo-preview" src="@file.PreviewUrl" alt="@file.Name" />
+                            }
+                            <div class="photo-name">@file.Name</div>
+                            <div class="photo-size">@FormatSize(file.Bytes.Length)</div>
+                            <button type="button" class="del-btn"
+                                    @onclick="@(() => RemovePending(idx))">✕</button>
+                        </div>
+                    }
+                </div>
+            }
+        }
+
+        @if (!TicketId.HasValue && _dupCheck.IsBlocked)
+        {
+            <div id="dup-panel" class="dup-panel danger">
+                <div class="dup-panel-title">Duplicate RMA blocked</div>
+
+                <div class="dup-panel-label">Why</div>
+                <ul class="dup-reasons">
+                    @foreach (var b in _dupCheck.Blocks)
+                    {
+                        <li>
+                            @b.Reason
+                            <a href="/rma/@b.Ticket.Id" target="_blank">Open @b.Ticket.InternalTicketNo</a>
+                        </li>
+                    }
+                </ul>
+
+                <div class="dup-panel-label">What you can do</div>
+                <ul>
+                    <li>If this is a different part, change Faulty Part, or enter its own Part SN / Part Number.</li>
+                    <li>Close the existing RMA if it is finished.</li>
+                    <li>Otherwise an Admin or an authorised user can override with a reason (recorded on the new ticket).</li>
+                </ul>
+
+                @if (_canOverrideDup)
+                {
+                    <div class="dup-override">
+                        <label class="dup-override-label" for="dup-override-reason">Override reason *</label>
+                        <textarea id="dup-override-reason" class="form-control dup-override-reason" rows="6"
+                                  @bind="_dupOverrideReason" @bind:event="oninput"
+                                  placeholder="Explain why this RMA must still be created, e.g. replacement TPH failed again before the first RMA was closed"></textarea>
+                        <label class="dup-consent">
+                            <input type="checkbox" @bind="_dupOverrideConfirmed" />
+                            <span>I have read the reason above and confirm this RMA should still be created (audited)</span>
+                        </label>
+                    </div>
+                }
+                else
+                {
+                    <p class="dup-panel-note">
+                        You (@_role) cannot override this. Ask an Admin or an authorised user to open this form,
+                        or share the reason above with them.
+                    </p>
+                }
+            </div>
+        }
+
+        <div class="form-actions">
+            <button type="button" class="btn btn-ghost" @onclick="Reset">Clear</button>
+            <button type="submit" class="btn btn-primary"
+                    disabled="@(_saving || (!TicketId.HasValue && !CanCreateDespiteDuplicates))">
+                @if (_saving) { <span class="spinner"></span> }
+                @(TicketId.HasValue ? "Save Changes" : "Create RMA Ticket")
+            </button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_errorMsg))
+        {
+            <div class="error-msg">@_errorMsg</div>
+        }
+    </EditForm>
+</div>
+
+@code {
+    [Parameter] public int? TicketId { get; set; }
+
+    RMATicket _ticket  = new() { CustomerCountry = "India" };
+    bool      _saving, _prefillLocked;
+    string    _errorMsg = "", _loadError = "";
+    List<PendingPhoto> _pendingPhotos = new();
+
+    List<CarePackSerialOption> _cpSerials = new();
+    List<CarePackSerialOption> _filteredSerials = new();
+    List<CarePackBatch> _cpBatches = new();
+    List<string> _clientOptions = new();
+    string _clientFilter = "", _selectedClient = "";
+    string _snPick = "", _snFilter = "";
+    bool _snOther;
+    CarePackSerialOption? _selectedCp;
+    string _overrideSn = "", _overrideReason = "";
+    int _attachBatchId;
+    RmaDuplicateCheck _dupCheck = RmaDuplicateCheck.Empty;
+    bool _canOverrideDup, _dupOverrideConfirmed;
+    string _dupOverrideReason = "", _role = "";
+    int _customerId, _oemId, _productId, _modelId;
+
+    bool DupOverrideReady =>
+        _canOverrideDup && _dupOverrideConfirmed && !string.IsNullOrWhiteSpace(_dupOverrideReason);
+
+    bool CanCreateDespiteDuplicates => !_dupCheck.IsBlocked || DupOverrideReady;
+
+    RenderFragment ConflictItem(RMATicket c) => @<li>
+        <a href="/rma/@c.Id" target="_blank">@c.InternalTicketNo</a>
+        — @RMAStatus.Label(c.Status)
+        · part <strong>@(c.FaultyPart ?? "—")</strong>
+        · part SN <code class="sn">@(c.FaultyPartSn ?? "—")</code>
+        · product SN <code class="sn">@(c.PrinterSn ?? "—")</code>
+    </li>;
+
+    sealed class PendingPhoto
+    {
+        public string Name { get; set; } = "";
+        public byte[] Bytes { get; set; } = [];
+        public string PreviewUrl { get; set; } = "";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var (_, role) = await Session.GetCurrentAsync();
+            _role = role;
+            _canOverrideDup = await Auth.CanOverrideDuplicateRmaAsync(await Session.GetUserIdAsync(), role);
+            await Companies.ApplyFilterAsync(Db);
+            _cpBatches = await CarePack.ListBatchesAsync();
+            await RefreshClientOptions();
+
+            if (!TicketId.HasValue)
+                await TryPrefillFromQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = "Could not load Care Pack data from the database: " + ex.Message;
+        }
+    }
+
+    async Task OnCustomerPicked(int id)
+    {
+        _customerId = id;
+        _ticket.CustomerId = id > 0 ? id : null;
+        if (id <= 0) return;
+        var list = await Masters.ListCustomersAsync(activeOnly: true);
+        var c = list.FirstOrDefault(x => x.Id == id);
+        if (c == null) return;
+        _ticket.CustomerCompany = c.Name;
+        if (!string.IsNullOrWhiteSpace(c.City)) _ticket.CustomerCity = c.City;
+        if (!string.IsNullOrWhiteSpace(c.State)) _ticket.CustomerState = c.State;
+        if (!string.IsNullOrWhiteSpace(c.Address)) _ticket.CustomerAddress = c.Address;
+        if (!string.IsNullOrWhiteSpace(c.Phone)) _ticket.CustomerPhone = c.Phone;
+        if (!string.IsNullOrWhiteSpace(c.Email)) _ticket.CustomerEmail = c.Email;
+        if (!string.IsNullOrWhiteSpace(c.ContactName)) _ticket.CustomerContactName = c.ContactName;
+        if (!string.IsNullOrWhiteSpace(c.Postal)) _ticket.CustomerPostal = c.Postal;
+    }
+
+    async Task OnOemPicked(int id)
+    {
+        _oemId = id;
+        _productId = 0;
+        _modelId = 0;
+        await Task.CompletedTask;
+    }
+
+    async Task OnProductPicked(int id)
+    {
+        _productId = id;
+        _modelId = 0;
+        await Task.CompletedTask;
+    }
+
+    async Task OnModelPicked(int id)
+    {
+        _modelId = id;
+        _ticket.ProductModelId = id > 0 ? id : null;
+        if (id <= 0) return;
+        var models = await Masters.ListModelsAsync(_productId > 0 ? _productId : null);
+        var m = models.FirstOrDefault(x => x.Id == id);
+        if (m != null)
+        {
+            _ticket.PrinterModel = m.Code;
+            await RefreshOpenConflictsAsync();
+        }
+    }
+
+    async Task TryPrefillFromQueryAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        string? sn = q.TryGetValue("sn", out var snV) ? snV.ToString() : null;
+        string? client = q.TryGetValue("client", out var cV) ? cV.ToString() : null;
+        string? model = q.TryGetValue("model", out var mV) ? mV.ToString() : null;
+        var locked = q.TryGetValue("locked", out var lV) &&
+                     (lV.ToString() == "1" || string.Equals(lV.ToString(), "true", StringComparison.OrdinalIgnoreCase));
+        int.TryParse(q.TryGetValue("deviceId", out var dV) ? dV.ToString() : null, out var deviceId);
+
+        CarePackSerialOption? match = null;
+        if (deviceId > 0)
+            match = await CarePack.FindSerialByDeviceIdAsync(deviceId);
+        if (match == null && !string.IsNullOrWhiteSpace(sn))
+            match = await CarePack.FindSerialAsync(sn);
+
+        if (match != null)
+        {
+            await ApplyDevicePrefillAsync(match, lockDevice: locked || deviceId > 0 || !string.IsNullOrWhiteSpace(sn));
+            return;
+        }
+
+        // Partial URL without DB hit — still seed what we can
+        if (!string.IsNullOrWhiteSpace(client))
+            await SelectClientAsync(client);
+        if (!string.IsNullOrWhiteSpace(model))
+            _ticket.PrinterModel = model;
+        if (!string.IsNullOrWhiteSpace(sn))
+        {
+            _loadError = $"Serial '{sn}' was not found in Care Pack. Select client/serial manually or use override.";
+            _snFilter = sn;
+            _ticket.PrinterSn = sn;
+        }
+        await RefreshOpenConflictsAsync();
+    }
+
+    async Task ApplyDevicePrefillAsync(CarePackSerialOption match, bool lockDevice)
+    {
+        await SelectSerialAsync(match);
+        _snFilter = match.SerialNumber;
+        _ticket.CustomerCompany = match.CustomerName ?? _ticket.CustomerCompany;
+        _ticket.CustomerCity = match.CustomerCity ?? _ticket.CustomerCity;
+        _ticket.PrinterModel = match.PrinterModel ?? _ticket.PrinterModel;
+        _ticket.PrinterSn = match.SerialNumber;
+        if (match.InvoiceDate != null && _ticket.PurchaseDate == null)
+            _ticket.PurchaseDate = match.InvoiceDate;
+        if (string.IsNullOrWhiteSpace(_ticket.CustomerCountry))
+            _ticket.CustomerCountry = "India";
+        _selectedClient = match.CustomerName ?? "";
+        _clientFilter = _selectedClient;
+        _prefillLocked = lockDevice;
+        _snOther = false;
+        await RefreshOpenConflictsAsync();
+    }
+
+    async Task RefreshOpenConflictsAsync()
+    {
+        if (TicketId.HasValue)
+        {
+            _dupCheck = RmaDuplicateCheck.Empty;
+            return;
+        }
+        var printerSn = _snOther
+            ? _overrideSn
+            : (!string.IsNullOrWhiteSpace(_ticket.PrinterSn) ? _ticket.PrinterSn : _snPick);
+        if (string.Equals(printerSn, "__OTHER__", StringComparison.Ordinal))
+            printerSn = _overrideSn;
+        _dupCheck = await TicketSvc.CheckOpenDuplicatesAsync(
+            printerSn, _ticket.FaultyPart, _ticket.FaultyPartNo, _ticket.FaultyPartSn);
+    }
+
+    async Task UnlockPrefill()
+    {
+        _prefillLocked = false;
+        if (!string.IsNullOrWhiteSpace(_selectedClient))
+            await RefreshSerialFilter();
+        await RefreshClientOptions();
+    }
+
+    async Task OnClientFilterChanged(ChangeEventArgs e)
+    {
+        _clientFilter = e.Value?.ToString() ?? "";
+        await RefreshClientOptions();
+    }
+
+    async Task RefreshClientOptions()
+    {
+        _clientOptions = await CarePack.SearchCarePackCustomersAsync(_clientFilter, 80);
+        if (!string.IsNullOrWhiteSpace(_selectedClient) &&
+            !_clientOptions.Contains(_selectedClient, StringComparer.OrdinalIgnoreCase))
+            _clientOptions.Insert(0, _selectedClient);
+    }
+
+    async Task OnClientDropdownChanged(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString() ?? "";
+        await SelectClientAsync(name);
+    }
+
+    async Task SelectClientAsync(string name)
+    {
+        _selectedClient = name?.Trim() ?? "";
+        _snFilter = "";
+        _snPick = "";
+        _selectedCp = null;
+        _snOther = false;
+        if (!string.IsNullOrWhiteSpace(_selectedClient))
+        {
+            _ticket.CustomerCompany = _selectedClient;
+            _clientFilter = _selectedClient;
+            await RefreshClientOptions();
+            await RefreshSerialFilter();
+        }
+        else
+        {
+            _filteredSerials = [];
+        }
+    }
+
+    async Task OnSnFilterChanged(ChangeEventArgs e)
+    {
+        _snFilter = e.Value?.ToString() ?? "";
+        await RefreshSerialFilter();
+    }
+
+    async Task RefreshSerialFilter()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedClient))
+        {
+            _filteredSerials = [];
+            return;
+        }
+        _filteredSerials = await CarePack.SearchCarePackSerialsAsync(
+            _snFilter, take: 500, customerName: _selectedClient);
+        if (_cpSerials.Count == 0)
+            _cpSerials = _filteredSerials;
+    }
+
+    async Task SelectSerialAsync(CarePackSerialOption s)
+    {
+        _snOther = false;
+        _snPick = s.SerialNumber;
+        _selectedCp = s;
+        _ticket.PrinterSn = s.SerialNumber;
+        if (!string.IsNullOrWhiteSpace(s.PrinterModel))
+            _ticket.PrinterModel = s.PrinterModel;
+        if (!string.IsNullOrWhiteSpace(s.CustomerName))
+        {
+            _ticket.CustomerCompany = s.CustomerName;
+            _selectedClient = s.CustomerName;
+        }
+        if (!string.IsNullOrWhiteSpace(s.CustomerCity))
+            _ticket.CustomerCity = s.CustomerCity;
+        if (s.InvoiceDate != null && _ticket.PurchaseDate == null)
+            _ticket.PurchaseDate = s.InvoiceDate;
+        await RefreshOpenConflictsAsync();
+    }
+
+    async Task StartOverride()
+    {
+        _snOther = true;
+        _snPick = "__OTHER__";
+        _selectedCp = null;
+        _prefillLocked = false;
+        _ticket.PrinterSn = _overrideSn;
+        await RefreshOpenConflictsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (TicketId.HasValue)
+        {
+            var t = await Db.RMATickets.FindAsync(TicketId.Value);
+            if (t != null)
+            {
+                _ticket = t;
+                _prefillLocked = false;
+                if (!string.IsNullOrWhiteSpace(t.CustomerCompany))
+                    await SelectClientAsync(t.CustomerCompany);
+                if (!string.IsNullOrWhiteSpace(t.PrinterSn))
+                {
+                    var match = await CarePack.FindSerialAsync(t.PrinterSn);
+                    if (match != null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(match.CustomerName) &&
+                            !string.Equals(_selectedClient, match.CustomerName, StringComparison.OrdinalIgnoreCase))
+                            await SelectClientAsync(match.CustomerName);
+                        await SelectSerialAsync(match);
+                        _snFilter = match.SerialNumber;
+                        await RefreshSerialFilter();
+                    }
+                    else
+                    {
+                        await StartOverride();
+                        _overrideSn = t.PrinterSn;
+                    }
+                }
+            }
+        }
+    }
+
+    async Task OnPhotosSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(50))
+        {
+            if (file.Size > 15 * 1024 * 1024) continue;
+            await using var stream = file.OpenReadStream(15 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+            var mime = string.IsNullOrWhiteSpace(file.ContentType) ? "image/jpeg" : file.ContentType;
+            _pendingPhotos.Add(new PendingPhoto
+            {
+                Name = file.Name,
+                Bytes = bytes,
+                PreviewUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}",
+            });
+        }
+    }
+
+    void RemovePending(int idx)
+    {
+        if (idx >= 0 && idx < _pendingPhotos.Count)
+            _pendingPhotos.RemoveAt(idx);
+    }
+
+    async Task HandleSubmit()
+    {
+        _errorMsg = "";
+
+        if (_snOther)
+        {
+            if (string.IsNullOrWhiteSpace(_overrideSn))
+            { _errorMsg = "Enter the new printer serial number."; return; }
+            if (string.IsNullOrWhiteSpace(_overrideReason))
+            { _errorMsg = "Override reason is required to add a serial to care pack."; return; }
+        }
+        if (!TicketId.HasValue)
+        {
+            if (string.IsNullOrWhiteSpace(_ticket.CustomerCompany))
+            { _errorMsg = "Company Name is required."; return; }
+            if (string.IsNullOrWhiteSpace(_ticket.PrinterModel))
+            { _errorMsg = "Product Model is required."; return; }
+            var snCheck = _snOther ? _overrideSn : (_prefillLocked ? _ticket.PrinterSn : _snPick);
+            if (string.IsNullOrWhiteSpace(snCheck) || snCheck == "__OTHER__")
+            { _errorMsg = "Product Serial Number is required — pick from care pack or add override."; return; }
+            if (string.IsNullOrWhiteSpace(_ticket.FailureDescription))
+            { _errorMsg = "Failure Description is required."; return; }
+            if (string.IsNullOrWhiteSpace(_ticket.FaultyPart))
+            { _errorMsg = "Faulty Part is required."; return; }
+
+            await RefreshOpenConflictsAsync();
+            if (_dupCheck.IsBlocked && !DupOverrideReady)
+            {
+                var why = string.Join(" ", _dupCheck.Blocks.Take(3).Select(b => b.Reason));
+                _errorMsg = "Duplicate RMA blocked. " + why + (_canOverrideDup
+                    ? " Enter an override reason and tick the confirmation to continue."
+                    : " Ask an Admin or an authorised user to override.");
+                return;
+            }
+
+            // Poka-yoke: expired care pack / warranty — no new RMA
+            if (_selectedCp?.IsExpired == true)
+            {
+                _errorMsg =
+                    $"RMA blocked: care pack / warranty for {_selectedCp.SerialNumber} ended on {_selectedCp.WarrantyEnd:dd-MMM-yyyy}.";
+                return;
+            }
+            var snForCover = _snOther ? null : (_prefillLocked ? _ticket.PrinterSn : _snPick);
+            if (!string.IsNullOrWhiteSpace(snForCover) && snForCover != "__OTHER__")
+            {
+                try
+                {
+                    await CarePack.EnsureSerialEligibleForRmaAsync(snForCover);
+                }
+                catch (Exception ex)
+                {
+                    _errorMsg = ex.Message;
+                    return;
+                }
+            }
+        }
+
+        _saving = true;
+        try
+        {
+            if (_snOther)
+            {
+                var device = await CarePack.AddRmaOverrideSerialAsync(new RmaOverrideSerialRequest
+                {
+                    SerialNumber = _overrideSn,
+                    AttachToBatchId = _attachBatchId > 0 ? _attachBatchId : null,
+                    InvoiceNumber = null,
+                    CustomerName = _ticket.CustomerCompany,
+                    PrinterModel = _ticket.PrinterModel,
+                    Reason = _overrideReason,
+                });
+                _ticket.PrinterSn = device.SerialNumber;
+                _cpSerials = await CarePack.ListCarePackSerialsAsync();
+                _cpBatches = await CarePack.ListBatchesAsync();
+            }
+            else if (_prefillLocked && !string.IsNullOrWhiteSpace(_ticket.PrinterSn))
+            {
+                // already set
+            }
+            else if (!string.IsNullOrEmpty(_snPick) && _snPick != "__OTHER__")
+            {
+                _ticket.PrinterSn = _snPick;
+            }
+
+            if (TicketId.HasValue)
+            {
+                _ticket.UpdatedAt = DateTime.Now;
+                Db.RMATickets.Update(_ticket);
+                await Db.SaveChangesAsync();
+            }
+            else
+            {
+                await TicketSvc.EnsureNoOpenDuplicateAsync(
+                    _ticket, DupOverrideReady ? _dupOverrideReason : null);
+                await CarePack.EnsureSerialEligibleForRmaAsync(_ticket.PrinterSn);
+
+                _ticket.CompanyId = await Session.GetActiveCompanyIdAsync();
+                _ticket.InternalTicketNo = await TicketSvc.GenerateTicketNumberAsync();
+                _ticket.CreatedAt        = DateTime.Now;
+                _ticket.UpdatedAt        = DateTime.Now;
+                Db.RMATickets.Add(_ticket);
+                await Db.SaveChangesAsync();
+
+                foreach (var file in _pendingPhotos)
+                {
+                    await using var stream = new MemoryStream(file.Bytes);
+                    await PhotoSvc.SavePhotoAsync(_ticket, stream, file.Name, "INBOUND");
+                }
+            }
+            Nav.NavigateTo("/rma/" + _ticket.Id, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            // Surface root cause without dumping full SQL command text to the UI
+            var msg = ex.InnerException?.Message ?? ex.Message;
+            if (msg.Contains("SqlException", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Cannot open database", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("network-related", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("error locating server", StringComparison.OrdinalIgnoreCase))
+            {
+                _errorMsg = "Database connection failed. Check that SQL Server is running and config.ini Server= is correct (e.g. .\\SQLEXPRESS).";
+            }
+            else
+                _errorMsg = "Error: " + msg;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void Reset()
+    {
+        _ticket        = new() { CustomerCountry = "India" };
+        _pendingPhotos = new();
+        _errorMsg      = "";
+        _loadError     = "";
+        _prefillLocked = false;
+        _clientFilter = "";
+        _selectedClient = "";
+        _filteredSerials = [];
+        _snFilter = "";
+        _snPick = "";
+        _snOther = false;
+        _selectedCp = null;
+        _overrideSn = "";
+        _overrideReason = "";
+        _attachBatchId = 0;
+        _dupCheck = RmaDuplicateCheck.Empty;
+        _dupOverrideReason = "";
+        _dupOverrideConfirmed = false;
+        _ = RefreshClientOptions();
+    }
+
+    static string FormatSize(long bytes) =>
+        bytes < 1024 * 1024
+            ? (bytes / 1024.0).ToString("F1") + " KB"
+            : (bytes / (1024.0 * 1024)).ToString("F1") + " MB";
+}

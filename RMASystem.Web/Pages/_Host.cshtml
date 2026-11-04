@@ -1,0 +1,34 @@
+@page "/"
+@namespace RMASystem.Pages
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Infinite Solutions — Service Management</title>
+    <base href="~/" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@@tabler/icons-webfont@3.14.0/tabler-icons.min.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/png" href="img/favicon.png" />
+</head>
+<body>
+    <component type="typeof(App)" render-mode="Server" />
+    <div id="blazor-error-ui">
+        Connection interrupted — <a href="" class="reload">reload</a> to continue.
+        <a class="dismiss">✕</a>
+    </div>
+    <div id="components-reconnect-modal">
+        <div class="reconnect-panel">
+            <p class="reconnect-title">Reconnecting…</p>
+            <p class="reconnect-sub">Please wait — restoring your session.</p>
+            <button class="components-reconnect-button btn btn-primary" onclick="location.reload()">Reload now</button>
+        </div>
+    </div>
+    <script src="_framework/blazor.server.js"></script>
+    <script src="js/fileSave.js"></script>
+</body>
+</html>

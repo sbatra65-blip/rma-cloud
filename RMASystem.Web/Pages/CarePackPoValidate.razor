@@ -1,0 +1,654 @@
+@page "/care-packs/{BatchId:int}/validate-po"
+@inject CarePackService CarePack
+@inject UserSessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>PO Validation — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Verify against OEM PO</h1>
+        <p class="page-hero-sub">
+            <strong>Step 1:</strong> select Care Pack invoices to club on one OEM PO.
+            <strong>Then</strong> fetch the PO / read PDF / enter serials — all selected invoices are linked together.
+        </p>
+    </div>
+    <a href="/care-packs/@BatchId" class="btn btn-ghost">← Batch</a>
+</div>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="error-msg">@_error</div>
+}
+
+@* ── Step 1: select invoices BEFORE PO / serials ─────────────────────────── *@
+<div class="card">
+    <div class="card-title">1. Select Care Pack invoices for this OEM PO</div>
+    <p class="help-text">
+        Tick every sales invoice that belongs on the same OEM PO — including invoices for
+        <strong>different customers / parties</strong>. Do this <strong>before</strong> fetching Zoho, reading a PDF, or pasting serials.
+        Gate: each selected invoice's serials must appear on the PO.
+    </p>
+
+    @if (_primary == null)
+    {
+        <div class="muted">Loading invoices…</div>
+    }
+    else
+    {
+        <div class="tbl-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Invoice</th>
+                        <th>Customer</th>
+                        <th>Devices</th>
+                        <th>Model</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="row-highlight">
+                        <td>
+                            <input type="checkbox" checked disabled title="Starting invoice" />
+                        </td>
+                        <td>
+                            <strong>@_primary.InvoiceNumber</strong>
+                            <span class="muted"> (current)</span>
+                        </td>
+                        <td>@(_primary.CustomerName ?? "—")</td>
+                        <td>@_primary.DeviceCount</td>
+                        <td>@(_primary.PrinterModel ?? "—")</td>
+                        <td>@(_primary.InvoiceDate?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                    </tr>
+                    @foreach (var c in _candidates)
+                    {
+                        var on = _selectedIds.Contains(c.Id);
+                        <tr>
+                            <td>
+                                <input type="checkbox" checked="@on"
+                                       disabled="@_invoicesLocked"
+                                       @onchange="e => ToggleInvoice(c.Id, e)" />
+                            </td>
+                            <td><strong>@c.InvoiceNumber</strong></td>
+                            <td>@(c.CustomerName ?? "—")</td>
+                            <td>@c.DeviceCount</td>
+                            <td>@(c.PrinterModel ?? "—")</td>
+                            <td>@(c.InvoiceDate?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (!_candidates.Any())
+        {
+            <p class="help-text" style="margin-top:8px">
+                No other invoices for this customer without a PO. You can still link this invoice alone.
+            </p>
+        }
+
+        <div class="form-actions" style="margin-top:12px">
+            <div class="help-text" style="flex:1;margin:0">
+                <strong>@_selectedIds.Count</strong> invoice(s) selected ·
+                <strong>@SelectedDeviceCount()</strong> device(s)
+                @if (_invoicesLocked)
+                {
+                    <span class="ok-text"> — locked for PO entry</span>
+                }
+            </div>
+            @if (!_invoicesLocked)
+            {
+                <button class="btn btn-primary" type="button" @onclick="LockInvoices"
+                        disabled="@(_selectedIds.Count == 0)">
+                    Continue to PO / serials
+                </button>
+            }
+            else
+            {
+                <button class="btn btn-ghost" type="button" @onclick="UnlockInvoices" disabled="@_busy">
+                    Change invoice selection
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@if (_invoicesLocked)
+{
+    <div class="card">
+        <div class="card-title">2. PO source</div>
+        <div class="source-radios">
+            <label><input type="radio" name="mode" checked="@(_mode == "manual")" @onchange="@(() => _mode = "manual")" /> Manual PO entry (default — no Zoho)</label>
+            <label><input type="radio" name="mode" checked="@(_mode == "zoho")" @onchange="@(() => _mode = "zoho")" /> Fetch from Zoho (optional)</label>
+        </div>
+        <p class="help-text">
+            Prefer <strong>Manual PO entry</strong> when Zoho is unavailable or you have the OEM PO on paper/PDF.
+            Linking to:
+            <strong>@string.Join(", ", SelectedInvoiceLabels())</strong>
+        </p>
+    </div>
+
+    @if (_mode == "manual")
+    {
+        <div class="card">
+            <div class="card-title">3. Manual Purchase Order</div>
+            <p class="help-text">Type details from the OEM PO PDF. Paste <em>all</em> PO serials covering the selected invoices.</p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>PO number *</label>
+                    <input class="form-control" @bind="_mPoNo" placeholder="PO-2627-0087" />
+                </div>
+                <div class="form-group">
+                    <label>OEM / Vendor</label>
+                    <input class="form-control" @bind="_mVendor" />
+                </div>
+                <div class="form-group">
+                    <label>Ref # (optional)</label>
+                    <input class="form-control" @bind="_mRef" />
+                </div>
+                <div class="form-group">
+                    <label>Currency</label>
+                    <input class="form-control" @bind="_mCurrency" />
+                </div>
+                <div class="form-group">
+                    <label>PO qty (total on OEM PO)</label>
+                    <input class="form-control" type="number" min="0" @bind="_mQty" />
+                </div>
+                <div class="form-group">
+                    <label>PO date</label>
+                    <input class="form-control" type="date" @bind="_mDate" />
+                </div>
+                <div class="form-group">
+                    <label>Item / notes</label>
+                    <input class="form-control" @bind="_mItem" />
+                </div>
+            </div>
+
+            <div class="section-hdr">PO serial numbers (paste from PO)</div>
+            <p class="help-text">
+                Paste serials for <strong>all</strong> selected invoices. Leave empty to link PO number only (Manager/Admin — reason required).
+            </p>
+            <textarea class="form-control" rows="8" @bind="_mSerials"
+                      placeholder="Paste all PO serials for the clubbed invoices…"></textarea>
+
+            <div class="form-actions">
+                <button class="btn btn-primary" @onclick="RunManualValidation"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_mPoNo))">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Cross-validate &amp; prepare link
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-title">3. Select OEM Purchase Order (Zoho)</div>
+            <div class="section-hdr">Fetch one PO by number</div>
+            <div class="search-bar">
+                <input class="search-input" style="max-width:260px" @bind="_manualPoNo" @bind:event="oninput"
+                       placeholder="PO-2627-…" />
+                <button class="btn btn-primary" @onclick="FetchSinglePo"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_manualPoNo) || _manualPoNo.Trim() == "PO-2627-")">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Fetch this PO
+                </button>
+            </div>
+            <p class="help-text">Loads only that PO from Zoho (faster than the full list).</p>
+
+            <div class="section-hdr" style="margin-top:16px">Or load full OEM PO list</div>
+            <div class="search-bar">
+                <button class="btn btn-ghost" @onclick="LoadPos" disabled="@_busy">
+                    Load Issued / Closed POs from Zoho
+                </button>
+            </div>
+            <p class="help-text">If Zoho errors, switch to <strong>Manual PO entry</strong>.</p>
+
+            @if (_pos.Any())
+            {
+                <div class="tbl-wrap" style="margin-top:12px">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>PO Number</th>
+                                <th>Vendor</th>
+                                <th>Status</th>
+                                <th>Qty</th>
+                                <th>Ref → Invoice</th>
+                                <th>Currency</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var po in _pos)
+                            {
+                                var isMatch = SelectedInvoiceLabels().Any(inv =>
+                                    string.Equals(po.ReferenceNumber, inv, StringComparison.OrdinalIgnoreCase));
+                                <tr class="@(isMatch ? "row-highlight" : "")">
+                                    <td>
+                                        <input type="radio" name="po" checked="@(_selectedPoId == po.PurchaseOrderId)"
+                                               @onchange="@(() => _selectedPoId = po.PurchaseOrderId)" />
+                                    </td>
+                                    <td>@(isMatch ? "★ " : "")@po.PurchaseOrderNumber</td>
+                                    <td>@(po.VendorName ?? "—")</td>
+                                    <td><span class="pill open">@(po.Status ?? "—")</span></td>
+                                    <td>@po.Quantity</td>
+                                    <td>
+                                        @(po.ReferenceNumber ?? "—")
+                                        @if (isMatch) { <span class="ok-text"> Match</span> }
+                                    </td>
+                                    <td>@(po.CurrencyCode ?? "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <div class="card">
+            <div class="card-title">4. Serial Number Source</div>
+            <div class="source-radios">
+                <label><input type="radio" name="src" checked="@(_source == "pdf")" @onchange="@(() => _source = "pdf")" /> From attached PDF</label>
+                <label><input type="radio" name="src" checked="@(_source == "xlsx")" @onchange="@(() => _source = "xlsx")" /> From attached XLSX</label>
+                <label><input type="radio" name="src" checked="@(_source == "auto")" @onchange="@(() => _source = "auto")" /> From PO description (auto)</label>
+                <label><input type="radio" name="src" checked="@(_source == "manual")" @onchange="@(() => _source = "manual")" /> Manual paste</label>
+            </div>
+
+            @if (_source is "xlsx" or "pdf")
+            {
+                <div style="margin-top:12px">
+                    <InputFile OnChange="OnFile" accept="@(_source == "xlsx" ? ".xlsx,.xls" : ".pdf")" />
+                    @if (!string.IsNullOrEmpty(_fileName))
+                    {
+                        <span class="muted" style="margin-left:8px">@_fileName (@FormatSize(_fileBytes?.Length ?? 0))</span>
+                    }
+                </div>
+            }
+            @if (_source == "manual")
+            {
+                <textarea class="form-control" rows="6" style="margin-top:12px" @bind="_manualSns"
+                          placeholder="Paste all PO serial numbers covering the selected invoices"></textarea>
+            }
+
+            <div class="form-actions">
+                <button class="btn btn-primary" @onclick="RunZohoValidation"
+                        disabled="@(_busy || (string.IsNullOrEmpty(_selectedPoId) && string.IsNullOrWhiteSpace(_manualPoNo)))">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Cross-validate &amp; prepare link
+                </button>
+            </div>
+        </div>
+    }
+}
+
+@if (_preview != null)
+{
+    <div class="card">
+        <div class="card-title">Validation Result — will link @_preview.SelectedBatchIds.Count invoice(s)</div>
+
+        @foreach (var w in _preview.Warnings)
+        {
+            <div class="alert-banner">@w</div>
+        }
+
+        @if (_preview.BatchMatches.Count > 0)
+        {
+            <div class="tbl-wrap" style="margin:12px 0">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Invoice</th>
+                            <th>Devices</th>
+                            <th>Matched</th>
+                            <th>Missing from PO</th>
+                            <th>Result</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var m in _preview.BatchMatches)
+                        {
+                            <tr class="@(m.Cross.PerfectMatch ? "" : "row-overdue")">
+                                <td><strong>@m.InvoiceNumber</strong></td>
+                                <td>@m.DeviceCount</td>
+                                <td>@m.Cross.Matched.Count</td>
+                                <td>@m.Cross.OnlyInInvoice.Count</td>
+                                <td>
+                                    @if (m.Cross.PerfectMatch)
+                                    {
+                                        <span class="ok-text">Ready to link</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-danger">Incomplete</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (_preview.AlreadyOnPo.Count > 0)
+        {
+            <p class="help-text">
+                Already on this PO:
+                <strong>@string.Join(", ", _preview.AlreadyOnPo.Select(b => b.InvoiceNumber))</strong>
+            </p>
+        }
+
+        @if (_preview.AllSelectedMatch)
+        {
+            <div class="success-msg">
+                <strong>PO Validation Successful</strong><br />
+                @_preview.PurchaseOrder.PurchaseOrderNumber will be linked to
+                <strong>@string.Join(", ", _preview.BatchMatches.Select(m => m.InvoiceNumber))</strong><br />
+                <span class="muted">Source: @_preview.SourceUsed</span>
+                @if (_preview.LatePoLabels.Count > 0)
+                {
+                    <div class="muted" style="margin-top:6px">
+                        Note (historical OK): @_preview.LatePoLabels.Count invoice(s) past the app PO window —
+                        @string.Join(", ", _preview.LatePoLabels)
+                    </div>
+                }
+            </div>
+            <div class="form-actions">
+                @if (_canValidate)
+                {
+                    <button class="btn btn-success" @onclick="() => Confirm(false)" disabled="@_busy">
+                        Confirm — link PO to @_preview.SelectedBatchIds.Count invoice(s)
+                    </button>
+                }
+                else
+                {
+                    <p class="help-text">Viewers cannot link a PO.</p>
+                }
+            </div>
+        }
+        else if (_preview.IsManualPo && _preview.SerialParse.SerialNumbers.Count == 0 && _canValidate)
+        {
+            <div class="form-group" style="margin-top:12px">
+                <label>Reason for linking PO without SN check</label>
+                <textarea class="form-control" rows="2" @bind="_acceptReason"
+                          placeholder="Linked from PO PDF / historical import"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-warning"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_acceptReason))"
+                        @onclick="() => Confirm(true)">
+                    Link PO number only to @_preview.SelectedBatchIds.Count invoice(s)
+                </button>
+            </div>
+        }
+        else if (_isAdmin)
+        {
+            <div class="mismatch-banner">
+                <strong>Some selected invoices are missing serials on this PO.</strong>
+                Admin can Accept Anyway to link all selected invoices.
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>Reason for accepting anyway (mandatory)</label>
+                <textarea class="form-control" rows="2" @bind="_acceptReason"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-warning"
+                        disabled="@(_busy || string.IsNullOrWhiteSpace(_acceptReason))"
+                        @onclick="() => Confirm(true)">
+                    Admin Override — link @_preview.SelectedBatchIds.Count invoice(s) anyway
+                </button>
+                <a href="/care-packs/@BatchId" class="btn btn-ghost">Cancel</a>
+            </div>
+        }
+        else
+        {
+            <p class="help-text">
+                Paste the full PO serial list covering every selected invoice, or ask Admin to accept SN discrepancies.
+            </p>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public int BatchId { get; set; }
+
+    string _mode = "manual";
+    string? _error, _selectedPoId, _fileName, _acceptReason, _manualSns;
+    string _manualPoNo = "PO-2627-";
+    string _source = "pdf";
+    string _mPoNo = "PO-2627-", _mVendor = "TSC AUTO ID TECHNOLOGY CO. LTD", _mRef = "", _mCurrency = "USD", _mItem = "", _mSerials = "";
+    int _mQty;
+    DateTime? _mDate = DateTime.Today;
+    byte[]? _fileBytes;
+    bool _busy, _isAdmin, _canValidate, _invoicesLocked;
+    List<ZohoPurchaseOrderSummary> _pos = new();
+    PoValidationPreview? _preview;
+    CarePackBatch? _primary;
+    List<CarePackBatch> _candidates = new();
+    HashSet<int> _selectedIds = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        var (_, role) = await Session.GetCurrentAsync();
+        _isAdmin = AppRoles.CanOverride(role);
+        _canValidate = AppRoles.CanValidatePo(role);
+        if (!_canValidate)
+        {
+            _error = "Viewers cannot validate or link an OEM PO.";
+            return;
+        }
+
+        _primary = await CarePack.GetBatchAsync(BatchId);
+        if (_primary == null)
+        {
+            _error = "Batch not found.";
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_primary.PurchaseOrderNumber))
+        {
+            _error = $"This invoice already has PO {_primary.PurchaseOrderNumber}.";
+            return;
+        }
+
+        _candidates = await CarePack.GetPoClubCandidatesAsync(BatchId);
+        _selectedIds = new HashSet<int> { BatchId };
+        _mRef = _primary.InvoiceNumber;
+        _mQty = _primary.InvoiceQty > 0 ? _primary.InvoiceQty : _primary.DeviceCount;
+    }
+
+    void ToggleInvoice(int id, ChangeEventArgs e)
+    {
+        if (_invoicesLocked || id == BatchId) return;
+        var on = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var x) && x;
+        if (on) _selectedIds.Add(id);
+        else _selectedIds.Remove(id);
+        RecalcDefaultQty();
+    }
+
+    void LockInvoices()
+    {
+        _error = null;
+        if (!_selectedIds.Contains(BatchId))
+            _selectedIds.Add(BatchId);
+        if (_selectedIds.Count == 0)
+        {
+            _error = "Select at least one Care Pack invoice.";
+            return;
+        }
+        _invoicesLocked = true;
+        _preview = null;
+        RecalcDefaultQty();
+    }
+
+    void UnlockInvoices()
+    {
+        _invoicesLocked = false;
+        _preview = null;
+        _acceptReason = null;
+    }
+
+    void RecalcDefaultQty()
+    {
+        var total = 0;
+        if (_primary != null && _selectedIds.Contains(_primary.Id))
+            total += _primary.InvoiceQty > 0 ? _primary.InvoiceQty : _primary.DeviceCount;
+        foreach (var c in _candidates.Where(x => _selectedIds.Contains(x.Id)))
+            total += c.InvoiceQty > 0 ? c.InvoiceQty : c.DeviceCount;
+        if (total > 0) _mQty = total;
+    }
+
+    int SelectedDeviceCount()
+    {
+        var n = 0;
+        if (_primary != null && _selectedIds.Contains(_primary.Id)) n += _primary.DeviceCount;
+        n += _candidates.Where(c => _selectedIds.Contains(c.Id)).Sum(c => c.DeviceCount);
+        return n;
+    }
+
+    IEnumerable<string> SelectedInvoiceLabels()
+    {
+        if (_primary != null && _selectedIds.Contains(_primary.Id))
+            yield return _primary.InvoiceNumber;
+        foreach (var c in _candidates.Where(x => _selectedIds.Contains(x.Id)))
+            yield return c.InvoiceNumber;
+    }
+
+    List<int> LinkIds() => _selectedIds.ToList();
+
+    async Task FetchSinglePo()
+    {
+        _busy = true; _error = null; _preview = null;
+        try
+        {
+            var one = await CarePack.GetPoSummaryByNumberAsync(_manualPoNo.Trim());
+            _pos = [one];
+            _selectedPoId = one.PurchaseOrderId;
+            if (!string.IsNullOrWhiteSpace(one.VendorName))
+                _mVendor = one.VendorName;
+            if (one.Quantity > 0)
+                _mQty = (int)one.Quantity;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _mode = "manual";
+            if (!string.IsNullOrWhiteSpace(_manualPoNo) && _manualPoNo.Trim() != "PO-2627-")
+                _mPoNo = _manualPoNo.Trim();
+        }
+        finally { _busy = false; }
+    }
+
+    async Task LoadPos()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var inv = _primary?.InvoiceNumber ?? "";
+            _pos = await CarePack.GetOemPosForInvoiceAsync(inv);
+            var labels = SelectedInvoiceLabels().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var match = _pos.FirstOrDefault(p =>
+                !string.IsNullOrEmpty(p.ReferenceNumber) && labels.Contains(p.ReferenceNumber));
+            if (match != null) _selectedPoId = match.PurchaseOrderId;
+            else if (_pos.Any()) _selectedPoId = _pos[0].PurchaseOrderId;
+        }
+        catch (Exception ex)
+        {
+            _error = "Zoho failed: " + ex.Message + " — switch to Manual PO entry.";
+            _mode = "manual";
+        }
+        finally { _busy = false; }
+    }
+
+    async Task OnFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        var file = e.File;
+        if (file.Size > 10 * 1024 * 1024)
+        {
+            _error = "File too large. Max 10 MB.";
+            return;
+        }
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(10 * 1024 * 1024).CopyToAsync(ms);
+        _fileBytes = ms.ToArray();
+        _fileName = file.Name;
+    }
+
+    async Task RunManualValidation()
+    {
+        if (!_invoicesLocked)
+        {
+            _error = "Lock invoice selection first (Continue to PO / serials).";
+            return;
+        }
+        _busy = true; _error = null; _preview = null;
+        try
+        {
+            _preview = await CarePack.PreviewManualPoValidationAsync(BatchId, new ManualPoRequest
+            {
+                PurchaseOrderNumber = _mPoNo,
+                VendorName = _mVendor,
+                ReferenceNumber = _mRef,
+                CurrencyCode = _mCurrency,
+                Quantity = _mQty > 0 ? _mQty : null,
+                Date = _mDate.HasValue ? DateOnly.FromDateTime(_mDate.Value) : null,
+                ItemName = _mItem,
+                SerialText = _mSerials,
+            }, LinkIds());
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task RunZohoValidation()
+    {
+        if (!_invoicesLocked)
+        {
+            _error = "Lock invoice selection first (Continue to PO / serials).";
+            return;
+        }
+        _busy = true; _error = null; _preview = null;
+        try
+        {
+            Stream? xlsx = null, pdf = null;
+            if (_source == "xlsx" && _fileBytes != null) xlsx = new MemoryStream(_fileBytes);
+            if (_source == "pdf" && _fileBytes != null) pdf = new MemoryStream(_fileBytes);
+
+            _preview = await CarePack.PreviewPoValidationAsync(
+                BatchId,
+                _selectedPoId,
+                string.IsNullOrWhiteSpace(_selectedPoId) ? _manualPoNo : null,
+                _manualSns,
+                xlsx, pdf,
+                _source,
+                LinkIds());
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _mode = "manual";
+        }
+        finally { _busy = false; }
+    }
+
+    async Task Confirm(bool acceptAnyway)
+    {
+        if (_preview == null) return;
+        _busy = true; _error = null;
+        try
+        {
+            await CarePack.ConfirmPoValidationAsync(
+                BatchId, _preview, acceptAnyway, _acceptReason, LinkIds());
+            Nav.NavigateTo($"/care-packs/{BatchId}");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    static string FormatSize(int bytes) =>
+        bytes < 1024 ? $"{bytes} B" : $"{bytes / 1024.0:0.0} KB";
+}

@@ -1,0 +1,21 @@
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            // forceLoad avoids Blazor soft-nav cancel errors on remote circuits
+            Nav.NavigateTo("/login", forceLoad: true);
+        }
+        catch (TaskCanceledException)
+        {
+            /* circuit disposed during redirect — ignore */
+        }
+        catch (ObjectDisposedException)
+        {
+            /* ignore */
+        }
+    }
+}

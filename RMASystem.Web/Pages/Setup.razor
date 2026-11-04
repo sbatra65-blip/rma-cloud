@@ -1,0 +1,177 @@
+@page "/setup"
+@layout LoginLayout
+@attribute [AllowAnonymous]
+@inject DatabaseSetupService DbSetup
+@inject DatabaseSetupState State
+@inject NavigationManager Nav
+@using RMASystem.Services
+
+<PageTitle>First-run setup — RMA System</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card" style="max-width:560px">
+        <div class="login-brand">RMA System</div>
+        <h1 class="login-title">Database setup</h1>
+        <p class="help-text">
+            @if (State.SqlMemoryPressure || (!_sqlOk && !State.AccessDenied))
+            {
+                <text>RMA is running in <strong>degraded mode</strong> (process stays up). Fix SQL below, then Refresh — no app restart required.</text>
+            }
+            else if (State.AccessDenied)
+            {
+                <text>
+                    SQL Server is reachable, but this Windows account cannot open <strong>@_dbName</strong>.
+                    Grant access (do not invent data) — see steps below.
+                </text>
+            }
+            else
+            {
+                <text>
+                    SQL Server is available, but the <strong>RMASystem</strong> database or tables are not ready yet.
+                    Nothing is created until you confirm below (poka-yoke).
+                </text>
+            }
+        </p>
+
+        <div class="info-grid" style="margin:16px 0;text-align:left">
+            <div class="info-row"><div class="lbl">SQL Server</div><div class="val"><code>@_server</code></div></div>
+            <div class="info-row"><div class="lbl">Database</div><div class="val"><code>@_dbName</code></div></div>
+            <div class="info-row"><div class="lbl">Database exists</div><div class="val">@(_dbExists ? "Yes" : "No")</div></div>
+            <div class="info-row"><div class="lbl">Tables ready</div><div class="val">@(_hasTables ? "Yes" : "No")</div></div>
+            <div class="info-row"><div class="lbl">SQL reachable</div><div class="val">@(_sqlOk ? "Yes" : "No")</div></div>
+            <div class="info-row"><div class="lbl">Windows login</div><div class="val"><code>@_windowsUser</code></div></div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="error-msg">@_error</div>
+        }
+        @if (!string.IsNullOrEmpty(_ok))
+        {
+            <div class="success-msg">@_ok</div>
+        }
+
+        @if (State.AccessDenied)
+        {
+            <div class="alert-banner danger">
+                <div><strong>Windows account lacks SQL access</strong> to <code>@_dbName</code>.</div>
+                <ol style="margin:8px 0 0 18px;text-align:left">
+                    <li>Open an <strong>elevated</strong> PowerShell (Run as Administrator)</li>
+                    <li>Run:
+                        <code>cd "C:\Program Files\RMA System\Tools"</code>
+                    </li>
+                    <li>Run:
+                        <code>.\grant-db-access.ps1</code>
+                        (or <code>.\grant-db-access.ps1 -WindowsUser "MACHINE\user"</code>)
+                        — grants login + <code>db_owner</code> without recreating the database
+                    </li>
+                    <li>Also grants <code>NT AUTHORITY\SYSTEM</code> so the Windows service can open the DB</li>
+                    <li>Restart the <strong>RMASystem</strong> Windows service, then click <strong>Refresh status</strong></li>
+                </ol>
+            </div>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:16px">
+                <button class="btn btn-primary" type="button" @onclick="Refresh" disabled="@_busy">Refresh status</button>
+            </div>
+        }
+        else if (!_sqlOk || State.SqlMemoryPressure)
+        {
+            <div class="alert-banner danger">
+                @if (State.SqlMemoryPressure)
+                {
+                    <div><strong>SQL Server is out of memory</strong> on this PC.</div>
+                    <ol style="margin:8px 0 0 18px;text-align:left">
+                        <li>Close Chrome / unused VS windows to free RAM</li>
+                        <li>Restart service: <code>MSSQL$SQLEXPRESS</code> (Services.msc)</li>
+                        <li>Click <strong>Refresh status</strong> — RMA auto-recovers when SQL is healthy</li>
+                    </ol>
+                }
+                else
+                {
+                    <text>
+                        Cannot reach SQL Server. Install SQL Server Express, check <code>config.ini</code>
+                        <code>[Database] Server=.\SQLEXPRESS</code>, then click Refresh.
+                    </text>
+                }
+            </div>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:16px">
+                <button class="btn btn-primary" type="button" @onclick="Refresh" disabled="@_busy">Refresh status</button>
+            </div>
+        }
+        else if (_hasTables)
+        {
+            <div class="success-msg">Database is ready.</div>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:16px">
+                <a class="btn btn-primary" href="/login">Continue to sign in</a>
+            </div>
+        }
+        else
+        {
+            <label class="check-row" style="text-align:left;margin:12px 0">
+                <input type="checkbox" @bind="_confirmed" />
+                I authorize creating the <strong>@_dbName</strong> database and application tables on this SQL Server.
+            </label>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:8px">
+                <button class="btn btn-success" type="button"
+                        disabled="@(_busy || !_confirmed)"
+                        @onclick="CreateDb">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Create database &amp; tables
+                </button>
+                <button class="btn btn-ghost" type="button" @onclick="Refresh" disabled="@_busy">Refresh</button>
+            </div>
+            <p class="help-text" style="margin-top:12px;text-align:left">
+                You can also approve this during install (task: <em>Create RMA System database</em>),
+                or run <code>Tools\grant-db-access.ps1</code> / <code>ensure-sql-access.ps1</code> as Administrator.
+                Default admin after setup: <code>admin</code> / <code>ChangeMe@123</code> (must change password).
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    bool _busy, _confirmed, _sqlOk, _dbExists, _hasTables;
+    string _server = "", _dbName = "RMASystem";
+    string _windowsUser = Environment.UserDomainName + @"\" + Environment.UserName;
+    string? _error, _ok;
+
+    protected override async Task OnInitializedAsync() => await Refresh();
+
+    async Task Refresh()
+    {
+        _error = _ok = null;
+        _busy = true;
+        try
+        {
+            await DbSetup.RefreshStateAsync();
+            _sqlOk = !State.SqlUnreachable;
+            _dbExists = State.DatabaseExists;
+            _hasTables = State.HasTables;
+            _server = State.SqlServer;
+            _dbName = State.DatabaseName;
+            _error = State.LastError;
+            if (_hasTables && !State.NeedsConsent && !State.SqlUnreachable && !State.AccessDenied)
+                Nav.NavigateTo("/login", forceLoad: true);
+        }
+        catch (Exception ex) { _error = SqlResilience.UserMessage(ex); }
+        finally { _busy = false; }
+    }
+
+    async Task CreateDb()
+    {
+        if (!_confirmed) return;
+        _error = _ok = null;
+        _busy = true;
+        try
+        {
+            await DbSetup.ConsentAndInitializeAsync("ui-setup-page");
+            _ok = "Database and tables created. Redirecting to login…";
+            await Refresh();
+            Nav.NavigateTo("/login", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            _error = SqlResilience.UserMessage(ex);
+        }
+        finally { _busy = false; }
+    }
+}

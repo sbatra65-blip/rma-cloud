@@ -1,0 +1,82 @@
+@page "/login"
+@layout LoginLayout
+@attribute [AllowAnonymous]
+@inject CompanyService Companies
+
+<PageTitle>Login — RMA System</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card">
+        <div class="login-brand">RMA System</div>
+        <h1 class="login-title">Sign in</h1>
+        <p class="help-text">Select your company first. Users belong to one company only.</p>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="error-msg">@_error</div>
+        }
+
+        <form method="post" action="/api/auth/login">
+            <div class="form-group">
+                <label>Company</label>
+                <select class="form-control" name="companyId" required>
+                    @if (_companies.Count == 0)
+                    {
+                        <option value="">No companies configured</option>
+                    }
+                    else
+                    {
+                    @foreach (var c in _companies)
+                    {
+                        if (c.Id == _defaultCompanyId)
+                        {
+                            <option value="@c.Id" selected>@c.Code — @c.Name</option>
+                        }
+                        else
+                        {
+                            <option value="@c.Id">@c.Code — @c.Name</option>
+                        }
+                    }
+                    }
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input class="form-control" name="userName" autocomplete="username" required autofocus />
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input class="form-control" type="password" name="password" autocomplete="current-password" required />
+            </div>
+            <button class="btn btn-primary" type="submit" style="width:100%;margin-top:12px"
+                    disabled="@(_companies.Count == 0)">Sign in</button>
+        </form>
+        <p class="help-text" style="margin-top:16px">
+            First install default per company: <code>admin</code> / <code>ChangeMe@123</code> (must change password).
+        </p>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? Error { get; set; }
+    string? _error;
+    List<Company> _companies = [];
+    int _defaultCompanyId = CompanyIds.InfiniteSolutions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _error = Error;
+        try
+        {
+            _companies = await Companies.ListActiveAsync();
+            if (_companies.Any(c => c.Id == CompanyIds.InfiniteSolutions))
+                _defaultCompanyId = CompanyIds.InfiniteSolutions;
+            else if (_companies.Count > 0)
+                _defaultCompanyId = _companies[0].Id;
+        }
+        catch (Exception ex)
+        {
+            _error = SqlResilience.UserMessage(ex, "Could not load companies. Check SQL Server.");
+        }
+    }
+}

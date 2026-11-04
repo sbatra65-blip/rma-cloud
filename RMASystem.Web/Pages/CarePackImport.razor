@@ -1,0 +1,919 @@
+@page "/care-packs/import"
+@page "/care-packs/manual"
+@inject CarePackService CarePack
+@inject CarePackDraftStore Drafts
+@inject UserSessionService Session
+@inject CompanyService Companies
+@inject CarePackImportSourceRegistry ImportSources
+@inject MasterDataService Masters
+@inject NavigationManager Nav
+
+<PageTitle>Register Care Pack — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Register Care Pack</h1>
+        <p class="page-hero-sub">
+            Default is <strong>Manual entry</strong> — type invoice, products, OEM, period, and serials with no Zoho or PDF required.
+            Optionally prefill from a PDF, or fetch from Zoho when available. Duplicate invoice numbers and product serials are blocked.
+        </p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/care-packs" class="btn btn-ghost">← Back</a>
+    </div>
+</div>
+
+@if (!_canImport)
+{
+    <div class="alert-banner danger">Your role cannot import care packs. Ask a Manager or Admin.</div>
+}
+else
+{
+    <div class="card" style="margin-bottom:12px">
+        <div class="seg-toggle" title="Registration source">
+            <button type="button" class="@(_mode == "manual" ? "active" : "")" @onclick='() => SetMode("manual")'>
+                <i class="ti ti-keyboard" aria-hidden="true"></i> Manual entry
+            </button>
+            <button type="button" class="@(_mode == "pdf" ? "active" : "")" @onclick='() => SetMode("pdf")'>
+                <i class="ti ti-file-type-pdf" aria-hidden="true"></i> Prefill from PDF
+            </button>
+            <button type="button" class="@(_mode == "zoho" ? "active" : "")" @onclick='() => SetMode("zoho")'>
+                <i class="ti ti-cloud-download" aria-hidden="true"></i> From Zoho
+            </button>
+        </div>
+        <p class="help-text" style="margin-top:10px;margin-bottom:0">
+            Use <strong>Manual entry</strong> for day-to-day registration. PDF and Zoho only prefill the same form — they are optional.
+        </p>
+    </div>
+
+    @if (_mode == "manual" || _mode == "pdf")
+    {
+        <CarePackPdfImportForm PreferPdfUpload="@(_mode == "pdf")" />
+    }
+    else
+    {
+    <div class="card">
+        <div class="card-title">1. Fetch Invoice</div>
+        <div class="search-bar">
+            <input class="search-input" @bind="_invoiceNo" @bind:event="oninput"
+                   placeholder="@(_invoicePrefix)…" />
+            <button class="btn btn-primary" @onclick="Fetch" disabled="@(_busy || string.IsNullOrWhiteSpace(_invoiceNo) || IsPrefixOnly(_invoiceNo))">
+                @if (_busy) { <span class="spinner"></span> }
+                Fetch from Zoho
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="error-msg">@_error</div>
+        }
+        @if (_zohoDraftBanner)
+        {
+            <div class="alert-banner" style="margin-top:10px">
+                Zoho draft for invoice <strong>@_invoiceNo</strong> saved
+                @_zohoDraftAt?.ToString("dd-MMM-yyyy HH:mm").
+                Fetch again to reload Zoho lines — your serials will be re-applied.
+                <button class="btn btn-ghost btn-sm" type="button" @onclick="DiscardZohoDraft">Discard draft</button>
+            </div>
+        }
+        <p class="help-text" style="margin-top:10px">
+            Zoho error? Switch to <button type="button" class="btn btn-ghost btn-sm" @onclick='() => SetMode("manual")'>Manual entry</button>
+            or <button type="button" class="btn btn-ghost btn-sm" @onclick='() => SetMode("pdf")'>Prefill from PDF</button>
+            — drafts are kept so you can continue.
+        </p>
+    </div>
+
+    @if (_preview != null)
+    {
+        var p = _preview;
+        var selected = _products.Where(x => x.Selected).ToList();
+        var incomplete = selected.Count(x => !x.IsComplete);
+        var anyMismatch = selected.Any(x => x.Set.Mismatch.HasMismatch);
+
+        <div class="card">
+            <div class="card-title">2. Invoice (editable draft)</div>
+            <p class="help-text">
+                Zoho values are prefilled. You may change the invoice number, products, OEM, model, and period before register.
+                Source Zoho invoice: <code>@p.Invoice.InvoiceNumber</code>
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Register as invoice number *</label>
+                    <input class="form-control" @bind="_registerInvoiceNo" @bind:event="oninput" @bind:after="PersistZohoDraftAsync"
+                           disabled="@(!_canEditSerials)" />
+                </div>
+                <div class="form-group">
+                    <label>Customer</label>
+                    <input class="form-control" value="@(p.Invoice.CustomerName ?? "—")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input class="form-control" value="@(p.Invoice.Date ?? "—")" readonly />
+                </div>
+                <div class="form-group">
+                    <label>IRN</label>
+                    <input class="form-control" @bind="_manualIrn" @bind:event="oninput" disabled="@(!_canEditSerials)" />
+                </div>
+            </div>
+            @if (!string.Equals(_registerInvoiceNo?.Trim(), p.Invoice.InvoiceNumber, StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="form-group" style="margin-top:8px">
+                    <label>Invoice # edit reason @(string.IsNullOrWhiteSpace(p.Invoice.Irn) ? "" : "* (IRN)")</label>
+                    <input class="form-control" @bind="_invoiceEditReason" @bind:event="oninput"
+                           placeholder="Why is the registered invoice number different from Zoho?" />
+                </div>
+            }
+
+            <div class="section-hdr">Products on this draft</div>
+            <p class="help-text">
+                Check products to register. Edit model / OEM / period per product below. Use <strong>Add product</strong> for lines not on Zoho.
+            </p>
+            <label class="check-row" style="margin-top:0">
+                <input type="checkbox" checked="@AllSelected" @onchange="ToggleSelectAll" disabled="@(!_canEditSerials)" />
+                Select all (@selected.Count of @_products.Count)
+            </label>
+
+            <div class="tbl-wrap" style="margin-top:10px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>#</th>
+                            <th>Product Model</th>
+                            <th>OEM</th>
+                            <th>Care pack</th>
+                            <th>Qty</th>
+                            <th>Serials</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in _products)
+                        {
+                            <tr class="@(d.Selected ? "row-selected" : null)">
+                                <td>
+                                    <input type="checkbox" checked="@d.Selected"
+                                           disabled="@(!_canEditSerials)"
+                                           @onchange="e => ToggleProduct(d, (bool)(e.Value ?? false))" />
+                                </td>
+                                <td>#@d.Set.SetIndex @(d.IsAddedProduct ? "(added)" : "")</td>
+                                <td>@(d.ProductModel ?? d.ProductItemName)</td>
+                                <td>@(d.OemBrand ?? "—")</td>
+                                <td>@(string.IsNullOrWhiteSpace(d.CarePackType) ? "—" : d.CarePackType)</td>
+                                <td>@d.Qty</td>
+                                <td>
+                                    <span class="@(d.FilledCount == d.Qty ? "ok-text" : "muted")">
+                                        @d.FilledCount / @d.Qty
+                                    </span>
+                                </td>
+                                <td>
+                                    @if (_canEditSerials && (_products.Count > 1 || d.IsAddedProduct))
+                                    {
+                                        <button class="btn btn-ghost btn-sm" type="button" @onclick="() => RemoveProduct(d)">Remove</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_canEditSerials)
+            {
+                <div class="form-actions" style="justify-content:flex-start;margin-top:10px">
+                    <button class="btn btn-primary btn-sm" type="button" @onclick="AddProduct">+ Add product</button>
+                </div>
+            }
+        </div>
+
+        <div class="card">
+            <div class="card-title">3. Edit products &amp; serial numbers</div>
+            <p class="help-text">
+                Change Product / Model / OEM / Period as needed. If values differ from Zoho (especially with IRN), enter an edit reason.
+                @if (!_canEditSerials)
+                {
+                    <span class="muted"> Viewer role — editing disabled.</span>
+                }
+            </p>
+
+            @if (selected.Count == 0)
+            {
+                <div class="alert-banner">Select at least one product above.</div>
+            }
+
+            @foreach (var d in selected)
+            {
+                <div class="product-sn-panel">
+                    <div class="product-sn-hdr">
+                        <strong>#@d.Set.SetIndex · @(d.ProductModel ?? d.ProductItemName)</strong>
+                        <span class="muted">@(d.FilledCount)/@d.Qty serials · @(d.CarePackType ?? "no CP length")</span>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>OEM *</label>
+                            <MasterPicker Kind="oem" Value="d.OemVendorId" ValueChanged="id => OnZohoOem(d, id)"
+                                          Disabled="@(!_canEditSerials)" Placeholder="— Select or add OEM —" />
+                        </div>
+                        <div class="form-group">
+                            <label>Product *</label>
+                            <MasterPicker Kind="product" ParentId="d.OemVendorId" Value="d.ProductId"
+                                          ValueChanged="id => OnZohoProduct(d, id)"
+                                          Disabled="@(!_canEditSerials)" Placeholder="— Select or add product —" />
+                        </div>
+                        <div class="form-group">
+                            <label>Model *</label>
+                            <MasterPicker Kind="model" ParentId="d.ProductId" Value="d.ProductModelId"
+                                          ValueChanged="id => OnZohoModel(d, id)"
+                                          Disabled="@(!_canEditSerials)" Placeholder="— Select or add model —" />
+                        </div>
+                        <div class="form-group">
+                            <label>Product Model *</label>
+                            <input class="form-control" @bind="d.ProductModel" @bind:event="oninput" @bind:after="PersistZohoDraftAsync"
+                                   disabled="@(!_canEditSerials)" />
+                        </div>
+                        <div class="form-group">
+                            <label>OEM Brand</label>
+                            <input class="form-control" @bind="d.OemBrand" @bind:event="oninput" @bind:after="PersistZohoDraftAsync"
+                                   disabled="@(!_canEditSerials)" />
+                        </div>
+                        <div class="form-group">
+                            <label>Care pack type *</label>
+                            <MasterPicker Kind="carepacktype" Value="d.CarePackTypeId"
+                                          ValueChanged="id => OnZohoCarePackType(d, id)"
+                                          Disabled="@(!_canEditSerials)" Placeholder="— Select or add type —" />
+                        </div>
+                        <div class="form-group">
+                            <label>Product line / item</label>
+                            <input class="form-control" @bind="d.ProductItemName" @bind:event="oninput" @bind:after="PersistZohoDraftAsync"
+                                   disabled="@(!_canEditSerials)" />
+                        </div>
+                        <div class="form-group">
+                            <label>Quantity *</label>
+                            <input class="form-control" type="number" min="1" value="@d.Qty"
+                                   disabled="@(!_canEditSerials)"
+                                   @onchange="e => ChangeQty(d, e.Value?.ToString())" />
+                        </div>
+                        <div class="form-group">
+                            <label>Edit reason (if changed from Zoho)</label>
+                            <input class="form-control" @bind="d.EditReason" @bind:event="oninput" @bind:after="PersistZohoDraftAsync"
+                                   disabled="@(!_canEditSerials)" placeholder="Required when IRN + fields differ from Zoho" />
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(d.Set.CombinedDescription) && !d.IsAddedProduct)
+                    {
+                        <pre class="desc-box" style="max-height:90px;overflow:auto">@d.Set.CombinedDescription</pre>
+                    }
+
+                    <div class="section-hdr">Product Serial Numbers</div>
+                    @if (_canEditSerials)
+                    {
+                        <div class="form-group" style="margin-top:0">
+                            <label>Paste all serial numbers for this product (top — easy access)</label>
+                            <textarea class="form-control" rows="3" @bind="d.PasteBlock" @bind:event="oninput"
+                                      placeholder="Paste all serials — qty updates automatically"></textarea>
+                        </div>
+                        <div class="form-actions" style="justify-content:flex-start;margin-top:6px;margin-bottom:10px">
+                            <button class="btn btn-primary btn-sm" type="button" @onclick="() => ApplyPaste(d)">
+                                Apply paste → set qty &amp; slots
+                            </button>
+                            @if (!d.IsAddedProduct)
+                            {
+                                <button class="btn btn-ghost btn-sm" type="button" @onclick="() => ReloadDetected(d)"
+                                        disabled="@(d.Set.SerialNumbers.Count == 0)">
+                                    Reload detected (@d.Set.SerialNumbers.Count)
+                                </button>
+                            }
+                            <span class="muted">Qty will become the serial count</span>
+                        </div>
+                    }
+                    @for (var i = 0; i < d.SerialSlots.Count; i++)
+                    {
+                        var idx = i;
+                        <div class="form-group" style="margin-bottom:8px">
+                            <label>Product Serial Number @(idx + 1) of @d.Qty</label>
+                            <input class="form-control" value="@d.SerialSlots[idx]"
+                                   disabled="@(!_canEditSerials)"
+                                   placeholder="e.g. T6EV…"
+                                   @onchange="e => SetSlot(d, idx, e.Value?.ToString())" />
+                        </div>
+                    }
+
+                    @if (!d.IsAddedProduct && d.Set.Mismatch.HasMismatch)
+                    {
+                        <div class="alert-banner danger" style="margin-top:10px">
+                            Brand mismatch on this product: @d.Set.Mismatch.Message — correct OEM/Model above and add a reason, or use Admin Override.
+                        </div>
+                    }
+                    else if (!d.IsComplete)
+                    {
+                        <div class="alert-banner" style="margin-top:10px">
+                            Complete model, care pack length, and all @d.Qty product serial number(s) before register.
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="help-text" style="margin-bottom:12px">
+            Signed in as <strong>@_userName</strong>
+            (<span class="@(_isAdmin ? "ok-text" : "muted")">@_role</span>).
+        </div>
+
+        @if (selected.Count == 0)
+        {
+            <div class="alert-banner danger">Select products to register.</div>
+        }
+        else if (incomplete > 0)
+        {
+            <div class="alert-banner danger">
+                Cannot register — @incomplete selected product(s) still need serials or care pack length.
+            </div>
+        }
+        else if (anyMismatch)
+        {
+            <div class="mismatch-banner">
+                <div>
+                    <strong>BRAND MISMATCH</strong>
+                    <div>One or more selected products have a brand/model mismatch. Use Admin Override, or uncheck those products.</div>
+                </div>
+                <div class="mismatch-actions">
+                    <button class="btn btn-ghost" @onclick="Fetch">Re-fetch</button>
+                    @if (_isAdmin)
+                    {
+                        <button class="btn btn-warning" @onclick="() => _showOverride = true">Admin Override</button>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="success-msg">Selected products look complete — you can register.</div>
+            <div class="form-actions">
+                <button class="btn btn-success" @onclick="() => ImportSelected(false)"
+                        disabled="@(_busy || incomplete > 0 || selected.Count == 0)">
+                    Register @selected.Count product(s)
+                </button>
+                @if (_isAdmin)
+                {
+                    <button class="btn btn-warning" @onclick="() => _showOverride = true">Admin Override</button>
+                }
+            </div>
+        }
+
+        @if (_showOverride && _isAdmin)
+        {
+            var focus = selected.FirstOrDefault() ?? _products.FirstOrDefault();
+            <div class="card override-panel">
+                <div class="card-title">ADMIN OVERRIDE</div>
+                <p class="help-text">Applies to all selected products on this register action. IRN invoice values stay locked.</p>
+                <div class="override-grid">
+                    <div>
+                        <div class="section-hdr">ORIGINAL (first selected)</div>
+                        <div class="info-row"><div class="lbl">Brand</div><div class="val">@(focus?.Set.Mismatch.ItemBrand ?? "—")</div></div>
+                        <div class="info-row"><div class="lbl">Model</div><div class="val">@(focus?.Set.Mismatch.Model ?? "—")</div></div>
+                        <div class="info-row"><div class="lbl">Care Pack</div><div class="val">@(focus?.Set.Mismatch.CarePackType ?? "—")</div></div>
+                    </div>
+                    <div>
+                        <div class="section-hdr">CORRECTED</div>
+                        <div class="form-group">
+                            <label>Brand</label>
+                            <select class="form-control" @bind="_corrBrand">
+                                @foreach (var b in OemBrandCatalog.Brands) { <option value="@b">@b</option> }
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Product Model</label>
+                            <input class="form-control" @bind="_corrModel" />
+                        </div>
+                        <div class="form-group">
+                            <label>Care Pack</label>
+                            <select class="form-control" @bind="_corrType">
+                                @foreach (var t in OemBrandCatalog.CarePackTypes) { <option value="@t">@t</option> }
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>IRN</label>
+                            <input class="form-control" @bind="_manualIrn" />
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:12px">
+                    <label>Reason (mandatory)</label>
+                    <textarea class="form-control" rows="3" @bind="_overrideReason"></textarea>
+                </div>
+                <label class="check-row">
+                    <input type="checkbox" @bind="_overrideConfirmed" />
+                    I confirm this override is correct and take responsibility
+                </label>
+                <div class="form-actions">
+                    <button class="btn btn-ghost" @onclick="() => _showOverride = false">Cancel</button>
+                    <button class="btn btn-success"
+                            disabled="@(!CanApplyOverride || _busy || incomplete > 0 || selected.Count == 0)"
+                            @onclick="() => ImportSelected(true)">
+                        Apply Override &amp; Register @selected.Count
+                    </button>
+                </div>
+            </div>
+        }
+    }
+    } @* end zoho mode *@
+}
+
+@code {
+    string _mode = "manual";
+    string _invoicePrefix = "IS-GST-2627-";
+    string _invoiceNo = "IS-GST-2627-";
+    string? _error;
+    bool _busy, _canImport, _isAdmin, _canEditSerials, _showOverride, _zohoDraftBanner;
+    CarePackImportPreview? _preview;
+    List<ProductDraft> _products = new();
+    string _userName = "", _role = "";
+    DateTime? _zohoDraftAt;
+    CarePackZohoDraft? _pendingZohoDraft;
+
+    string _corrBrand = "Printronix", _corrModel = "", _corrType = "5 Year";
+    string _overrideReason = "", _manualIrn = "";
+    string _registerInvoiceNo = "", _invoiceEditReason = "";
+    bool _overrideConfirmed;
+
+    bool AllSelected => _products.Count > 0 && _products.All(p => p.Selected);
+
+    bool CanApplyOverride =>
+        !string.IsNullOrWhiteSpace(_overrideReason) && _overrideConfirmed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        _invoicePrefix = await Companies.GetActiveInvoicePrefixAsync();
+        _invoiceNo = _invoicePrefix;
+
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var path = uri.AbsolutePath.TrimEnd('/').ToLowerInvariant();
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (path.EndsWith("/care-packs/manual"))
+            _mode = "manual";
+        else if (q.TryGetValue("src", out var src))
+        {
+            var s = src.ToString();
+            if (string.Equals(s, "zoho", StringComparison.OrdinalIgnoreCase))
+                _mode = "zoho";
+            else if (string.Equals(s, "pdf", StringComparison.OrdinalIgnoreCase))
+                _mode = "pdf";
+            else
+                _mode = "manual";
+        }
+        else
+            _mode = "manual";
+
+        var (name, role) = await Session.GetCurrentAsync();
+        _userName = name;
+        _role = role;
+        _canImport = AppRoles.CanImport(role);
+        _isAdmin = AppRoles.CanOverride(role);
+        _canEditSerials = AppRoles.CanEditSerials(role);
+
+        // Restore Zoho draft banner only on Zoho tab — never override Manual default.
+        _pendingZohoDraft = await Drafts.LoadZohoDraftAsync(_userName);
+        if (_mode == "zoho" && _pendingZohoDraft != null && !string.IsNullOrWhiteSpace(_pendingZohoDraft.InvoiceNumber))
+        {
+            _invoiceNo = _pendingZohoDraft.InvoiceNumber;
+            _zohoDraftBanner = true;
+            _zohoDraftAt = _pendingZohoDraft.SavedAt;
+        }
+    }
+
+    void SetMode(string mode)
+    {
+        _mode = mode is "manual" or "pdf" or "zoho" ? mode : "manual";
+        _error = null;
+    }
+
+    bool IsPrefixOnly(string? inv)
+    {
+        var t = (inv ?? "").Trim();
+        var p = (_invoicePrefix ?? "").Trim().TrimEnd('-');
+        return string.IsNullOrWhiteSpace(t) ||
+               string.Equals(t, _invoicePrefix.Trim(), StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(t, p, StringComparison.OrdinalIgnoreCase);
+    }
+
+    async Task DiscardZohoDraft()
+    {
+        await Drafts.ClearZohoDraftAsync(_userName);
+        _pendingZohoDraft = null;
+        _zohoDraftBanner = false;
+    }
+
+    async Task PersistZohoDraftAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_invoiceNo) || IsPrefixOnly(_invoiceNo))
+            return;
+        try
+        {
+            var draft = new CarePackZohoDraft
+            {
+                InvoiceNumber = string.IsNullOrWhiteSpace(_registerInvoiceNo)
+                    ? _invoiceNo.Trim()
+                    : _registerInvoiceNo.Trim(),
+                ManualIrn = _manualIrn,
+                CorrBrand = _corrBrand,
+                CorrModel = _corrModel,
+                CorrType = _corrType,
+                Products = _products.Select(p => new CarePackZohoDraftProduct
+                {
+                    LineSetIndex = p.Set.SetIndex,
+                    Selected = p.Selected,
+                    Qty = p.Qty,
+                    CarePackType = p.CarePackType,
+                    SerialSlots = p.SerialSlots.ToList(),
+                    PasteBlock = p.PasteBlock,
+                }).ToList(),
+            };
+            await Drafts.SaveZohoDraftAsync(_userName, draft);
+            _pendingZohoDraft = draft;
+            _zohoDraftAt = draft.SavedAt;
+            _zohoDraftBanner = true;
+        }
+        catch { /* best-effort */ }
+    }
+
+    void ApplyZohoDraftToProducts()
+    {
+        if (_pendingZohoDraft == null || _products.Count == 0) return;
+        foreach (var d in _products)
+        {
+            var saved = _pendingZohoDraft.Products.FirstOrDefault(x => x.LineSetIndex == d.Set.SetIndex);
+            if (saved == null) continue;
+            d.Selected = saved.Selected;
+            if (!string.IsNullOrWhiteSpace(saved.CarePackType))
+                d.CarePackType = saved.CarePackType;
+            d.ResizeSlots(Math.Max(1, saved.Qty));
+            for (var i = 0; i < d.SerialSlots.Count && i < saved.SerialSlots.Count; i++)
+                d.SerialSlots[i] = saved.SerialSlots[i] ?? "";
+            d.PasteBlock = saved.PasteBlock ?? "";
+        }
+        if (!string.IsNullOrWhiteSpace(_pendingZohoDraft.ManualIrn))
+            _manualIrn = _pendingZohoDraft.ManualIrn!;
+        if (!string.IsNullOrWhiteSpace(_pendingZohoDraft.CorrBrand))
+            _corrBrand = _pendingZohoDraft.CorrBrand!;
+        if (!string.IsNullOrWhiteSpace(_pendingZohoDraft.CorrModel))
+            _corrModel = _pendingZohoDraft.CorrModel!;
+        if (!string.IsNullOrWhiteSpace(_pendingZohoDraft.CorrType))
+            _corrType = _pendingZohoDraft.CorrType!;
+        if (!string.IsNullOrWhiteSpace(_pendingZohoDraft.InvoiceNumber) && _preview != null &&
+            !string.Equals(_pendingZohoDraft.InvoiceNumber, _preview.Invoice.InvoiceNumber, StringComparison.OrdinalIgnoreCase))
+            _registerInvoiceNo = _pendingZohoDraft.InvoiceNumber;
+    }
+
+    void AddProduct()
+    {
+        if (!_canEditSerials) return;
+        var next = (_products.Count == 0 ? 0 : _products.Max(p => p.Set.SetIndex)) + 1;
+        _products.Add(ProductDraft.CreateAdded(next));
+        _ = PersistZohoDraftAsync();
+    }
+
+    void RemoveProduct(ProductDraft d)
+    {
+        if (!_canEditSerials) return;
+        if (_products.Count <= 1 && !d.IsAddedProduct) return;
+        _products.Remove(d);
+        _ = PersistZohoDraftAsync();
+    }
+
+    async Task Fetch()
+    {
+        _error = null; _showOverride = false;
+        _busy = true;
+        try
+        {
+            var preview = await CarePack.PreviewInvoiceAsync(_invoiceNo.Trim());
+            _preview = preview;
+            _registerInvoiceNo = preview.Invoice.InvoiceNumber;
+            _invoiceEditReason = "";
+            _products = preview.LineSets.Select(ProductDraft.FromSet).ToList();
+            foreach (var d in _products)
+                await MatchZohoProductMastersAsync(d);
+            _manualIrn = preview.Invoice.Irn ?? "";
+            ApplyZohoDraftToProducts();
+            if (!string.IsNullOrWhiteSpace(_pendingZohoDraft?.InvoiceNumber) &&
+                !string.Equals(_pendingZohoDraft.InvoiceNumber, preview.Invoice.InvoiceNumber, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(_invoiceNo.Trim(), _pendingZohoDraft.InvoiceNumber, StringComparison.OrdinalIgnoreCase))
+            {
+                _registerInvoiceNo = _pendingZohoDraft.InvoiceNumber;
+            }
+            var first = _products.FirstOrDefault();
+            if (first != null && string.IsNullOrWhiteSpace(_corrModel))
+            {
+                _corrBrand = first.OemBrand
+                    ?? first.Set.Mismatch.ModelBrand
+                    ?? first.Set.Mismatch.ItemBrand
+                    ?? OemBrandCatalog.Brands[0];
+                _corrModel = first.ProductModel ?? first.Set.Mismatch.Model ?? "";
+                _corrType = first.CarePackType;
+            }
+            if (_products.Any(p => !p.IsAddedProduct && p.Set.Mismatch.HasMismatch) && _isAdmin)
+                _showOverride = true;
+            await PersistZohoDraftAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            await PersistZohoDraftAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    void ToggleSelectAll(ChangeEventArgs e)
+    {
+        var on = (bool)(e.Value ?? false);
+        foreach (var p in _products) p.Selected = on;
+        _ = PersistZohoDraftAsync();
+    }
+
+    void ToggleProduct(ProductDraft d, bool on)
+    {
+        d.Selected = on;
+        _ = PersistZohoDraftAsync();
+    }
+
+    void ChangeQty(ProductDraft d, string? raw)
+    {
+        if (!_canEditSerials) return;
+        if (!int.TryParse(raw, out var q) || q < 1) q = 1;
+        d.ResizeSlots(q);
+        _ = PersistZohoDraftAsync();
+    }
+
+    void SetSlot(ProductDraft d, int idx, string? value)
+    {
+        if (!_canEditSerials || idx < 0 || idx >= d.SerialSlots.Count) return;
+        d.SerialSlots[idx] = (value ?? "").Trim().ToUpperInvariant();
+        _ = PersistZohoDraftAsync();
+    }
+
+    void ApplyPaste(ProductDraft d)
+    {
+        if (!_canEditSerials) return;
+        _error = null;
+        var parsed = SerialNumberParser.Parse(d.PasteBlock);
+        if (parsed.SerialNumbers.Count == 0)
+            parsed = SerialNumberParser.ExtractFromLooseText(d.PasteBlock);
+        if (parsed.SerialNumbers.Count == 0)
+        {
+            _error = $"Product #{d.Set.SetIndex}: no valid serials in paste.";
+            return;
+        }
+        d.ResizeSlots(parsed.SerialNumbers.Count);
+        for (var i = 0; i < d.SerialSlots.Count; i++)
+            d.SerialSlots[i] = i < parsed.SerialNumbers.Count ? parsed.SerialNumbers[i] : "";
+        d.PasteBlock = "";
+        _ = PersistZohoDraftAsync();
+    }
+
+    void ReloadDetected(ProductDraft d)
+    {
+        if (!_canEditSerials || d.IsAddedProduct) return;
+        var sns = d.Set.SerialNumbers;
+        if (sns.Count > d.Qty) d.ResizeSlots(sns.Count);
+        for (var i = 0; i < d.SerialSlots.Count; i++)
+            d.SerialSlots[i] = i < sns.Count ? sns[i] : "";
+        _ = PersistZohoDraftAsync();
+    }
+
+    async Task OnZohoOem(ProductDraft d, int id)
+    {
+        d.OemVendorId = id;
+        d.ProductId = 0;
+        d.ProductModelId = 0;
+        if (id > 0)
+        {
+            var oem = (await Masters.ListOemsAsync(activeOnly: false)).FirstOrDefault(o => o.Id == id);
+            if (oem != null) d.OemBrand = oem.Name;
+        }
+        await PersistZohoDraftAsync();
+    }
+
+    async Task OnZohoProduct(ProductDraft d, int id)
+    {
+        d.ProductId = id;
+        d.ProductModelId = 0;
+        if (id > 0)
+        {
+            var prod = (await Masters.ListProductsAsync(d.OemVendorId > 0 ? d.OemVendorId : null, activeOnly: false))
+                .FirstOrDefault(x => x.Id == id);
+            if (prod != null)
+            {
+                if (string.IsNullOrWhiteSpace(d.ProductItemName)) d.ProductItemName = prod.Name;
+                d.OemVendorId = prod.OemVendorId;
+                if (prod.OemVendor != null) d.OemBrand = prod.OemVendor.Name;
+            }
+        }
+        await PersistZohoDraftAsync();
+    }
+
+    async Task OnZohoModel(ProductDraft d, int id)
+    {
+        d.ProductModelId = id;
+        if (id > 0)
+        {
+            var m = (await Masters.ListModelsAsync(d.ProductId > 0 ? d.ProductId : null, activeOnly: false))
+                .FirstOrDefault(x => x.Id == id);
+            if (m != null)
+            {
+                d.ProductModel = m.Code;
+                d.ProductId = m.ProductId;
+                if (m.Product?.OemVendor != null)
+                {
+                    d.OemVendorId = m.Product.OemVendorId;
+                    d.OemBrand = m.Product.OemVendor.Name;
+                }
+            }
+        }
+        await PersistZohoDraftAsync();
+    }
+
+    async Task OnZohoCarePackType(ProductDraft d, int id)
+    {
+        d.CarePackTypeId = id;
+        if (id > 0)
+        {
+            var t = (await Masters.ListCarePackTypesAsync(activeOnly: false)).FirstOrDefault(x => x.Id == id);
+            if (t != null)
+            {
+                d.CarePackType = t.Name;
+                d.DurationYears = t.DurationYears;
+            }
+        }
+        await PersistZohoDraftAsync();
+    }
+
+    async Task MatchZohoProductMastersAsync(ProductDraft d)
+    {
+        try
+        {
+            var (oem, product, model) = await Masters.ResolveOemProductModelAsync(d.OemBrand, d.ProductModel);
+            if (oem != null) { d.OemVendorId = oem.Id; d.OemBrand = oem.Name; }
+            if (product != null) { d.ProductId = product.Id; d.OemVendorId = product.OemVendorId; }
+            if (model != null)
+            {
+                d.ProductModelId = model.Id;
+                d.ProductId = model.ProductId;
+                d.ProductModel = model.Code;
+                if (model.Product?.OemVendor != null)
+                {
+                    d.OemVendorId = model.Product.OemVendorId;
+                    d.OemBrand = model.Product.OemVendor.Name;
+                }
+            }
+            var types = await Masters.ListCarePackTypesAsync();
+            var t = types.FirstOrDefault(x =>
+                string.Equals(x.Name, d.CarePackType, StringComparison.OrdinalIgnoreCase));
+            if (t != null) { d.CarePackTypeId = t.Id; d.DurationYears = t.DurationYears; }
+        }
+        catch { /* best-effort */ }
+    }
+
+    async Task ImportSelected(bool withOverride)
+    {
+        if (_preview == null) return;
+        var selected = _products.Where(p => p.Selected).ToList();
+        if (selected.Count == 0)
+        {
+            _error = "Select at least one product.";
+            return;
+        }
+        if (selected.Any(p => !p.IsComplete))
+        {
+            _error = "Every selected product needs model, care pack length, and one serial per unit.";
+            return;
+        }
+
+        var finalInv = string.IsNullOrWhiteSpace(_registerInvoiceNo)
+            ? _preview.Invoice.InvoiceNumber
+            : _registerInvoiceNo.Trim();
+
+        _error = null;
+        _busy = true;
+        try
+        {
+            await PersistZohoDraftAsync();
+            var batches = await CarePack.ImportSelectedSetsAsync(new CarePackMultiImportRequest
+            {
+                InvoiceNumber = finalInv,
+                SourceInvoiceNumber = _preview.Invoice.InvoiceNumber,
+                InvoiceEditReason = _invoiceEditReason,
+                ApplyOverride = withOverride,
+                OverrideReason = string.IsNullOrWhiteSpace(_overrideReason) ? _invoiceEditReason : _overrideReason,
+                OverrideConfirmed = _overrideConfirmed || withOverride,
+                CorrectedBrand = _corrBrand,
+                CorrectedModel = _corrModel,
+                CorrectedCarePackType = _corrType,
+                ManualIrn = _manualIrn,
+                CustomerName = _preview.Invoice.CustomerName,
+                CustomerCity = _preview.Invoice.CustomerCity,
+                InvoiceDate = DateOnly.TryParse(_preview.Invoice.Date, out var id) ? id : null,
+                Sets = selected.Select(p => new CarePackImportSetEntry
+                {
+                    LineSetIndex = p.Set.SetIndex,
+                    Qty = p.Qty,
+                    CarePackType = p.CarePackType,
+                    Serials = p.FilledSerials,
+                    ProductItemName = p.ProductItemName,
+                    CarePackItemName = p.CarePackItemName,
+                    ProductModel = p.ProductModel,
+                    OemBrand = p.OemBrand,
+                    OemVendorId = p.OemVendorId > 0 ? p.OemVendorId : null,
+                    ProductId = p.ProductId > 0 ? p.ProductId : null,
+                    ProductModelId = p.ProductModelId > 0 ? p.ProductModelId : null,
+                    CarePackTypeId = p.CarePackTypeId > 0 ? p.CarePackTypeId : null,
+                    DurationYears = p.DurationYears > 0 ? p.DurationYears : null,
+                    IsAddedProduct = p.IsAddedProduct,
+                    EditReason = p.EditReason,
+                }).ToList(),
+            });
+            await Drafts.ClearZohoDraftAsync(_userName);
+            Nav.NavigateTo(batches.Count > 0 ? $"/care-packs/{batches[0].Id}" : "/care-packs");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    sealed class ProductDraft
+    {
+        public InvoiceCarePackSetBuilder.LineSet Set { get; init; } = null!;
+        public bool Selected { get; set; } = true;
+        public bool IsAddedProduct { get; set; }
+        public int Qty { get; set; }
+        public int OemVendorId { get; set; }
+        public int ProductId { get; set; }
+        public int ProductModelId { get; set; }
+        public int CarePackTypeId { get; set; }
+        public int DurationYears { get; set; }
+        public string CarePackType { get; set; } = "5 Year";
+        public string ProductItemName { get; set; } = "";
+        public string CarePackItemName { get; set; } = "";
+        public string ProductModel { get; set; } = "";
+        public string OemBrand { get; set; } = "";
+        public string EditReason { get; set; } = "";
+        public List<string> SerialSlots { get; set; } = [];
+        public string PasteBlock { get; set; } = "";
+
+        public int FilledCount => SerialSlots.Count(s => !string.IsNullOrWhiteSpace(s));
+        public List<string> FilledSerials =>
+            SerialSlots.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        public bool IsComplete =>
+            Selected
+            && !string.IsNullOrWhiteSpace(ProductModel)
+            && !string.IsNullOrWhiteSpace(CarePackType)
+            && Qty > 0
+            && FilledCount == Qty
+            && FilledSerials.Distinct(StringComparer.OrdinalIgnoreCase).Count() == Qty;
+
+        public static ProductDraft FromSet(InvoiceCarePackSetBuilder.LineSet set)
+        {
+            var qty = Math.Max(1, set.Qty);
+            var slots = Enumerable.Repeat("", qty).ToList();
+            for (var i = 0; i < Math.Min(qty, set.SerialNumbers.Count); i++)
+                slots[i] = set.SerialNumbers[i];
+            return new ProductDraft
+            {
+                Set = set,
+                Selected = true,
+                IsAddedProduct = false,
+                Qty = qty,
+                CarePackType = set.CarePackType ?? set.Mismatch.CarePackType ?? "5 Year",
+                ProductItemName = set.PrinterItemName ?? "",
+                CarePackItemName = set.CarePackItemName ?? "",
+                ProductModel = set.PrinterModel ?? "",
+                OemBrand = set.OemBrand ?? "",
+                SerialSlots = slots,
+            };
+        }
+
+        public static ProductDraft CreateAdded(int setIndex)
+        {
+            var emptyMismatch = new BrandMismatchDetector.MismatchResult(false, null, null, null, null, "");
+            var set = new InvoiceCarePackSetBuilder.LineSet(
+                setIndex, "", null, null, null, "3 Year", 1, new List<string>(), "", emptyMismatch);
+            return new ProductDraft
+            {
+                Set = set,
+                Selected = true,
+                IsAddedProduct = true,
+                Qty = 1,
+                CarePackType = "3 Year",
+                OemBrand = "",
+                SerialSlots = [""],
+            };
+        }
+
+        public void ResizeSlots(int qty)
+        {
+            Qty = Math.Max(1, qty);
+            while (SerialSlots.Count < Qty) SerialSlots.Add("");
+            if (SerialSlots.Count > Qty)
+                SerialSlots = SerialSlots.Take(Qty).ToList();
+        }
+    }
+}

@@ -1,0 +1,1172 @@
+@page "/care-packs/{Id:int}"
+@using Microsoft.AspNetCore.Components.Forms
+@inject CarePackService CarePack
+@inject UserSessionService Session
+@inject NavigationManager Nav
+
+<PageTitle>Care Pack Batch — RMA System</PageTitle>
+
+@if (_loading)
+{
+    <div class="card"><div class="empty-cell">Loading…</div></div>
+}
+else if (_batch == null)
+{
+    <div class="error-msg">Batch not found. <a href="/care-packs">Back to list</a></div>
+}
+else
+{
+    <div class="page-hero care-hero">
+        <div>
+            <h1 class="page-hero-title">@_batch.InvoiceNumber</h1>
+            <p class="page-hero-sub">
+                @(_batch.CustomerName ?? "")@(!string.IsNullOrEmpty(_batch.CustomerCity) ? $", {_batch.CustomerCity}" : "")
+                · @(_batch.PrinterModel ?? "—") · @(_batch.CarePackType ?? "—") · @_batch.DeviceCount devices
+            </p>
+            <p class="help-text" style="margin:6px 0 0">
+                Signed in as <strong>@_userName</strong>
+                (<span class="@(_isAdmin ? "ok-text" : "muted")">@_role</span>).
+            </p>
+        </div>
+        <div class="page-hero-actions">
+            <a href="/care-packs" class="btn btn-ghost">← All Care Packs</a>
+            @if (_batch.Status == CarePackBatchStatus.Imported || string.IsNullOrEmpty(_batch.PurchaseOrderNumber))
+            {
+                <a href="/care-packs/@Id/validate-po" class="btn btn-primary">Verify against OEM PO</a>
+                <span class="help-text" style="align-self:center">One OEM PO may cover several invoices for this customer.</span>
+            }
+            @if (_canEditProduct)
+            {
+                <button class="btn btn-ghost" type="button" @onclick="ToggleProductEdit">
+                    @(_showProductEdit ? "Hide brand / product" : "Edit brand / product")
+                </button>
+                <button class="btn btn-ghost" type="button" @onclick="TogglePeriodEdit">
+                    @(_showPeriodEdit ? "Hide care pack period" : "Edit care pack period")
+                </button>
+            }
+            @if (_isAdmin)
+            {
+                <button class="btn btn-ghost" type="button" @onclick="ToggleHeaderEdit">
+                    @(_showHeaderEdit ? "Hide invoice / customer edit" : "Edit invoice / customer")
+                </button>
+                <button class="btn btn-warning" type="button" @onclick="() => _showOverride = !_showOverride">
+                    @(_showOverride ? "Hide Override" : "Admin Override")
+                </button>
+                <button class="btn btn-ghost" type="button" @onclick="ToggleDocRemove">
+                    @(_showDocRemove ? "Hide document remove" : "Remove PO / OEM / payment")
+                </button>
+                @if (!_confirmDelete)
+                {
+                    <button class="btn btn-ghost" type="button" @onclick="StartDelete" disabled="@_busy">
+                        Delete Invoice
+                    </button>
+                }
+                else
+                {
+                    <button class="btn btn-ghost" type="button" @onclick="() => _confirmDelete = false">Cancel</button>
+                    <button class="btn btn-danger" type="button" @onclick="ConfirmDelete" disabled="@(_busy || !_canDelete)">
+                        Confirm delete
+                    </button>
+                }
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="error-msg">@_error</div>
+    }
+    @if (!string.IsNullOrEmpty(_okMsg))
+    {
+        <div class="success-msg">@_okMsg</div>
+    }
+
+    @if (_batch != null && CarePackCoverage.IsBatchExpired(_batch))
+    {
+        <div class="alert-banner danger">
+            <strong>Care pack expired</strong> —
+            warranty ended @(CarePackCoverage.EffectiveWarrantyEnd(_batch)?.ToString("dd-MMM-yyyy") ?? "—").
+            New RMAs for these serials are blocked.
+        </div>
+    }
+
+    @if (_showHeaderEdit && _isAdmin && _batch != null)
+    {
+        <div class="card">
+            <div class="card-title">Admin — edit invoice / customer / care pack name</div>
+            <p class="help-text">
+                Correct sales invoice number, company name, or care pack item name.
+                Invoice number + line set must remain unique. Change is audited.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Invoice number *</label>
+                    <input class="form-control" @bind="_hdrInvoice" />
+                </div>
+                <div class="form-group">
+                    <label>Customer / company name</label>
+                    <input class="form-control" @bind="_hdrCustomer" />
+                </div>
+                <div class="form-group">
+                    <label>Care pack name</label>
+                    <input class="form-control" @bind="_hdrCarePackName" placeholder="Invoice care pack item name" />
+                </div>
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Note (optional)</label>
+                    <input class="form-control" @bind="_hdrNote" placeholder="Reason for correction" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-ghost" type="button" @onclick="() => _showHeaderEdit = false">Cancel</button>
+                <button class="btn btn-success" type="button" disabled="@_busy" @onclick="SaveHeader">Save header</button>
+            </div>
+        </div>
+    }
+
+    @if (_batch!.Overridden)
+    {
+        var sample = _batch.Devices.FirstOrDefault(d => d.Overridden) ?? _batch.Devices.FirstOrDefault();
+        <div class="override-banner">
+            <strong>OVERRIDE APPLIED</strong>
+            — @(sample?.OverrideAt?.ToString("dd-MMM-yyyy") ?? "") by @(sample?.OverrideBy ?? _batch.CreatedBy) (Admin)
+            <div style="margin-top:10px">
+                Invoice @_batch.InvoiceNumber
+                @if (!string.IsNullOrEmpty(_batch.Irn))
+                {
+                    <span>(IRN: <code class="sn">@Truncate(_batch.Irn, 16)</code>)</span>
+                }
+                shows: Item “@(_batch.InvoiceItemName ?? "—")” — Brand: @(_batch.InvoiceBrandDetected ?? "—")
+            </div>
+            <div style="margin-top:6px">
+                Registered as: Brand: <strong>@(_batch.OemBrand ?? "—")</strong>
+                · Care Pack: <strong>@(_batch.CarePackType ?? "—")</strong>
+                · Model: <strong>@(_batch.PrinterModel ?? "—")</strong>
+            </div>
+            @if (!string.IsNullOrEmpty(sample?.OverrideReason))
+            {
+                <div style="margin-top:6px" class="muted">Reason: “@sample.OverrideReason”</div>
+            }
+        </div>
+    }
+
+    @if (_showPeriodEdit && _canEditProduct)
+    {
+        <div class="card">
+            <div class="card-title">Edit care pack period</div>
+            <p class="help-text">
+                Correct the care pack duration if the invoice was imported with the wrong period.
+                Warranty end is recalculated from the sales invoice date.
+                Import is blocked if the new warranty end is already past today.
+            </p>
+            <div class="info-grid" style="margin-bottom:12px">
+                <div class="info-row"><div class="lbl">Invoice date</div><div class="val">@(_batch.InvoiceDate?.ToString("dd-MMM-yyyy") ?? "—")</div></div>
+                <div class="info-row"><div class="lbl">Current period</div><div class="val">@(_batch.CarePackType ?? "—")</div></div>
+                <div class="info-row"><div class="lbl">Current warranty end</div><div class="val">@(_batch.Devices.FirstOrDefault()?.WarrantyEnd?.ToString("dd-MMM-yyyy") ?? "—")</div></div>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Correct care pack period *</label>
+                    <select class="form-control" @bind="_periodType">
+                        @foreach (var t in OemBrandCatalog.CarePackTypes) { <option value="@t">@t</option> }
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Reason / note (optional)</label>
+                    <input class="form-control" @bind="_periodNote" placeholder="e.g. Imported as 5 Year — invoice is 3 Year" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-ghost" type="button" @onclick="() => _showPeriodEdit = false">Cancel</button>
+                <button class="btn btn-primary" type="button" disabled="@_busy" @onclick="SaveCarePackPeriod">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Save care pack period
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (_showProductEdit && _canEditProduct)
+    {
+        <div class="card">
+            <div class="card-title">Edit brand &amp; product</div>
+            <p class="help-text">
+                Correct OEM brand and product/model after import. Available to Admin, Manager, and Technician.
+                Invoice number / IRN are not changed. Warranty end is recalculated if care pack type changes.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Brand *</label>
+                    <select class="form-control" @bind="_editBrand">
+                        @foreach (var b in OemBrandCatalog.Brands) { <option value="@b">@b</option> }
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Product / Model</label>
+                    <input class="form-control" @bind="_editModel" placeholder="e.g. T6304E" />
+                </div>
+                <div class="form-group">
+                    <label>Care pack type</label>
+                    <select class="form-control" @bind="_editCpType">
+                        @foreach (var t in OemBrandCatalog.CarePackTypes) { <option value="@t">@t</option> }
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Note (optional)</label>
+                    <input class="form-control" @bind="_productNote" placeholder="e.g. Corrected model from invoice PDF" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-ghost" type="button" @onclick="() => _showProductEdit = false">Cancel</button>
+                <button class="btn btn-primary" type="button" disabled="@_busy" @onclick="SaveBrandProduct">
+                    @if (_busy) { <span class="spinner"></span> }
+                    Save brand &amp; product
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (_showOverride && _isAdmin)
+    {
+        <div class="card override-panel">
+            <div class="card-title">ADMIN OVERRIDE — Correct registered values</div>
+            <p class="help-text">
+                Invoice / IRN stay as on Zoho. Only brand, model, and care pack type used for registration are changed (audit kept).
+            </p>
+            <div class="override-grid">
+                <div>
+                    <div class="section-hdr">ORIGINAL (invoice)</div>
+                    <div class="info-row"><div class="lbl">Brand</div><div class="val">@(_batch.InvoiceBrandDetected ?? "—")</div></div>
+                    <div class="info-row"><div class="lbl">Model</div><div class="val">@(_batch.PrinterModel ?? "—")</div></div>
+                    <div class="info-row"><div class="lbl">Care Pack</div><div class="val">@(_batch.CarePackType ?? "—")</div></div>
+                    <div class="info-row"><div class="lbl">Item</div><div class="val">@(_batch.InvoiceItemName ?? "—")</div></div>
+                </div>
+                <div>
+                    <div class="section-hdr">CORRECTED</div>
+                    <div class="form-group">
+                        <label>Brand</label>
+                        <select class="form-control" @bind="_corrBrand">
+                            @foreach (var b in OemBrandCatalog.Brands) { <option value="@b">@b</option> }
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <input class="form-control" @bind="_corrModel" />
+                    </div>
+                    <div class="form-group">
+                        <label>Care Pack</label>
+                        <select class="form-control" @bind="_corrType">
+                            @foreach (var t in OemBrandCatalog.CarePackTypes) { <option value="@t">@t</option> }
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>Reason (mandatory)</label>
+                <textarea class="form-control" rows="3" @bind="_overrideReason"></textarea>
+            </div>
+            <label class="check-row">
+                <input type="checkbox" @bind="_overrideConfirmed" />
+                I confirm this override is correct and take responsibility
+            </label>
+            <div class="form-actions">
+                <button class="btn btn-ghost" type="button" @onclick="() => _showOverride = false">Cancel</button>
+                <button class="btn btn-success" type="button"
+                        disabled="@(!CanApplyOverride || _busy)"
+                        @onclick="ApplyOverride">
+                    Apply Override
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (_showDocRemove && _isAdmin && _batch != null)
+    {
+        <div class="card admin-danger-panel">
+            <div class="card-title">ADMIN — remove OEM payment, OEM invoice, or PO</div>
+            <p class="help-text">
+                Wrong or incomplete documents can be cleared only by Admin.
+                Later steps stay blocked until removed: <strong>payment → OEM invoice → PO</strong>.
+                Each remove needs a reason, confirmation, and is permanently audited.
+                This does not delete the sales invoice or serials.
+            </p>
+
+            <div class="doc-remove-list">
+                <div class="doc-remove-row">
+                    <div>
+                        <strong>OEM payment</strong>
+                        <div class="muted">
+                            @if (_batch.OemInvoicePaid)
+                            {
+                                <span>Marked paid</span>
+                                @if (_batch.OemInvoicePaidAt != null)
+                                {
+                                    <span> · @_batch.OemInvoicePaidAt.Value.ToString("dd-MMM-yyyy")</span>
+                                }
+                                @if (!string.IsNullOrEmpty(_batch.OemInvoicePaidBy))
+                                {
+                                    <span> · @_batch.OemInvoicePaidBy</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>Not marked paid</span>
+                            }
+                            @if (_paidAmt > 0)
+                            {
+                                <span> · allocations @_paidAmt.ToString("N2") @(_batch.OemInvoiceCurrency ?? "USD")</span>
+                            }
+                        </div>
+                        <div class="@(_canRemovePay ? "ok-text" : "muted")" style="margin-top:4px">@_payRemoveHint</div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" type="button"
+                            disabled="@(!_canRemovePay || _busy)"
+                            @onclick="() => BeginDocRemove(CarePackDocumentActions.RemoveOemPayment)">
+                        Remove payment
+                    </button>
+                </div>
+
+                <div class="doc-remove-row">
+                    <div>
+                        <strong>OEM invoice</strong>
+                        <div class="muted">
+                            @(_batch.OemInvoiceNumber ?? "Not entered")
+                            @if (_batch.OemInvoiceDate != null)
+                            {
+                                <span> · @_batch.OemInvoiceDate.Value.ToString("dd-MMM-yyyy")</span>
+                            }
+                            @if (_batch.OemInvoiceAmount != null)
+                            {
+                                <span> · @_batch.OemInvoiceAmount.Value.ToString("N2") @_batch.OemInvoiceCurrency</span>
+                            }
+                            @if (!string.IsNullOrEmpty(_batch.OemInvoicePdfPath))
+                            {
+                                <span> · PDF on file</span>
+                            }
+                            @if (_batch.VerificationComplete)
+                            {
+                                <span> · 100% verified</span>
+                            }
+                        </div>
+                        <div class="@(_canRemoveOem ? "ok-text" : "muted")" style="margin-top:4px">@_oemRemoveHint</div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" type="button"
+                            disabled="@(!_canRemoveOem || _busy)"
+                            @onclick="() => BeginDocRemove(CarePackDocumentActions.RemoveOemInvoice)">
+                        Remove OEM invoice
+                    </button>
+                </div>
+
+                <div class="doc-remove-row">
+                    <div>
+                        <strong>OEM purchase order</strong>
+                        <div class="muted">
+                            @(_batch.PurchaseOrderNumber ?? "Not linked")
+                            @if (_batch.PoValidatedAt != null)
+                            {
+                                <span> · validated @_batch.PoValidatedAt.Value.ToString("dd-MMM-yyyy")</span>
+                            }
+                            @if (!string.IsNullOrEmpty(_batch.PoValidatedBy))
+                            {
+                                <span> · @_batch.PoValidatedBy</span>
+                            }
+                            @if (_batch.PoMatched)
+                            {
+                                <span> · serials matched</span>
+                            }
+                        </div>
+                        <div class="@(_canRemovePo ? "ok-text" : "muted")" style="margin-top:4px">@_poRemoveHint</div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" type="button"
+                            disabled="@(!_canRemovePo || _busy)"
+                            @onclick="() => BeginDocRemove(CarePackDocumentActions.RemovePo)">
+                        Remove PO
+                    </button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_docAction))
+            {
+                <div class="section-hdr">Confirm remove @CarePackDocumentActions.Label(_docAction)</div>
+                <p class="help-text">
+                    Invoice <strong>@_batch.InvoiceNumber</strong> will lose
+                    <strong>@CarePackDocumentActions.Label(_docAction)</strong>.
+                    Verification / status will be recalculated. This cannot be undone except by re-entering the documents.
+                </p>
+                <div class="form-group">
+                    <label>Reason (mandatory)</label>
+                    <textarea class="form-control" rows="3" @bind="_docReason"
+                              placeholder="e.g. Wrong OEM invoice linked; will re-enter the correct bill"></textarea>
+                </div>
+                <label class="check-row">
+                    <input type="checkbox" @bind="_docConfirmed" />
+                    I confirm I am removing @CarePackDocumentActions.Label(_docAction) from @_batch.InvoiceNumber and take responsibility
+                </label>
+                <div class="form-actions">
+                    <button class="btn btn-ghost" type="button" @onclick="CancelDocRemove">Cancel</button>
+                    <button class="btn btn-danger" type="button"
+                            disabled="@(!CanConfirmDocRemove || _busy)"
+                            @onclick="ConfirmDocRemove">
+                        Confirm remove @CarePackDocumentActions.Label(_docAction)
+                    </button>
+                </div>
+            }
+
+            @if (_batch.DocumentAudits is { Count: > 0 } audits)
+            {
+                <div class="section-hdr">Document remove audit (permanent)</div>
+                <div class="tbl-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>What</th>
+                                <th>By</th>
+                                <th>Reason</th>
+                                <th>Was</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in audits.OrderByDescending(x => x.PerformedAt).Take(20))
+                            {
+                                <tr>
+                                    <td class="date-cell">@a.PerformedAt.ToString("dd-MMM-yyyy HH:mm")</td>
+                                    <td>@CarePackDocumentActions.Label(a.Action)</td>
+                                    <td>@(a.PerformedBy ?? "—")</td>
+                                    <td>@a.Reason</td>
+                                    <td class="muted">@a.Snapshot</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-title">Batch Summary</div>
+        <div class="info-grid">
+            <div class="info-row"><div class="lbl">Registered invoice</div><div class="val"><strong>@_batch.InvoiceNumber</strong></div></div>
+            @if (!string.IsNullOrWhiteSpace(_batch.SourceInvoiceNumber))
+            {
+                <div class="info-row"><div class="lbl">Source invoice</div><div class="val"><code>@_batch.SourceInvoiceNumber</code> <span class="muted">(before edit)</span></div></div>
+            }
+            <div class="info-row"><div class="lbl">Brand</div><div class="val">@(_batch.OemBrand ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Product / Model</div><div class="val">@(_batch.PrinterModel ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Care Pack</div><div class="val">@(_batch.CarePackType ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Invoice Date</div><div class="val">@(_batch.InvoiceDate?.ToString("dd/MM/yyyy") ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Warranty End</div><div class="val">@(_batch.Devices.FirstOrDefault()?.WarrantyEnd?.ToString("MMM yyyy") ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Status</div><div class="val">@CarePackBatchStatus.Label(_batch.Status)</div></div>
+            <div class="info-row"><div class="lbl">IRN</div><div class="val"><code class="sn">@(_batch.Irn ?? "—")</code></div></div>
+            <div class="info-row"><div class="lbl">Ack No / Date</div><div class="val">@(_batch.IrnAckNo ?? "—") / @(_batch.IrnAckDate?.ToString("dd-MMM-yyyy HH:mm") ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Created By</div><div class="val">@(_batch.CreatedBy ?? "—")</div></div>
+            <div class="info-row"><div class="lbl">Invoice Qty</div><div class="val">@_batch.InvoiceQty</div></div>
+            <div class="info-row"><div class="lbl">Line set</div><div class="val">#@_batch.LineSetIndex @(!string.IsNullOrEmpty(_batch.PrinterItemName) ? $"· {_batch.PrinterItemName}" : "")</div></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Documents</div>
+        <div class="doc-list">
+            <div class="doc-row">
+                <span>Sales Invoice</span>
+                <strong>@_batch.InvoiceNumber</strong>
+                @if (!string.IsNullOrWhiteSpace(_batch.SourceInvoiceNumber))
+                {
+                    <span class="muted">source @_batch.SourceInvoiceNumber</span>
+                }
+                <span class="badge badge-cp-imported">Imported</span>
+            </div>
+            <div class="doc-row">
+                <span>Purchase Order</span>
+                <strong>@(_batch.PurchaseOrderNumber ?? "Not yet validated")</strong>
+                @if (_batch.PoMatched)
+                {
+                    <span class="badge badge-cp-po_validated">Validated — @_batch.DeviceCount/@_batch.DeviceCount match</span>
+                }
+                else if (!string.IsNullOrEmpty(_batch.PurchaseOrderNumber))
+                {
+                    <span class="badge badge-warn-soft">Linked (discrepancies accepted)</span>
+                }
+                else
+                {
+                    <span class="badge badge-pending">Pending</span>
+                }
+            </div>
+            <div class="doc-row">
+                <span>OEM Invoice</span>
+                <strong>@(_batch.OemInvoiceNumber ?? "Not yet entered")</strong>
+                @if (_batch.VerificationComplete)
+                {
+                    <span class="badge badge-cp-complete">100% Verified</span>
+                }
+                else if (!string.IsNullOrEmpty(_batch.OemInvoiceNumber) && !string.IsNullOrEmpty(_batch.OemInvoicePdfPath))
+                {
+                    <span class="badge badge-warn-soft">Docs entered</span>
+                }
+                else if (!string.IsNullOrEmpty(_batch.OemInvoiceNumber))
+                {
+                    <span class="badge badge-pending">Number only — PDF pending</span>
+                }
+                else
+                {
+                    <span class="badge badge-pending">Pending</span>
+                }
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_batch.ValidationReportPath))
+        {
+            <p class="help-text" style="margin-top:12px">
+                PO validation report:
+                <a href="/api/carepack/@_batch.Id/validation-report" target="_blank">Download XLSX</a>
+            </p>
+        }
+
+        <div class="section-hdr">OEM invoice (final check for 100% PO verification)</div>
+        <p class="help-text">
+            After the OEM PO is linked and serials match, enter the <strong>OEM / vendor invoice number</strong>
+            and upload the <strong>invoice PDF</strong> that covers those serial numbers.
+            Only then is the PO marked <strong>100% Verified</strong>.
+            Local purchases paid in <strong>INR</strong> and overseas OEM invoices in <strong>USD</strong> are both supported — pick the currency below.
+        </p>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>OEM / Vendor Invoice No.</label>
+                <input class="form-control" @bind="_oemInv" placeholder="Vendor invoice number" />
+            </div>
+            <div class="form-group">
+                <label>OEM Invoice Date (billing date)</label>
+                <input class="form-control" type="date" @bind="_oemDate" />
+            </div>
+            <div class="form-group">
+                <label>OEM Invoice Amount</label>
+                <input class="form-control" type="number" step="0.01" min="0" @bind="_oemAmt" />
+            </div>
+            <div class="form-group">
+                <label>Currency *</label>
+                <select class="form-control" @bind="_oemCur">
+                    <option value="USD">USD — overseas OEM</option>
+                    <option value="INR">INR — local purchase</option>
+                </select>
+                <span class="help-text">Use INR when the vendor invoice is billed and paid in India.</span>
+            </div>
+            <div class="form-group">
+                <label>Installation Date</label>
+                <input class="form-control" type="date" @bind="_installDate" />
+            </div>
+        </div>
+
+        @if (_poDue != null || _payDue != null)
+        {
+            <div class="deadline-strip">
+                @if (_poDue != null && string.IsNullOrEmpty(_batch.PurchaseOrderNumber))
+                {
+                    <div class="deadline-chip @(_poDaysRem < 0 ? "overdue" : _poDaysRem <= 5 ? "soon" : "ok")">
+                        PO to OEM due @_poDue?.ToString("dd-MMM-yyyy")
+                        (@(_poDaysRem < 0 ? $"{-_poDaysRem}d overdue" : $"{_poDaysRem}d left") · limit {_poLimit}d / contract 30d)
+                    </div>
+                }
+                @if (_payDue != null && !string.IsNullOrEmpty(_batch.OemInvoiceNumber) && !_batch.OemInvoicePaid)
+                {
+                    <div class="deadline-chip @(_payDaysRem < 0 ? "overdue" : _payDaysRem <= 5 ? "soon" : "ok")">
+                        OEM payment due @_payDue?.ToString("dd-MMM-yyyy")
+                        (@(_payDaysRem < 0 ? $"{-_payDaysRem}d overdue" : $"{_payDaysRem}d left") · limit {_payLimit}d / contract 45d)
+                    </div>
+                }
+                @if (_batch.OemInvoicePaid)
+                {
+                    <div class="deadline-chip ok">
+                        OEM invoice marked paid
+                        @if (_batch.OemInvoicePaidAt != null)
+                        {
+                            <span> · @_batch.OemInvoicePaidAt.Value.ToString("dd-MMM-yyyy")</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_batch.OemInvoiceNumber) && !string.IsNullOrEmpty(_batch.PurchaseOrderNumber))
+        {
+            <div class="section-hdr">OEM payment</div>
+            <p class="help-text">
+                Status:
+                @if (_batch.OemInvoicePaid)
+                {
+                    <strong class="ok-text">Paid</strong>
+                }
+                else
+                {
+                    <strong class="text-danger">Not paid</strong>
+                }
+                · <a href="/care-packs/payments">Change on payments page</a>
+            </p>
+        }
+
+        <div class="form-group" style="margin-top:8px">
+            <label>OEM Invoice PDF (required for 100% verification)</label>
+            <InputFile OnChange="OnOemPdfSelected" accept=".pdf,application/pdf" />
+            @if (!string.IsNullOrEmpty(_batch.OemInvoicePdfPath))
+            {
+                <p class="help-text" style="margin-top:8px">
+                    Stored:
+                    <a href="/api/carepack/@_batch.Id/oem-invoice-pdf" target="_blank">
+                        @System.IO.Path.GetFileName(_batch.OemInvoicePdfPath)
+                    </a>
+                    @if (_canEditOem)
+                    {
+                        <button class="btn btn-ghost btn-sm" type="button" @onclick="ClearOemPdf" disabled="@_saving"
+                                style="margin-left:8px">Remove PDF</button>
+                    }
+                </p>
+            }
+            else
+            {
+                <p class="muted" style="margin-top:6px">No PDF uploaded yet.</p>
+            }
+        </div>
+
+        <div class="verification-box @VerificationBoxClass">
+            @if (_batch.VerificationComplete)
+            {
+                <strong>100% Verified</strong>
+                <span>
+                    @_batch.VerificationCompletedAt?.ToString("dd-MMM-yyyy HH:mm")
+                    by @(_batch.VerificationCompletedBy ?? "-")
+                </span>
+                <div class="muted" style="margin-top:4px">
+                    PO @(_batch.PurchaseOrderNumber) | OEM invoice @(_batch.OemInvoiceNumber) | PDF on file
+                </div>
+            }
+            else
+            {
+                <strong>Not 100% verified yet</strong>
+                <ul class="help-text" style="margin:6px 0 0 18px">
+                    <li class="@PoLinkedClass">
+                        OEM PO linked @PoLinkedLabel
+                    </li>
+                    <li class="@OemInvClass">
+                        OEM invoice number entered
+                    </li>
+                    <li class="@OemPdfClass">
+                        OEM invoice PDF stored
+                    </li>
+                </ul>
+            }
+        </div>
+
+        <div class="form-actions">
+            <button class="btn btn-primary btn-sm" @onclick="SaveOem" disabled="@(_saving || !_canEditOem)">
+                Save OEM details
+            </button>
+            @if (!string.IsNullOrEmpty(_saveMsg)) { <span class="success-inline">@_saveMsg</span> }
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header-row">
+            <span class="card-title" style="margin:0;border:none;padding:0">Devices (@_batch.Devices.Count)</span>
+            @if (_canEditDevices)
+            {
+                <button class="btn btn-ghost btn-sm" type="button" @onclick="ToggleEditSerials">
+                    @(_editingSerials ? "Cancel edit" : "Edit / add serials")
+                </button>
+            }
+            else
+            {
+                <span class="muted">Serials locked after PO / OEM chain starts</span>
+            }
+        </div>
+
+        @if (_editingSerials && _canEditDevices)
+        {
+            <div class="section-hdr">Edit serial numbers</div>
+            <p class="help-text">
+                Paste or type one serial per line (any OEM format). Quantity can be updated to match.
+                Allowed only while status is Imported and no PO is linked. Viewers cannot edit.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Invoice qty</label>
+                    <input class="form-control" type="number" min="1" @bind="_editQty" />
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Serial list</label>
+                <textarea class="form-control" rows="12" @bind="_editListText"
+                          placeholder="T6EV3422527198"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="button" @onclick="SaveSerials" disabled="@_busy">
+                    Save serials
+                </button>
+            </div>
+        }
+
+        <div class="tbl-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Serial Number</th>
+                        <th>Brand</th>
+                        <th>Model</th>
+                        <th>Care Pack</th>
+                        <th>Warranty End</th>
+                        <th>Flags</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var i = 0; i < _batch.Devices.Count; i++)
+                    {
+                        var d = _batch.Devices.OrderBy(x => x.SerialNumber).ElementAt(i);
+                        <tr class="@(CarePackCoverage.IsExpired(d.WarrantyEnd) ? "row-cp-expired" : null)">
+                            <td>@(i + 1)</td>
+                            <td><code class="sn">@d.SerialNumber</code></td>
+                            <td>@(d.OemBrand ?? "—")</td>
+                            <td>@(d.OriginalModel ?? "—")</td>
+                            <td>@(d.CarePackType ?? "—")</td>
+                            <td class="date-cell">@(d.WarrantyEnd?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                            <td>
+                                @if (CarePackCoverage.IsExpired(d.WarrantyEnd))
+                                {
+                                    <span class="badge badge-cp-expired">Expired</span>
+                                }
+                                @if (d.Overridden)
+                                {
+                                    <span class="badge badge-override">Override</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (_isAdmin && !string.IsNullOrEmpty(_deleteHint))
+    {
+        <div class="card">
+            <div class="card-title">Delete eligibility</div>
+            <p class="@(_canDelete ? "ok-text" : "muted")">@_deleteHint</p>
+            <p class="help-text">
+                Delete is allowed only when this invoice has no PO link, no PO validation, no OEM invoice/install date, and no device SN on an RMA ticket.
+                Admin can remove payment / OEM invoice / PO first (reason + confirmation) to reopen the chain.
+            </p>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    CarePackBatch? _batch;
+    bool _loading = true, _saving, _busy;
+    bool _isAdmin, _canEditDevices, _canEditOem, _canEditProduct, _canDelete, _editingSerials, _showOverride, _showProductEdit, _showPeriodEdit, _showHeaderEdit, _showDocRemove, _confirmDelete;
+    bool _canRemovePay, _canRemoveOem, _canRemovePo;
+    string _userName = "", _role = "";
+    string? _saveMsg, _error, _okMsg, _deleteHint, _payRemoveHint, _oemRemoveHint, _poRemoveHint;
+    string _docAction = "", _docReason = "";
+    bool _docConfirmed;
+    string? _oemInv;
+    DateTime? _oemDate;
+    DateTime? _installDate;
+    decimal? _oemAmt;
+    string _oemCur = "USD";
+    decimal _paidAmt;
+    int _poLimit = 25, _payLimit = 40, _poDaysRem, _payDaysRem;
+    DateOnly? _poDue, _payDue;
+
+    string _editListText = "";
+    int _editQty = 1;
+    string _corrBrand = "Printronix", _corrModel = "", _corrType = "5 Year";
+    string _editBrand = "Printronix", _editModel = "", _editCpType = "5 Year", _productNote = "";
+    string _periodType = "3 Year", _periodNote = "";
+    string _hdrInvoice = "", _hdrCustomer = "", _hdrCarePackName = "", _hdrNote = "";
+    string _overrideReason = "";
+    bool _overrideConfirmed;
+
+    bool CanApplyOverride =>
+        !string.IsNullOrWhiteSpace(_overrideReason) && _overrideConfirmed;
+
+    bool CanConfirmDocRemove =>
+        !string.IsNullOrWhiteSpace(_docAction) &&
+        !string.IsNullOrWhiteSpace(_docReason) &&
+        _docConfirmed;
+
+    string VerificationBoxClass =>
+        _batch?.VerificationComplete == true ? "ok" : "pending";
+
+    string PoLinkedClass =>
+        string.IsNullOrEmpty(_batch?.PurchaseOrderNumber) ? "" : "ok-text";
+
+    string PoLinkedLabel =>
+        string.IsNullOrEmpty(_batch?.PurchaseOrderNumber)
+            ? "(missing)"
+            : $"({_batch!.PurchaseOrderNumber})";
+
+    string OemInvClass =>
+        string.IsNullOrWhiteSpace(_oemInv) ? "" : "ok-text";
+
+    string OemPdfClass =>
+        string.IsNullOrEmpty(_batch?.OemInvoicePdfPath) ? "" : "ok-text";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        var (name, role) = await Session.GetCurrentAsync();
+        _userName = name;
+        _role = role;
+        _isAdmin = AppRoles.CanOverride(role);
+        await ReloadAsync();
+        _loading = false;
+    }
+
+    async Task ReloadAsync()
+    {
+        _batch = await CarePack.GetBatchAsync(Id);
+        if (_batch == null) return;
+
+        _oemInv = _batch.OemInvoiceNumber;
+        _oemDate = _batch.OemInvoiceDate?.ToDateTime(TimeOnly.MinValue);
+        _installDate = _batch.InstallationDate?.ToDateTime(TimeOnly.MinValue);
+        _oemAmt = _batch.OemInvoiceAmount;
+        _oemCur = _batch.OemInvoiceCurrency ?? "USD";
+        _paidAmt = _batch.PaymentAllocations?.Sum(a => a.AllocatedAmount) ?? 0m;
+
+        (_poLimit, _payLimit) = await CarePack.GetDeadlineLimitsAsync();
+        _poDue = CarePackDeadlines.PoDueDate(_batch.InvoiceDate, _poLimit);
+        _payDue = CarePackDeadlines.PaymentDueDate(_batch.OemInvoiceDate, _payLimit);
+        _poDaysRem = CarePackDeadlines.DaysRemaining(_poDue);
+        _payDaysRem = CarePackDeadlines.DaysRemaining(_payDue);
+
+        var roleOk = AppRoles.CanEditSerials(_role);
+        _canEditProduct = roleOk;
+        _canEditDevices = roleOk && CarePack.CanEditDevices(_batch);
+        _canEditOem = roleOk;
+        _editQty = _batch.InvoiceQty > 0 ? _batch.InvoiceQty : _batch.DeviceCount;
+        _editListText = string.Join("\n", _batch.Devices.OrderBy(d => d.SerialNumber).Select(d => d.SerialNumber));
+        _corrBrand = _batch.OemBrand ?? OemBrandCatalog.Brands.First();
+        _corrModel = _batch.PrinterModel ?? "";
+        _corrType = _batch.CarePackType ?? "5 Year";
+        _editBrand = _corrBrand;
+        _editModel = _corrModel;
+        _editCpType = _corrType;
+        _periodType = _corrType;
+
+        if (_isAdmin)
+        {
+            var (ok, reason) = await CarePack.CanDeleteBatchAsync(Id);
+            _canDelete = ok;
+            _deleteHint = reason;
+
+            (_canRemovePay, _payRemoveHint) = await CarePack.CanRemoveOemPaymentAsync(Id);
+            (_canRemoveOem, _oemRemoveHint) = await CarePack.CanRemoveOemInvoiceAsync(Id);
+            (_canRemovePo, _poRemoveHint) = await CarePack.CanRemovePoAsync(Id);
+        }
+    }
+
+    void ToggleDocRemove()
+    {
+        _showDocRemove = !_showDocRemove;
+        _error = null;
+        _okMsg = null;
+        if (!_showDocRemove)
+            CancelDocRemove();
+    }
+
+    void BeginDocRemove(string action)
+    {
+        _error = null;
+        _okMsg = null;
+        _docAction = action;
+        _docReason = "";
+        _docConfirmed = false;
+    }
+
+    void CancelDocRemove()
+    {
+        _docAction = "";
+        _docReason = "";
+        _docConfirmed = false;
+    }
+
+    async Task ConfirmDocRemove()
+    {
+        if (_batch == null || string.IsNullOrEmpty(_docAction)) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            if (_docAction == CarePackDocumentActions.RemoveOemPayment)
+                await CarePack.RemoveOemPaymentAsync(_batch.Id, _docReason, _docConfirmed);
+            else if (_docAction == CarePackDocumentActions.RemoveOemInvoice)
+                await CarePack.RemoveOemInvoiceAsync(_batch.Id, _docReason, _docConfirmed);
+            else if (_docAction == CarePackDocumentActions.RemovePo)
+                await CarePack.RemovePoAsync(_batch.Id, _docReason, _docConfirmed);
+            else
+                throw new InvalidOperationException("Unknown document action.");
+
+            _okMsg = $"{CarePackDocumentActions.Label(_docAction)} removed from {_batch.InvoiceNumber}.";
+            CancelDocRemove();
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    void ToggleEditSerials()
+    {
+        _editingSerials = !_editingSerials;
+        _error = null;
+        _okMsg = null;
+        if (_editingSerials && _batch != null)
+        {
+            _editListText = string.Join("\n", _batch.Devices.OrderBy(d => d.SerialNumber).Select(d => d.SerialNumber));
+            _editQty = _batch.InvoiceQty > 0 ? _batch.InvoiceQty : _batch.DeviceCount;
+        }
+    }
+
+    void ToggleProductEdit()
+    {
+        _showProductEdit = !_showProductEdit;
+        _error = null;
+        _okMsg = null;
+        if (_showProductEdit && _batch != null)
+        {
+            _editBrand = _batch.OemBrand ?? OemBrandCatalog.Brands.First();
+            _editModel = _batch.PrinterModel ?? "";
+            _editCpType = _batch.CarePackType ?? "5 Year";
+            _productNote = "";
+        }
+    }
+
+    void TogglePeriodEdit()
+    {
+        _showPeriodEdit = !_showPeriodEdit;
+        _error = null;
+        _okMsg = null;
+        if (_showPeriodEdit && _batch != null)
+        {
+            _periodType = _batch.CarePackType ?? "3 Year";
+            _periodNote = "";
+        }
+    }
+
+    void ToggleHeaderEdit()
+    {
+        _showHeaderEdit = !_showHeaderEdit;
+        _error = null;
+        _okMsg = null;
+        if (_showHeaderEdit && _batch != null)
+        {
+            _hdrInvoice = _batch.InvoiceNumber;
+            _hdrCustomer = _batch.CustomerName ?? "";
+            _hdrCarePackName = _batch.InvoiceItemName ?? "";
+            _hdrNote = "";
+        }
+    }
+
+    async Task SaveHeader()
+    {
+        if (_batch == null) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            await CarePack.UpdateBatchHeaderAsync(
+                _batch.Id, _hdrInvoice, _hdrCustomer, _hdrCarePackName, _hdrNote);
+            _okMsg = "Invoice / customer / care pack name saved.";
+            _showHeaderEdit = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SaveCarePackPeriod()
+    {
+        if (_batch == null) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            await CarePack.UpdateCarePackPeriodAsync(_batch.Id, _periodType, _periodNote);
+            _okMsg = "Care pack period saved — warranty end recalculated for all devices.";
+            _showPeriodEdit = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SaveBrandProduct()
+    {
+        if (_batch == null) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            await CarePack.UpdateBatchBrandAndProductAsync(
+                _batch.Id, _editBrand, _editModel, _editCpType, _productNote);
+            _okMsg = "Brand and product saved for this invoice and all devices.";
+            _showProductEdit = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SaveSerials()
+    {
+        if (_batch == null) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            var lines = _editListText.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            await CarePack.ReplaceSerialsAsync(_batch.Id, lines, _editQty);
+            await ReloadAsync();
+            _editingSerials = false;
+            _okMsg = "Serial numbers updated.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task ApplyOverride()
+    {
+        if (_batch == null) return;
+        _busy = true;
+        _error = null;
+        _okMsg = null;
+        try
+        {
+            await CarePack.ApplyBatchOverrideAsync(
+                _batch.Id, _corrBrand, _corrModel, _corrType, _overrideReason, _overrideConfirmed);
+            await ReloadAsync();
+            _showOverride = false;
+            _overrideReason = "";
+            _overrideConfirmed = false;
+            _okMsg = "Override applied.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task StartDelete()
+    {
+        _error = null;
+        _okMsg = null;
+        var (ok, reason) = await CarePack.CanDeleteBatchAsync(Id);
+        _canDelete = ok;
+        _deleteHint = reason;
+        if (!ok)
+        {
+            _error = reason;
+            _confirmDelete = false;
+            return;
+        }
+        _confirmDelete = true;
+    }
+
+    async Task ConfirmDelete()
+    {
+        _error = null;
+        _okMsg = null;
+        var (ok, reason) = await CarePack.CanDeleteBatchAsync(Id);
+        _canDelete = ok;
+        _deleteHint = reason;
+        if (!ok)
+        {
+            _error = reason;
+            _confirmDelete = false;
+            return;
+        }
+
+        try
+        {
+            _busy = true;
+            await CarePack.DeleteBatchAsync(Id);
+            Nav.NavigateTo("/care-packs");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task SaveOem()
+    {
+        if (_batch == null) return;
+        _saving = true;
+        _saveMsg = null;
+        try
+        {
+            await CarePack.UpdateOemDetailsAsync(
+                _batch.Id,
+                _oemInv,
+                _oemDate.HasValue ? DateOnly.FromDateTime(_oemDate.Value) : null,
+                _installDate.HasValue ? DateOnly.FromDateTime(_installDate.Value) : null,
+                _userName,
+                _oemAmt,
+                _oemCur);
+            await ReloadAsync();
+            _saveMsg = _batch!.VerificationComplete
+                ? "Saved — 100% verified (PO + OEM invoice + PDF)."
+                : "Saved. Upload OEM invoice PDF (and ensure PO is linked) to reach 100% verified.";
+        }
+        catch (Exception ex) { _saveMsg = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    async Task OnOemPdfSelected(InputFileChangeEventArgs e)
+    {
+        if (_batch == null || !_canEditOem) return;
+        _saving = true;
+        _saveMsg = null;
+        _error = null;
+        try
+        {
+            // Persist number/date first so filename can use OEM invoice no.
+            await CarePack.UpdateOemDetailsAsync(
+                _batch.Id,
+                _oemInv,
+                _oemDate.HasValue ? DateOnly.FromDateTime(_oemDate.Value) : null,
+                _installDate.HasValue ? DateOnly.FromDateTime(_installDate.Value) : null,
+                _userName,
+                _oemAmt,
+                _oemCur);
+
+            await using var stream = e.File.OpenReadStream(maxAllowedSize: 30 * 1024 * 1024);
+            await CarePack.SaveOemInvoicePdfAsync(_batch.Id, stream, e.File.Name, _userName);
+            await ReloadAsync();
+            _saveMsg = _batch!.VerificationComplete
+                ? "PDF saved — batch is now 100% verified."
+                : "PDF saved. Enter OEM invoice number (and ensure PO is linked) to complete verification.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    async Task ClearOemPdf()
+    {
+        if (_batch == null) return;
+        _saving = true;
+        try
+        {
+            await CarePack.ClearOemInvoicePdfAsync(_batch.Id, _userName);
+            await ReloadAsync();
+            _saveMsg = "OEM invoice PDF removed — verification cleared.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    static string Truncate(string s, int n) =>
+        s.Length <= n ? s : s[..n] + "…";
+}

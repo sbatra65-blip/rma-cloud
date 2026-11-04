@@ -1,0 +1,156 @@
+@page "/care-packs/pending"
+@inject CarePackService CarePack
+@inject NavigationManager Nav
+
+<PageTitle>Care Pack Pending Reports — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Pending &amp; deadline reports</h1>
+        <p class="page-hero-sub">
+            PO to OEM within <strong>@_poLimit days</strong> of sales invoice (contract 30).
+            OEM payment within <strong>@_payLimit days</strong> of OEM bill (contract 45).
+        </p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/care-packs/payments" class="btn btn-primary">OEM payments</a>
+        <a href="/care-packs" class="btn btn-ghost">← Care Packs</a>
+        <button class="btn btn-ghost" type="button" @onclick="Reload" disabled="@_loading">Refresh</button>
+    </div>
+</div>
+
+<div class="tabs" style="margin-bottom:12px">
+    <div class="tab @(_tab == "po" ? "active" : "")" @onclick='() => _tab = "po"'>
+        PO not linked (@_poPending.Count)
+    </div>
+    <div class="tab @(_tab == "podue" ? "active" : "")" @onclick='() => _tab = "podue"'>
+        PO deadline (@_poDue.Count)
+    </div>
+    <div class="tab @(_tab == "inv" ? "active" : "")" @onclick='() => _tab = "inv"'>
+        OEM docs pending (@_invPending.Count)
+    </div>
+    <div class="tab @(_tab == "pay" ? "active" : "")" @onclick='() => _tab = "pay"'>
+        OEM payment due (@_payDue.Count)
+    </div>
+</div>
+
+@if (_tab == "po")
+{
+    <div class="card">
+        <div class="card-title">OEM PO not issued / not linked</div>
+        @RenderPending(_poPending)
+    </div>
+}
+else if (_tab == "podue")
+{
+    <div class="card">
+        <div class="card-title">PO deadline (from sales invoice date)</div>
+        <p class="help-text">App limit @_poLimit days; contractual maximum 30 days. Overdue PO needs Admin Accept Anyway.</p>
+        @RenderPending(_poDue, showDue: true)
+    </div>
+}
+else if (_tab == "inv")
+{
+    <div class="card">
+        <div class="card-title">OEM invoice not received / not entered</div>
+        @RenderPending(_invPending)
+    </div>
+}
+else
+{
+    <div class="card">
+        <div class="card-title">OEM invoice payment due</div>
+        <p class="help-text">
+            App limit @_payLimit days from OEM billing date; contractual maximum 45 days.
+            <a href="/care-packs/payments">Record a combined payment</a> to save bank/SWIFT charges.
+        </p>
+        @RenderPending(_payDue, showDue: true, showPay: true)
+    </div>
+}
+
+@code {
+    string _tab = "podue";
+    bool _loading = true;
+    int _poLimit = 25, _payLimit = 40;
+    List<CarePackPendingItem> _poPending = new();
+    List<CarePackPendingItem> _poDue = new();
+    List<CarePackPendingItem> _invPending = new();
+    List<CarePackPendingItem> _payDue = new();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        _loading = true;
+        try
+        {
+            (_poLimit, _payLimit) = await CarePack.GetDeadlineLimitsAsync();
+            _poPending = await CarePack.GetPoNotIssuedReportAsync();
+            _poDue = await CarePack.GetPoDeadlineReportAsync();
+            _invPending = await CarePack.GetOemInvoicePendingReportAsync();
+            _payDue = await CarePack.GetOemPaymentDeadlineReportAsync();
+        }
+        finally { _loading = false; }
+    }
+
+    RenderFragment RenderPending(List<CarePackPendingItem> rows, bool showDue = false, bool showPay = false) =>
+    @<div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Sales invoice</th>
+                    <th>Customer</th>
+                    <th>Brand / Model</th>
+                    <th>PO</th>
+                    <th>OEM inv.</th>
+                    @if (showDue) { <th>Due</th><th>Days</th> }
+                    @if (showPay) { <th>Amount</th><th>Paid</th> }
+                    <th>Gap</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_loading)
+                {
+                    <tr><td colspan="10" class="empty-cell">Loading…</td></tr>
+                }
+                else if (rows.Count == 0)
+                {
+                    <tr><td colspan="10" class="empty-cell">Nothing pending in this list.</td></tr>
+                }
+                else
+                {
+                    @foreach (var r in rows)
+                    {
+                        <tr class="@(r.DaysRemaining is < 0 ? "row-overdue" : r.DaysRemaining is <= 5 ? "row-soon" : "")">
+                            <td>
+                                <strong class="ticket-link" @onclick="@(() => Nav.NavigateTo($"/care-packs/{r.BatchId}"))">
+                                    @r.InvoiceNumber
+                                </strong>
+                            </td>
+                            <td>@(r.CustomerName ?? "—")</td>
+                            <td>@(r.OemBrand ?? "—") / @(r.PrinterModel ?? "—")</td>
+                            <td>@(r.PurchaseOrderNumber ?? "—")</td>
+                            <td>@(r.OemInvoiceNumber ?? "—")</td>
+                            @if (showDue)
+                            {
+                                <td>@(r.DueDate?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                                <td>@(r.DaysRemaining?.ToString() ?? "—")</td>
+                            }
+                            @if (showPay)
+                            {
+                                <td>@(r.OemInvoiceAmount?.ToString("N2") ?? "—")</td>
+                                <td>@(r.AmountPaid?.ToString("N2") ?? "—")</td>
+                            }
+                            <td>@r.Gap</td>
+                            <td>
+                                <button class="btn btn-ghost btn-sm" type="button"
+                                        @onclick="@(() => Nav.NavigateTo($"/care-packs/{r.BatchId}"))">Open</button>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>;
+}

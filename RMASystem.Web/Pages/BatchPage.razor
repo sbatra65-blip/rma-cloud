@@ -1,0 +1,177 @@
+@page "/batch"
+@inject BatchService BatchSvc
+@inject NavigationManager Nav
+@using System.IO
+
+<PageTitle>Monthly Batch — RMA System</PageTitle>
+
+<div class="card">
+    <div class="card-title">Monthly OEM Batch Dispatch</div>
+    <p class="help-text">
+        All tickets with status "OEM RMA Received" are candidates for the
+        monthly batch dispatch to TSC Auto ID.
+    </p>
+
+    @if (!_candidates.Any())
+    {
+        <p style="color:#64748b">No tickets currently in "OEM RMA Received" status.</p>
+    }
+    else
+    {
+        <p style="font-size:13px;margin-bottom:12px">
+            <strong>@_candidates.Count</strong> ticket(s) ready for dispatch:
+        </p>
+        <div class="tbl-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" @onchange="ToggleAll" /></th>
+                        <th>Ticket #</th><th>OEM RMA #</th><th>Printer</th>
+                        <th>Serial No</th><th>Customer</th><th>Raised</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in _candidates)
+                    {
+                        <tr>
+                            <td><input type="checkbox" checked="@_selected.Contains(t.Id)"
+                                       @onchange="e => Toggle(t.Id, (bool)e.Value!)" /></td>
+                            <td><strong>@t.InternalTicketNo</strong></td>
+                            <td>@(t.OemRmaNumber ?? "—")</td>
+                            <td>@(t.PrinterModel ?? "—")</td>
+                            <td><code class="sn">@(t.PrinterSn ?? "—")</code></td>
+                            <td>@(t.CustomerCompany ?? "—")</td>
+                            <td class="date-cell">@t.CreatedAt.ToString("dd-MMM-yyyy")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (!_showForm)
+        {
+            <div style="margin-top:16px">
+                <button class="btn btn-primary"
+                        @onclick="() => _showForm = true"
+                        disabled="@(!_selected.Any())">
+                    Proceed with Selected (@_selected.Count) →
+                </button>
+            </div>
+        }
+        else
+        {
+            <div class="section-hdr" style="margin-top:16px">Confirm Dispatch Details</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Dispatch Date</label>
+                    <input type="date" class="form-control" @bind="_dispatchDate" />
+                </div>
+                <div class="form-group">
+                    <label>Remarks (optional)</label>
+                    <input class="form-control" @bind="_remarks"
+                           placeholder="Any notes for this batch..." />
+                </div>
+            </div>
+            <div style="margin-top:16px;display:flex;gap:10px">
+                <button class="btn btn-primary" @onclick="ConfirmBatch" disabled="@_saving">
+                    @if (_saving) { <span class="spinner"></span> }
+                    ✅ Confirm &amp; Generate Packing List
+                </button>
+                <button class="btn btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+            </div>
+            @if (!string.IsNullOrEmpty(_msg))
+            {
+                <div class="success-msg">@_msg</div>
+            }
+        }
+    }
+
+    <!-- Past Batches -->
+    <div style="margin-top:32px">
+        <div class="card-title" style="font-size:14px;margin-bottom:12px">Past Batches</div>
+        @if (!_batches.Any())
+        {
+            <p style="color:#94a3b8;font-size:13px">No batches yet.</p>
+        }
+        else
+        {
+            <div class="tbl-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Batch ID</th><th>Month</th><th>Dispatch Date</th>
+                            <th>Total RMAs</th><th>Remarks</th><th>Download</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var b in _batches)
+                        {
+                            <tr>
+                                <td><strong>@b.BatchId</strong></td>
+                                <td>@b.BatchMonth</td>
+                                <td>@(b.DispatchDate?.ToString("dd-MMM-yyyy") ?? "—")</td>
+                                <td>@b.TotalRmas</td>
+                                <td>@(b.Remarks ?? "—")</td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(b.ExcelPath) &&
+                                         File.Exists(b.ExcelPath))
+                                    {
+                                        <a href="/api/batch-download/@b.BatchId"
+                                           class="btn btn-ghost btn-sm">⬇ Excel</a>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    List<RMASystem.Models.RMATicket> _candidates = new();
+    List<MonthlyBatch>               _batches    = new();
+    HashSet<int> _selected = new();
+    bool         _showForm, _saving;
+    DateOnly     _dispatchDate = DateOnly.FromDateTime(DateTime.Today);
+    string       _remarks = "", _msg = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _candidates = await BatchSvc.GetCandidatesAsync();
+        _selected   = _candidates.Select(c => c.Id).ToHashSet();
+        _batches    = await BatchSvc.GetAllBatchesAsync();
+    }
+
+    void Toggle(int id, bool on)
+    {
+        if (on) _selected.Add(id); else _selected.Remove(id);
+    }
+
+    void ToggleAll(ChangeEventArgs e)
+    {
+        if ((bool)e.Value!)
+            _selected = _candidates.Select(c => c.Id).ToHashSet();
+        else
+            _selected.Clear();
+    }
+
+    async Task ConfirmBatch()
+    {
+        if (!_selected.Any()) return;
+        _saving = true;
+        try
+        {
+            var batch = await BatchSvc.CreateBatchAsync(
+                _selected.ToList(), _dispatchDate, _remarks);
+            _msg = $"Batch {batch.BatchId} created with {batch.TotalRmas} RMAs. Packing list generated.";
+            _candidates = await BatchSvc.GetCandidatesAsync();
+            _batches    = await BatchSvc.GetAllBatchesAsync();
+            _selected.Clear();
+            _showForm = false;
+        }
+        catch (Exception ex) { _msg = "Error: " + ex.Message; }
+        finally { _saving = false; }
+    }
+}

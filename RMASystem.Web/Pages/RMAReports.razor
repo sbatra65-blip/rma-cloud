@@ -1,0 +1,204 @@
+@page "/rma/reports"
+@inject AppDbContext Db
+@inject ExcelService ExcelSvc
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using RMASystem
+@using RMASystem.Models
+@using ClosedXML.Excel
+
+<PageTitle>RMA Reports — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">RMA Reports</h1>
+        <p class="page-hero-sub">Filter tickets by status and date, then export Excel for management / OEM follow-up.</p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/rma" class="btn btn-ghost">RMA list</a>
+        <a href="/reminders" class="btn btn-ghost">Reminders</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="@(_isError ? "error-msg" : "success-msg")">@_msg</div>
+}
+
+<div class="card">
+    <div class="form-grid" style="margin-bottom:12px">
+        <div class="form-group">
+            <label>From</label>
+            <InputDate @bind-Value="_from" class="form-control" />
+        </div>
+        <div class="form-group">
+            <label>To</label>
+            <InputDate @bind-Value="_to" class="form-control" />
+        </div>
+        <div class="form-group">
+            <label>Status</label>
+            <select class="form-control" @bind="_status">
+                <option value="">All statuses</option>
+                @foreach (var s in RMAStatus.All)
+                {
+                    <option value="@s">@RMAStatus.Label(s)</option>
+                }
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Customer contains</label>
+            <input class="form-control" @bind="_customer" placeholder="Optional" />
+        </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-primary" type="button" @onclick="RunReport" disabled="@_busy">Run report</button>
+        <button class="btn btn-ghost" type="button" @onclick="ExportExcel" disabled="@(_busy || _rows.Count == 0)">Export Excel</button>
+    </div>
+
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticket</th>
+                    <th>Status</th>
+                    <th>Customer</th>
+                    <th>Model</th>
+                    <th>Serial</th>
+                    <th>Part</th>
+                    <th>Part code</th>
+                    <th>OEM RMA</th>
+                    <th>Excel</th>
+                    <th>Created</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_busy)
+                {
+                    <tr><td colspan="11" class="empty-cell">Loading…</td></tr>
+                }
+                else if (_rows.Count == 0)
+                {
+                    <tr><td colspan="11" class="empty-cell">No rows — adjust filters and Run report.</td></tr>
+                }
+                else
+                {
+                    @foreach (var t in _rows)
+                    {
+                        <tr>
+                            <td><a href="/rma/@t.Id">@t.InternalTicketNo</a></td>
+                            <td><StatusBadge Status="@t.Status" /></td>
+                            <td>@(t.CustomerCompany ?? "—")</td>
+                            <td>@(t.PrinterModel ?? "—")</td>
+                            <td><code class="sn">@(t.PrinterSn ?? "—")</code></td>
+                            <td>@(t.FaultyPart ?? "—")</td>
+                            <td>@(t.FaultyPartNo ?? "—")</td>
+                            <td>@(t.OemRmaNumber ?? "—")</td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(t.ExcelFilePath) && File.Exists(t.ExcelFilePath))
+                                {
+                                    <span class="ok-text" title="@t.ExcelFilePath">Ready</span>
+                                }
+                                else { <span class="muted">—</span> }
+                            </td>
+                            <td class="date-cell">@t.CreatedAt.ToString("dd-MMM-yyyy")</td>
+                            <td><a class="btn btn-sm btn-ghost" href="/rma/@t.Id">Open</a></td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="muted">@_rows.Count row(s)</p>
+</div>
+
+@code {
+    DateOnly? _from = DateOnly.FromDateTime(DateTime.Today.AddMonths(-3));
+    DateOnly? _to = DateOnly.FromDateTime(DateTime.Today);
+    string _status = "", _customer = "", _msg = "";
+    bool _busy, _isError;
+    List<RMATicket> _rows = new();
+
+    protected override async Task OnInitializedAsync() => await RunReport();
+
+    async Task RunReport()
+    {
+        _busy = true;
+        _msg = "";
+        try
+        {
+            var q = Db.RMATickets.AsNoTracking().AsQueryable();
+            if (_from != null)
+            {
+                var fromDt = _from.Value.ToDateTime(TimeOnly.MinValue);
+                q = q.Where(t => t.CreatedAt >= fromDt);
+            }
+            if (_to != null)
+            {
+                var toDt = _to.Value.ToDateTime(new TimeOnly(23, 59, 59));
+                q = q.Where(t => t.CreatedAt <= toDt);
+            }
+            if (!string.IsNullOrWhiteSpace(_status))
+                q = q.Where(t => t.Status == _status);
+            if (!string.IsNullOrWhiteSpace(_customer))
+            {
+                var c = _customer.Trim().ToLower();
+                q = q.Where(t => t.CustomerCompany != null && t.CustomerCompany.ToLower().Contains(c));
+            }
+            _rows = await q.OrderByDescending(t => t.CreatedAt).Take(2000).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    async Task ExportExcel()
+    {
+        _busy = true;
+        try
+        {
+            var dir = Path.Combine(AppPaths.DataRoot, "Reports");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"RMA_Report_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx");
+            using var wb = new XLWorkbook();
+            var ws = wb.AddWorksheet("RMA Report");
+            var headers = new[]
+            {
+                "Ticket", "Status", "Customer", "Model", "Serial", "Part", "Part Code",
+                "Part SN", "OEM RMA", "Excel Path", "Created", "Email Sent"
+            };
+            for (var i = 0; i < headers.Length; i++)
+                ws.Cell(1, i + 1).Value = headers[i];
+            ws.Row(1).Style.Font.SetBold(true);
+            for (var r = 0; r < _rows.Count; r++)
+            {
+                var t = _rows[r];
+                var row = r + 2;
+                ws.Cell(row, 1).Value = t.InternalTicketNo;
+                ws.Cell(row, 2).Value = RMAStatus.Label(t.Status);
+                ws.Cell(row, 3).Value = t.CustomerCompany ?? "";
+                ws.Cell(row, 4).Value = t.PrinterModel ?? "";
+                ws.Cell(row, 5).Value = t.PrinterSn ?? "";
+                ws.Cell(row, 6).Value = t.FaultyPart ?? "";
+                ws.Cell(row, 7).Value = t.FaultyPartNo ?? "";
+                ws.Cell(row, 8).Value = t.FaultyPartSn ?? "";
+                ws.Cell(row, 9).Value = t.OemRmaNumber ?? "";
+                ws.Cell(row, 10).Value = t.ExcelFilePath ?? "";
+                ws.Cell(row, 11).Value = t.CreatedAt.ToString("dd-MMM-yyyy HH:mm");
+                ws.Cell(row, 12).Value = t.OemEmailSentAt?.ToString("dd-MMM-yyyy HH:mm") ?? "";
+            }
+            wb.SaveAs(path);
+            _msg = $"Report saved: {path}";
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+}

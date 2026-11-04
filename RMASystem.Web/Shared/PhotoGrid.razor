@@ -1,0 +1,27 @@
+@using RMASystem.Models
+
+@if (!Photos.Any())
+{
+    <p class="no-photos">No photos yet</p>
+}
+else
+{
+    <div class="photo-grid">
+        @foreach (var p in Photos)
+        {
+            <div class="photo-thumb">
+                <a href="/api/photo/@p.Id" target="_blank" title="Open full size">
+                    <img class="photo-preview" src="/api/photo/@p.Id" alt="@p.Filename" loading="lazy" />
+                </a>
+                <div class="photo-name" title="@p.Filename">@p.Filename</div>
+                <div class="photo-meta">@p.CapturedAt.ToString("dd-MMM-yyyy HH:mm")</div>
+                <button class="del-btn" type="button" @onclick="() => OnDelete.InvokeAsync(p.Id)">✕</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public List<RMAPhoto> Photos { get; set; } = new();
+    [Parameter] public EventCallback<int> OnDelete { get; set; }
+}

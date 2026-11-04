@@ -1,0 +1,314 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject UserSessionService Session
+@inject AuthService Auth
+@inject CompanyService Companies
+@inject UiPreferenceService Prefs
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Models
+@using RMASystem.Services
+
+<div class="app-shell">
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="logo"><i class="ti ti-printer" aria-hidden="true"></i></div>
+            <div>
+                <div class="app-name">@(_companyName) — Service Management</div>
+                <div class="app-sub">RMA · Support · Repairs · Care Packs · @(_companyCity)</div>
+            </div>
+        </div>
+        <nav class="topbar-nav">
+            <NavLink href="/" Match="NavLinkMatch.All" class="nav-item">Dashboard</NavLink>
+            <NavLink href="/rma" class="nav-item">RMA</NavLink>
+            <NavLink href="/care-packs" class="nav-item">Care Packs</NavLink>
+            <NavLink href="/batch" class="nav-item">Batch</NavLink>
+            <NavLink href="/import" class="nav-item">Import</NavLink>
+        </nav>
+        <div class="topbar-right">
+            <div class="company-pill" title="Signed in company (change company by signing out)">
+                <i class="ti ti-building" aria-hidden="true"></i>
+                <span>@_companyName</span>
+            </div>
+            <button class="theme-toggle" @onclick="ToggleDark" title="Toggle dark mode" type="button">
+                <i class="ti @(_dark ? "ti-sun" : "ti-moon")" aria-hidden="true"></i>
+                @(_dark ? "Light" : "Dark")
+            </button>
+            <div class="user-pill">
+                <div class="avatar">@_initials</div>
+                <span>@_userName</span>
+                <span style="color:var(--text-danger);font-size:10px">(@_role)</span>
+            </div>
+            @if (_isAdmin)
+            {
+                <a href="/settings" class="btn btn-icon" title="Settings">
+                    <i class="ti ti-settings" style="font-size:14px" aria-hidden="true"></i>
+                </a>
+            }
+        </div>
+    </header>
+
+    <div class="shell-main">
+        <aside class="sidebar">
+            <div class="sidebar-section">Operations</div>
+            <NavLink href="/" Match="NavLinkMatch.All" class="sidebar-item">
+                <i class="ti ti-layout-dashboard" aria-hidden="true"></i>Dashboard
+            </NavLink>
+            <NavLink href="/rma" class="sidebar-item">
+                <i class="ti ti-refresh-alert" aria-hidden="true"></i>RMA Tickets
+                @if (_rmaOpen > 0) { <span class="badge blue">@_rmaOpen</span> }
+            </NavLink>
+            <NavLink href="/new-rma" class="sidebar-item">
+                <i class="ti ti-plus" aria-hidden="true"></i>New RMA
+            </NavLink>
+            <NavLink href="/rma/reports" class="sidebar-item">
+                <i class="ti ti-report-analytics" aria-hidden="true"></i>RMA Reports
+            </NavLink>
+            <NavLink href="/reminders" class="sidebar-item">
+                <i class="ti ti-bell" aria-hidden="true"></i>Reminders
+            </NavLink>
+            <div class="sidebar-item" style="opacity:.55;cursor:default">
+                <i class="ti ti-headset" aria-hidden="true"></i>Support
+            </div>
+            <div class="sidebar-item" style="opacity:.55;cursor:default">
+                <i class="ti ti-tool" aria-hidden="true"></i>Repair Jobs
+            </div>
+
+            <div class="sidebar-section">Devices &amp; Care</div>
+            <NavLink href="/care-packs" class="sidebar-item">
+                <i class="ti ti-shield-check" aria-hidden="true"></i>Care Packs
+                @if (_careAlert > 0) { <span class="badge red">@_careAlert</span> }
+            </NavLink>
+            <NavLink href="/care-packs/manual" class="sidebar-item">
+                <i class="ti ti-keyboard" aria-hidden="true"></i>Register Care Pack
+            </NavLink>
+            <NavLink href="/care-packs/pending" class="sidebar-item">
+                <i class="ti ti-report-search" aria-hidden="true"></i>Pending reports
+            </NavLink>
+            <NavLink href="/care-packs/payments" class="sidebar-item">
+                <i class="ti ti-building-bank" aria-hidden="true"></i>OEM payments
+            </NavLink>
+
+            <div class="sidebar-section">Parts &amp; Stock</div>
+            <div class="sidebar-item" style="opacity:.55;cursor:default">
+                <i class="ti ti-components" aria-hidden="true"></i>Part Movements
+            </div>
+            <div class="sidebar-item" style="opacity:.55;cursor:default">
+                <i class="ti ti-building-factory" aria-hidden="true"></i>Cannibalization
+            </div>
+
+            <div class="sidebar-section">Dispatch</div>
+            <NavLink href="/batch" class="sidebar-item">
+                <i class="ti ti-packages" aria-hidden="true"></i>Monthly Batch
+            </NavLink>
+
+            <div class="sidebar-section">Admin</div>
+            <NavLink href="/import" class="sidebar-item">
+                <i class="ti ti-database-import" aria-hidden="true"></i>Import Data
+            </NavLink>
+            @if (_isAdmin)
+            {
+                <NavLink href="/settings" class="sidebar-item">
+                    <i class="ti ti-settings" aria-hidden="true"></i>Settings
+                </NavLink>
+                <NavLink href="/admin/override-log" class="sidebar-item">
+                    <i class="ti ti-shield-lock" aria-hidden="true"></i>Override Log
+                </NavLink>
+                <NavLink href="/admin/users" class="sidebar-item">
+                    <i class="ti ti-users" aria-hidden="true"></i>Users
+                </NavLink>
+                <NavLink href="/admin/sessions" class="sidebar-item">
+                    <i class="ti ti-plug-connected" aria-hidden="true"></i>Sessions
+                </NavLink>
+            }
+            @if (_canManageMasters)
+            {
+                <NavLink href="/masters" class="sidebar-item">
+                    <i class="ti ti-database" aria-hidden="true"></i>Masters
+                </NavLink>
+            }
+            <a href="/api/auth/logout" class="sidebar-item">
+                <i class="ti ti-logout" aria-hidden="true"></i>Sign out
+            </a>
+        </aside>
+
+        <main class="content">
+            <ErrorBoundary @ref="_pageBoundary">
+                <ChildContent>
+                    @Body
+                </ChildContent>
+                <ErrorContent Context="ex">
+                    <div class="alert-banner danger" style="margin:16px">
+                        <strong>Page error</strong>
+                        <div style="margin-top:8px">@SqlResilience.UserMessage(ex)</div>
+                        <div style="margin-top:12px">
+                            <button class="btn btn-primary" type="button" @onclick="RecoverPage">Try again</button>
+                            @if (SqlResilience.IsTransient(ex))
+                            {
+                                <a class="btn btn-ghost" href="/setup" style="margin-left:8px">Database setup</a>
+                            }
+                        </div>
+                    </div>
+                </ErrorContent>
+            </ErrorBoundary>
+        </main>
+    </div>
+</div>
+
+@code {
+    string _userName = "", _role = "Technician", _initials = "IS";
+    string _companyName = "RMA System", _companyCity = "";
+    bool _dark, _themeApplied, _isAdmin, _canManageMasters;
+    int _rmaOpen, _careAlert;
+    System.Threading.Timer? _sessionWatch;
+    DateTime _badgesCachedAt = DateTime.MinValue;
+    ErrorBoundary? _pageBoundary;
+
+    void RecoverPage() => _pageBoundary?.Recover();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await Session.EnsureSettingsAsync();
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var (ok, _, mustChange) = await Auth.ValidateCurrentSessionAsync(authState.User);
+            if (!ok)
+            {
+                Nav.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+            if (mustChange)
+            {
+                Nav.NavigateTo("/change-password", forceLoad: true);
+                return;
+            }
+
+            var (name, role) = await Session.GetCurrentAsync();
+            _userName = name;
+            _role = role;
+            _isAdmin = AppRoles.CanAccessSettings(role);
+            _canManageMasters = AppRoles.CanManageMasters(role);
+            _initials = GetInitials(name);
+
+            var active = await Companies.GetActiveCompanyAsync();
+            _companyName = active.Name;
+            _companyCity = active.City ?? "";
+
+            var pref = await Prefs.GetAsync(name);
+            _dark = pref.DarkMode;
+
+            await RefreshBadgesAsync();
+
+            Nav.LocationChanged += OnLocationChanged;
+
+            _sessionWatch = new System.Threading.Timer(_ =>
+            {
+                _ = InvokeAsync(CheckSessionAliveAsync);
+            }, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        }
+        catch (Exception ex) when (SqlResilience.IsTransient(ex))
+        {
+            Nav.NavigateTo("/setup", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("MainLayout init failed: " + ex.Message);
+            Nav.NavigateTo("/login", forceLoad: true);
+        }
+    }
+
+    async Task CheckSessionAliveAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var (stillOk, failReason, needPwd) = await Auth.ValidateCurrentSessionAsync(authState.User);
+            if (!stillOk)
+            {
+                if (failReason is "session_ended" or "session_missing" or "user_disabled"
+                    or "invalid_claims" or "company_mismatch")
+                    Nav.NavigateTo("/login", forceLoad: true);
+                return;
+            }
+            if (needPwd)
+                Nav.NavigateTo("/change-password", forceLoad: true);
+        }
+        catch
+        {
+            // Ignore transient circuit/DB blips — do not force logout
+        }
+    }
+
+    void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _pageBoundary?.Recover();
+        _ = InvokeAsync(RefreshBadgesAsync);
+    }
+
+    async Task RefreshBadgesAsync()
+    {
+        if ((DateTime.UtcNow - _badgesCachedAt).TotalSeconds < 30)
+            return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await Companies.ApplyFilterAsync(db);
+            _rmaOpen = await db.RMATickets.CountAsync(t =>
+                t.Status != RMAStatus.Closed && t.Status != RMAStatus.ClosedReturned);
+            _careAlert = await db.CarePackBatches.CountAsync(b =>
+                !b.VerificationComplete ||
+                (b.InvoiceDate != null && string.IsNullOrWhiteSpace(b.PurchaseOrderNumber)));
+            _badgesCachedAt = DateTime.UtcNow;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* ignore */ }
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        _sessionWatch?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_themeApplied)
+        {
+            _themeApplied = true;
+            await ApplyThemeJs();
+        }
+    }
+
+    async Task ToggleDark()
+    {
+        _dark = !_dark;
+        await Prefs.SetDarkModeAsync(_dark, _userName);
+        await ApplyThemeJs();
+    }
+
+    async Task ApplyThemeJs()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("eval",
+                _dark
+                    ? "document.documentElement.classList.add('dark')"
+                    : "document.documentElement.classList.remove('dark')");
+        }
+        catch { /* prerender */ }
+    }
+
+    static string GetInitials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "IS";
+        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant();
+        return $"{char.ToUpperInvariant(parts[0][0])}{char.ToUpperInvariant(parts[^1][0])}";
+    }
+}

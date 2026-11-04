@@ -1,0 +1,608 @@
+@page "/"
+@inject DashboardService Dash
+@inject UiPreferenceService Prefs
+@inject UserSessionService Session
+@inject NavigationManager Nav
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject CarePackService CarePack
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Services
+
+<PageTitle>Dashboard — RMA System</PageTitle>
+
+@if (_loading)
+{
+    <div class="page-hdr"><div class="page-title">Dashboard</div></div>
+    <div class="widget"><div class="empty-cell">Loading…</div></div>
+}
+else if (_snap != null)
+{
+    var s = _snap;
+    <div class="page-hdr">
+        <div>
+            <div class="page-title">Dashboard</div>
+            <div class="page-sub">@_greeting</div>
+        </div>
+        <div class="page-hdr-actions">
+            <div class="seg-toggle" title="Dashboard layout">
+                <button type="button" class="@(_view == DashboardViews.Cards ? "active" : "")"
+                        @onclick="@(() => SetView(DashboardViews.Cards))">
+                    <i class="ti ti-layout-grid" aria-hidden="true"></i> Cards
+                </button>
+                <button type="button" class="@(_view == DashboardViews.List ? "active" : "")"
+                        @onclick="@(() => SetView(DashboardViews.List))">
+                    <i class="ti ti-list" aria-hidden="true"></i> List
+                </button>
+            </div>
+            <a href="/care-packs/pending" class="btn"><i class="ti ti-checklist" aria-hidden="true"></i>Pending reports</a>
+            <a href="/care-packs/payments" class="btn"><i class="ti ti-cash" aria-hidden="true"></i>OEM payments</a>
+            <a href="/care-packs/manual" class="btn"><i class="ti ti-keyboard" aria-hidden="true"></i>Register Care Pack</a>
+            <a href="/care-packs/import?src=zoho" class="btn"><i class="ti ti-cloud-download" aria-hidden="true"></i>Zoho import</a>
+            <a href="/new-rma" class="btn btn-primary"><i class="ti ti-plus" aria-hidden="true"></i>New RMA</a>
+        </div>
+    </div>
+
+    <div class="widget" style="margin-bottom:12px">
+        <div class="widget-hdr">
+            <div class="widget-title"><i class="ti ti-search" aria-hidden="true"></i>Search printer serial</div>
+            <span class="muted">Available to all users including Viewers</span>
+        </div>
+        <div class="dash-search">
+            <input @bind="_snSearch" @bind:event="oninput"
+                   @onkeydown="OnSnKey"
+                   placeholder="Enter or paste serial number…" />
+            <button class="btn btn-primary btn-icon" type="button" @onclick="SearchSn">
+                <i class="ti ti-search" aria-hidden="true"></i>
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_snMsg))
+        {
+            <div class="help-text" style="margin-top:8px">@_snMsg</div>
+        }
+        @if (_snRmaId is int rid)
+        {
+            <div class="alert-banner" style="margin-top:8px">
+                Linked RMA ticket found.
+                <a class="btn btn-sm btn-primary" href="/rma/@rid" style="margin-left:8px">Open RMA</a>
+            </div>
+        }
+        @if (_snHits.Count > 0)
+        {
+            <div class="tbl-wrap" style="margin-top:10px">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Serial</th>
+                            <th>Brand</th>
+                            <th>Model</th>
+                            <th>Sales Invoice</th>
+                            <th>OEM Invoice</th>
+                            <th>Customer</th>
+                            <th>Care pack</th>
+                            <th>Warranty</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var h in _snHits)
+                        {
+                            var expired = h.IsExpired;
+                            <tr class="@(expired ? "row-cp-expired" : null)">
+                                <td><code class="sn">@h.SerialNumber</code></td>
+                                <td>@(h.OemBrand ?? "—")</td>
+                                <td>@(h.PrinterModel ?? "—")</td>
+                                <td>@h.InvoiceNumber</td>
+                                <td>@(h.OemInvoiceNumber ?? "—")</td>
+                                <td>@(h.CustomerName ?? "—")</td>
+                                <td>@(h.CarePackType ?? "—")</td>
+                                <td>
+                                    @(h.WarrantyEnd?.ToString("dd-MMM-yyyy") ?? "—")
+                                    @if (expired)
+                                    {
+                                        <span class="badge badge-cp-expired">Expired</span>
+                                    }
+                                </td>
+                                <td>
+                                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                        @if (expired)
+                                        {
+                                            <span class="muted">No RMA — care pack ended</span>
+                                        }
+                                        else
+                                        {
+                                            <a class="btn btn-sm btn-primary"
+                                               href="@NewRmaHref(h)">Create RMA</a>
+                                        }
+                                        <a class="btn btn-sm btn-ghost"
+                                           href="/care-packs/@h.BatchId">Open Care Pack</a>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    @if (s.ShowBatchAlert)
+    {
+        <div class="alert-bar">
+            <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+            <span><strong>Monthly batch due:</strong> @s.BatchCandidateCount RMAs awaiting dispatch to OEM — last week of @DateTime.Now.ToString("MMMM")</span>
+            <div class="ab-actions"><a href="/batch" class="ab-btn">Go to Batch</a></div>
+        </div>
+    }
+    @if (s.CarePoOverdue > 0)
+    {
+        <div class="alert-bar danger">
+            <i class="ti ti-clock-exclamation" aria-hidden="true"></i>
+            <span><strong>@s.CarePoOverdue Care Pack PO@(s.CarePoOverdue == 1 ? "" : "s") overdue</strong> — past app limit of @s.CarePoLimitDays days from sales invoice (contract max 30). Admin Accept Anyway required.</span>
+            <div class="ab-actions"><a href="/care-packs/pending" class="ab-btn danger">PO deadlines</a></div>
+        </div>
+    }
+    @if (s.CarePayOverdue > 0)
+    {
+        <div class="alert-bar danger">
+            <i class="ti ti-cash" aria-hidden="true"></i>
+            <span><strong>@s.CarePayOverdue OEM payment@(s.CarePayOverdue == 1 ? "" : "s") overdue</strong> — past app limit of @s.CarePayLimitDays days from OEM bill (contract max 45).</span>
+            <div class="ab-actions">
+                <a href="/care-packs/payments" class="ab-btn danger">Record payment</a>
+                <a href="/care-packs/pending" class="ab-btn">Payment due</a>
+            </div>
+        </div>
+    }
+    else if (s.CarePayDueSoon > 0)
+    {
+        <div class="alert-bar">
+            <i class="ti ti-cash" aria-hidden="true"></i>
+            <span><strong>@s.CarePayDueSoon OEM payment@(s.CarePayDueSoon == 1 ? "" : "s") due within 5 days</strong> — combine transfers to save bank/SWIFT charges.</span>
+            <div class="ab-actions"><a href="/care-packs/payments" class="ab-btn">OEM payments</a></div>
+        </div>
+    }
+    @if (s.CarePoNotLinked > 0 || s.CareOemDocsPending > 0)
+    {
+        <div class="alert-bar">
+            <i class="ti ti-checklist" aria-hidden="true"></i>
+            <span>
+                Care Pack checklist:
+                @if (s.CarePoNotLinked > 0)
+                {
+                    <strong>@s.CarePoNotLinked</strong><text> PO not linked</text>
+                }
+                @if (s.CarePoNotLinked > 0 && s.CareOemDocsPending > 0)
+                {
+                    <text> · </text>
+                }
+                @if (s.CareOemDocsPending > 0)
+                {
+                    <strong>@s.CareOemDocsPending</strong><text> OEM docs pending</text>
+                }
+            </span>
+            <div class="ab-actions"><a href="/care-packs/pending" class="ab-btn">Pending reports</a></div>
+        </div>
+    }
+    @if (s.OemUnsentCount > 0)
+    {
+        <div class="alert-bar danger">
+            <i class="ti ti-mail-exclamation" aria-hidden="true"></i>
+            <span><strong>@s.OemUnsentCount OEM email@(s.OemUnsentCount == 1 ? "" : "s")</strong> pending review — part removals and conversion notices</span>
+            <div class="ab-actions"><button type="button" class="ab-btn danger">Review &amp; Send</button></div>
+        </div>
+    }
+
+    @if (_view == DashboardViews.List)
+    {
+        <div class="widget">
+            <div class="widget-hdr">
+                <div class="widget-title"><i class="ti ti-list" aria-hidden="true"></i>Operations list</div>
+                <span class="muted">@FilteredList().Count items</span>
+            </div>
+            <div class="list-toolbar">
+                <input @bind="_listSearch" @bind:event="oninput" placeholder="Search ref, customer, serial…" />
+                <select @bind="_listModule">
+                    <option value="">All modules</option>
+                    <option value="RMA">RMA</option>
+                    <option value="Support">Support</option>
+                    <option value="Repair">Repair</option>
+                    <option value="Care Pack">Care Pack</option>
+                </select>
+            </div>
+            <div class="tbl-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Module</th>
+                            <th>Reference</th>
+                            <th>Status</th>
+                            <th>Customer</th>
+                            <th>SN / Model</th>
+                            <th>When</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{
+                            var rows = FilteredList();
+                        }
+                        @if (!rows.Any())
+                        {
+                            <tr><td colspan="7" class="empty-cell">No rows match your filter</td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var r in rows)
+                            {
+                                <tr>
+                                    <td><span class="pill open">@r.Module</span></td>
+                                    <td><strong>@r.Ref</strong></td>
+                                    <td><span class="pill gray">@r.Status</span></td>
+                                    <td>@(r.Customer ?? "—")</td>
+                                    <td><code class="sn">@(r.SnOrModel ?? "—")</code></td>
+                                    <td class="date-cell">@r.When.ToString("dd-MMM HH:mm")</td>
+                                    <td><a class="btn btn-sm btn-ghost" href="@r.Href">Open</a></td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="section-title">RMA</div>
+        <div class="stat-grid">
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/"))">
+                <div class="stat-num" style="color:var(--text-accent)">@s.RmaOpen</div>
+                <div class="stat-lbl">Open</div>
+            </div>
+            <div class="stat">
+                <div class="stat-num" style="color:var(--text-warning)">@s.RmaAwaitingOem</div>
+                <div class="stat-lbl">Awaiting OEM RMA</div>
+            </div>
+            <div class="stat">
+                <div class="stat-num">@s.RmaDispatched</div>
+                <div class="stat-lbl">Dispatched to OEM</div>
+            </div>
+            <div class="stat">
+                <div class="stat-num" style="color:var(--text-success)">@s.RmaGoodsReceived</div>
+                <div class="stat-lbl">Goods Received</div>
+            </div>
+        </div>
+
+        <div class="three-col">
+            <div class="widget">
+                <div class="widget-hdr">
+                    <div class="widget-title"><i class="ti ti-headset" aria-hidden="true"></i>Support</div>
+                    <span class="widget-link">View all</span>
+                </div>
+                <div class="row-item"><div class="dot red"></div><div class="row-label">SLA breached</div><div class="row-val" style="color:var(--text-danger)">@s.SupportSlaBreached</div></div>
+                <div class="row-item"><div class="dot amber"></div><div class="row-label">Open — In Progress</div><div class="row-val">@s.SupportInProgress</div></div>
+                <div class="row-item"><div class="dot blue"></div><div class="row-label">Open — New</div><div class="row-val">@s.SupportNew</div></div>
+                <div class="row-item"><div class="dot green"></div><div class="row-label">Resolved today</div><div class="row-val">@s.SupportResolvedToday</div></div>
+                <div class="divider"></div>
+                <div style="font-size:11px;color:var(--text-muted)">Avg resolution: <strong style="color:var(--text-primary)">@(s.SupportAvgHours > 0 ? $"{s.SupportAvgHours} hrs" : "—")</strong></div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-hdr">
+                    <div class="widget-title"><i class="ti ti-tool" aria-hidden="true"></i>Repairs</div>
+                    <span class="widget-link">View all</span>
+                </div>
+                <div class="row-item"><div class="dot blue"></div><div class="row-label">Received / In Diagnosis</div><div class="row-val">@s.RepairDiagnosis</div></div>
+                <div class="row-item"><div class="dot amber"></div><div class="row-label">Quoted — awaiting approval</div><div class="row-val">@s.RepairQuoted</div></div>
+                <div class="row-item"><div class="dot green"></div><div class="row-label">Repaired — ready to deliver</div><div class="row-val">@s.RepairReady</div></div>
+                <div class="row-item"><div class="dot green"></div><div class="row-label">Invoiced this month</div><div class="row-val">@s.RepairInvoicedMonth</div></div>
+            </div>
+
+            <div class="widget">
+                <div class="widget-hdr">
+                    <div class="widget-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Care packs — warranty</div>
+                    <a class="widget-link" href="/care-packs">View all</a>
+                </div>
+                <div class="row-item"><div class="dot red"></div><div class="row-label">Expired</div><div class="row-val" style="color:var(--text-danger)">@s.CareExpired</div></div>
+                <div class="row-item"><div class="dot red"></div><div class="row-label">Expiring in 30 days</div><div class="row-val" style="color:var(--text-danger)">@s.CareExpiring30</div></div>
+                <div class="row-item"><div class="dot amber"></div><div class="row-label">Expiring in 60 days</div><div class="row-val" style="color:var(--text-warning)">@s.CareExpiring60</div></div>
+                <div class="row-item"><div class="dot green"></div><div class="row-label">Active coverage</div><div class="row-val">@s.CareActive</div></div>
+                <div class="row-item"><div class="dot blue"></div><div class="row-label">Devices registered</div><div class="row-val">@s.CareDevices</div></div>
+            </div>
+        </div>
+
+        <div class="section-title">Care Pack operations</div>
+        <div class="stat-grid">
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/care-packs/pending"))" style="cursor:pointer">
+                <div class="stat-num" style="color:var(--text-warning)">@s.CarePoNotLinked</div>
+                <div class="stat-lbl">PO not linked</div>
+            </div>
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/care-packs/pending"))" style="cursor:pointer">
+                <div class="stat-num" style="color:@(s.CarePoOverdue > 0 ? "var(--text-danger)" : "var(--text-warning)")">@(s.CarePoOverdue + s.CarePoDueSoon)</div>
+                <div class="stat-lbl">PO due / overdue (@s.CarePoLimitDays d)</div>
+            </div>
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/care-packs/pending"))" style="cursor:pointer">
+                <div class="stat-num" style="color:var(--text-warning)">@s.CareOemDocsPending</div>
+                <div class="stat-lbl">OEM docs pending</div>
+            </div>
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/care-packs/payments"))" style="cursor:pointer">
+                <div class="stat-num" style="color:@(s.CarePayOverdue > 0 ? "var(--text-danger)" : "var(--text-warning)")">@(s.CarePayOverdue + s.CarePayDueSoon)</div>
+                <div class="stat-lbl">Payment due / overdue (@s.CarePayLimitDays d)</div>
+            </div>
+            <div class="stat" @onclick="@(() => Nav.NavigateTo("/care-packs"))" style="cursor:pointer">
+                <div class="stat-num" style="color:var(--text-success)">@s.CareVerified</div>
+                <div class="stat-lbl">100% verified / @s.CareBatchesTotal</div>
+            </div>
+        </div>
+
+        @if (s.CarePoDeadlineItems.Any() || s.CarePayDeadlineItems.Any())
+        {
+            <div class="two-col" style="margin-bottom:12px">
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-file-invoice" aria-hidden="true"></i>PO deadlines (≤5 days)</div>
+                        <a class="widget-link" href="/care-packs/pending">All reports</a>
+                    </div>
+                    @if (!s.CarePoDeadlineItems.Any())
+                    {
+                        <div class="muted" style="padding:8px 0">No PO deadlines in the next 5 days.</div>
+                    }
+                    else
+                    {
+                        @foreach (var x in s.CarePoDeadlineItems)
+                        {
+                            <div class="row-item" style="cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/care-packs/{x.BatchId}"))">
+                                <div class="dot @(x.DaysRemaining < 0 ? "red" : "amber")"></div>
+                                <div class="row-label">
+                                    <strong>@x.InvoiceNumber</strong>
+                                    <span class="muted"> · @(x.CustomerName ?? "—")</span>
+                                </div>
+                                <div class="row-val" style="color:@(x.DaysRemaining < 0 ? "var(--text-danger)" : "var(--text-warning)")">
+                                    @(x.DaysRemaining < 0 ? $"{Math.Abs(x.DaysRemaining ?? 0)}d overdue" : $"{x.DaysRemaining}d left")
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-building-bank" aria-hidden="true"></i>OEM payment due (≤5 days)</div>
+                        <a class="widget-link" href="/care-packs/payments">Payments</a>
+                    </div>
+                    @if (!s.CarePayDeadlineItems.Any())
+                    {
+                        <div class="muted" style="padding:8px 0">No OEM payments due in the next 5 days.</div>
+                    }
+                    else
+                    {
+                        @foreach (var x in s.CarePayDeadlineItems)
+                        {
+                            <div class="row-item" style="cursor:pointer" @onclick="@(() => Nav.NavigateTo($"/care-packs/{x.BatchId}"))">
+                                <div class="dot @(x.DaysRemaining < 0 ? "red" : "amber")"></div>
+                                <div class="row-label">
+                                    <strong>@(x.OemInvoiceNumber ?? x.InvoiceNumber)</strong>
+                                    <span class="muted"> · @(x.CustomerName ?? "—")</span>
+                                    @if (x.OemInvoiceAmount is > 0)
+                                    {
+                                        <span class="muted"> · @x.OemInvoiceAmount.Value.ToString("N0")</span>
+                                    }
+                                </div>
+                                <div class="row-val" style="color:@(x.DaysRemaining < 0 ? "var(--text-danger)" : "var(--text-warning)")">
+                                    @(x.DaysRemaining < 0 ? $"{Math.Abs(x.DaysRemaining ?? 0)}d overdue" : $"{x.DaysRemaining}d left")
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="two-col">
+            <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-mail-forward" aria-hidden="true"></i>OEM notifications</div>
+                        <span class="widget-link">Review &amp; send</span>
+                    </div>
+                    @if (!s.OemNotifications.Any())
+                    {
+                        <div class="muted" style="padding:8px 0">No OEM notifications queued.</div>
+                    }
+                    else
+                    {
+                        @foreach (var n in s.OemNotifications.Take(6))
+                        {
+                            <div class="oem-row">
+                                <div class="dot @(n.Status == OemNotifyStatus.Unsent ? "red" : "green")"></div>
+                                <div style="flex:1">
+                                    <div style="color:var(--text-primary);font-size:12px">@n.Title</div>
+                                    <div class="oem-ref">@(n.SerialNumber ?? "—") · @(n.RefNumber ?? "—")</div>
+                                </div>
+                                <span class="pill @(n.Status == OemNotifyStatus.Unsent ? "danger" : "ok")">
+                                    @(n.Status == OemNotifyStatus.Unsent ? "Unsent" : "Sent")
+                                </span>
+                            </div>
+                        }
+                    }
+                </div>
+
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-components" aria-hidden="true"></i>Part movements today</div>
+                        <span class="widget-link">View ledger</span>
+                    </div>
+                    @if (!s.PartMovementsToday.Any())
+                    {
+                        <div class="muted" style="padding:8px 0">No part movements recorded today.</div>
+                    }
+                    else
+                    {
+                        @foreach (var p in s.PartMovementsToday)
+                        {
+                            <div class="row-item">
+                                <span class="pill @(p.Direction == "IN" ? "open" : "warn")">@p.Direction</span>
+                                <div class="row-label">@p.Description</div>
+                                <div class="row-val" style="color:var(--text-muted);font-size:10px">@p.MovedAt.ToString("HH:mm")</div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:10px">
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-clock-hour-4" aria-hidden="true"></i>Recent activity</div>
+                        <a class="widget-link" href="/new-rma">New RMA</a>
+                    </div>
+                    @if (!s.RecentActivity.Any())
+                    {
+                        <div class="muted" style="padding:8px 0">No recent activity yet.</div>
+                    }
+                    else
+                    {
+                        @foreach (var a in s.RecentActivity)
+                        {
+                            var fill = a.Color switch
+                            {
+                                "success" => "var(--fill-success)",
+                                "warning" => "var(--fill-warning)",
+                                "danger" => "var(--fill-danger)",
+                                _ => "var(--fill-accent)"
+                            };
+                            <div class="oem-row">
+                                <div class="timeline-dot" style="background:@fill"></div>
+                                <div style="flex:1">
+                                    <div style="color:var(--text-primary);font-size:12px">@a.Title</div>
+                                    <div class="oem-ref">@(a.Detail ?? "")</div>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+
+                <div class="widget">
+                    <div class="widget-hdr">
+                        <div class="widget-title"><i class="ti ti-device-laptop" aria-hidden="true"></i>Device quick search</div>
+                    </div>
+                    <p class="help-text">Use the <strong>Search printer serial</strong> box at the top of the dashboard (all roles including Viewer).</p>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    DashboardSnapshot? _snap;
+    bool _loading = true;
+    string _view = DashboardViews.Cards;
+    string _greeting = "";
+    string _userName = "";
+    string _listSearch = "", _listModule = "", _snSearch = "", _snMsg = "";
+    List<CarePackSerialOption> _snHits = new();
+    int? _snRmaId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (name, _) = await Session.GetCurrentAsync();
+        _userName = name;
+        var pref = await Prefs.GetAsync(name);
+        _view = pref.DashboardView;
+
+        var hour = DateTime.Now.Hour;
+        var hello = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+        _greeting = $"{DateTime.Now:dddd, d MMMM yyyy} — {hello}, {name.Split(' ')[0]}";
+
+        _snap = await Dash.GetSnapshotAsync();
+        _loading = false;
+    }
+
+    async Task SetView(string view)
+    {
+        _view = view;
+        await Prefs.SetDashboardViewAsync(view, _userName);
+    }
+
+    List<DashboardListRow> FilteredList()
+    {
+        if (_snap == null) return [];
+        var q = _snap.ListRows.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_listModule))
+            q = q.Where(r => r.Module == _listModule);
+        if (!string.IsNullOrWhiteSpace(_listSearch))
+        {
+            var s = _listSearch.Trim().ToLowerInvariant();
+            q = q.Where(r =>
+                r.Ref.ToLowerInvariant().Contains(s) ||
+                (r.Customer?.ToLowerInvariant().Contains(s) ?? false) ||
+                (r.SnOrModel?.ToLowerInvariant().Contains(s) ?? false) ||
+                r.Status.ToLowerInvariant().Contains(s));
+        }
+        return q.ToList();
+    }
+
+    async Task OnSnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SearchSn();
+    }
+
+    static string NewRmaHref(CarePackSerialOption h)
+    {
+        var sn = Uri.EscapeDataString(h.SerialNumber ?? "");
+        var client = Uri.EscapeDataString(h.CustomerName ?? "");
+        var model = Uri.EscapeDataString(h.PrinterModel ?? "");
+        return $"/new-rma?sn={sn}&client={client}&model={model}&deviceId={h.DeviceId}&batchId={h.BatchId}&locked=1";
+    }
+
+    async Task SearchSn()
+    {
+        _snMsg = "";
+        _snHits = [];
+        _snRmaId = null;
+        if (string.IsNullOrWhiteSpace(_snSearch)) return;
+        var sn = _snSearch.Trim();
+
+        // Stay on dashboard — show details; user opens Care Pack / RMA via button
+        var exact = await CarePack.FindSerialAsync(sn);
+        if (exact != null)
+        {
+            _snHits = [exact];
+            if (exact.IsExpired)
+            {
+                _snMsg =
+                    $"Care pack / warranty for {exact.SerialNumber} ended on {exact.WarrantyEnd:dd-MMM-yyyy}. " +
+                    "No RMA can be created for this serial.";
+            }
+            else
+                _snMsg = "Device found — details below.";
+        }
+        else
+        {
+            _snHits = await CarePack.SearchCarePackSerialsAsync(sn, 40);
+            if (_snHits.Count == 0)
+                _snMsg = $"No Care Pack device found for {sn}.";
+            else if (_snHits.All(h => h.IsExpired))
+                _snMsg =
+                    $"{_snHits.Count} matching serial(s) — care pack / warranty has ended. No RMA action available.";
+            else if (_snHits.Any(h => h.IsExpired))
+                _snMsg =
+                    $"{_snHits.Count} matching serial(s) — expired rows cannot start an RMA.";
+            else
+                _snMsg = $"{_snHits.Count} matching serial(s) — use Open Care Pack to view the invoice.";
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var snUpper = sn.ToUpperInvariant();
+        var rma = await db.RMATickets.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.PrinterSn == snUpper || t.PrinterSn == sn);
+        if (rma != null)
+            _snRmaId = rma.Id;
+
+        if (_snHits.Count == 0 && _snRmaId == null)
+            _snMsg = $"No device or RMA found for {sn}.";
+        else if (_snHits.Count == 0 && _snRmaId != null)
+            _snMsg = "No Care Pack device for this serial — linked RMA is available below.";
+        else if (_snHits.Any(h => h.IsExpired) && _snHits.All(h => h.IsExpired))
+        {
+            // Keep expired message; still allow viewing existing RMA if any
+        }
+    }
+}

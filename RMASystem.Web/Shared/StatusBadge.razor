@@ -1,0 +1,9 @@
+@using RMASystem.Models
+
+<span class="badge badge-@Status.ToLower().Replace("_","-")">
+    @RMAStatus.Label(Status)
+</span>
+
+@code {
+    [Parameter, EditorRequired] public string Status { get; set; } = "";
+}

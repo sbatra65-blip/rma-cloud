@@ -1,0 +1,354 @@
+@page "/care-packs"
+@inject CarePackService CarePack
+@inject NavigationManager Nav
+@inject UserSessionService Session
+@inject IJSRuntime Js
+@using RMASystem.Models
+@implements IDisposable
+
+<PageTitle>Care Packs — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Care Pack Registry</h1>
+        <p class="page-hero-sub">Register care packs manually (default), optionally prefill from PDF/Zoho, then validate OEM PO and invoice.</p>
+    </div>
+    <div class="page-hero-actions">
+        @if (_canImport)
+        {
+            <a href="/care-packs/manual" class="btn btn-primary">+ Register Care Pack (Manual)</a>
+            <a href="/care-packs/import?src=pdf" class="btn btn-ghost">Prefill PDF</a>
+            <a href="/care-packs/import?src=zoho" class="btn btn-ghost">From Zoho</a>
+        }
+        @if (_isAdmin)
+        {
+            <a href="/care-packs/pending" class="btn btn-ghost">Pending reports</a>
+            <a href="/care-packs/payments" class="btn btn-ghost">OEM payments</a>
+            <a href="/admin/override-log" class="btn btn-ghost">Override Log</a>
+        }
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="@(_isError ? "error-msg" : "success-msg")">@_msg</div>
+}
+
+<div class="card">
+    <div class="card-header-row">
+        <span class="card-title" style="margin:0;border:none;padding:0">Registered Batches</span>
+        <span class="muted">@_filtered.Count shown · @_totalCount total</span>
+    </div>
+
+    <div class="search-bar" style="margin-bottom:12px">
+        <input class="search-input" @bind="_search" @bind:event="oninput" @bind:after="OnSearchChanged"
+               placeholder="Search Invoice No, Company, Product, Model, OEM Invoice, Serial, Care Pack…" />
+        <button class="btn btn-primary" type="button" @onclick="ExportCsv" disabled="@(_busy || _filtered.Count == 0)">
+            Export CSV
+        </button>
+    </div>
+    <p class="help-text" style="margin-top:0">
+        Export includes Invoice No, Company Name, Product, Model, OEM Invoice No, Serial No, Care Pack Length, Warranty End.
+        Rows with an expired care pack show a red <strong>Expired</strong> badge (warranty end before today).
+    </p>
+
+    @if (_isAdmin)
+    {
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+            @if (!_confirmDelete)
+            {
+                <button class="btn btn-ghost" type="button"
+                        disabled="@(_busy || _selected.Count == 0)"
+                        @onclick="() => _confirmDelete = true">
+                    Delete selected (@_selected.Count)
+                </button>
+            }
+            else
+            {
+                <span class="muted" style="align-self:center">
+                    Delete @_selected.Count invoice(s)? Batches with PO / OEM / RMA links are skipped.
+                </span>
+                <button class="btn btn-ghost btn-sm" type="button" @onclick="() => _confirmDelete = false">Cancel</button>
+                <button class="btn btn-danger" type="button" disabled="@_busy" @onclick="DeleteSelected">
+                    Confirm delete
+                </button>
+            }
+            <button class="btn btn-ghost btn-sm" type="button" @onclick="ClearSelection" disabled="@(_selected.Count == 0)">
+                Clear selection
+            </button>
+        </div>
+    }
+
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    @if (_isAdmin)
+                    {
+                        <th><input type="checkbox" checked="@AllSelected" @onchange="ToggleAll" /></th>
+                    }
+                    <th>Invoice</th>
+                    <th>Customer</th>
+                    <th>Brand / Model</th>
+                    <th>Care Pack</th>
+                    <th>Devices</th>
+                    <th>PO</th>
+                    <th>OEM inv.</th>
+                    <th>Verified</th>
+                    <th>Status</th>
+                    <th>Imported</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_loading)
+                {
+                    <tr><td colspan="@ColSpan" class="empty-cell">Loading…</td></tr>
+                }
+                else if (!_filtered.Any())
+                {
+                    <tr>
+                        <td colspan="@ColSpan" class="empty-cell">
+                            @if (_totalCount == 0)
+                            {
+                                <text>No care packs yet.</text>
+                                @if (_canImport)
+                                {
+                                    <a href="/care-packs/manual">Register Care Pack (Manual)</a>
+                                }
+                            }
+                            else
+                            {
+                                <text>No rows match “@_search”.</text>
+                            }
+                        </td>
+                    </tr>
+                }
+                else
+                {
+                    @foreach (var b in _filtered)
+                    {
+                        var expired = b.IsExpired();
+                        <tr class="@(expired ? "row-cp-expired" : null)">
+                            @if (_isAdmin)
+                            {
+                                <td>
+                                    <input type="checkbox"
+                                           checked="@_selected.Contains(b.Id)"
+                                           @onchange="e => Toggle(b.Id, (bool)(e.Value ?? false))" />
+                                </td>
+                            }
+                            <td>
+                                <strong class="ticket-link" @onclick="@(() => Nav.NavigateTo($"/care-packs/{b.Id}"))">
+                                    @b.InvoiceNumber
+                                </strong>
+                                @if (b.LineSetIndex > 1)
+                                {
+                                    <span class="muted"> set #@b.LineSetIndex</span>
+                                }
+                                @if (b.Overridden)
+                                {
+                                    <span class="badge badge-override">Override</span>
+                                }
+                                @if (expired)
+                                {
+                                    <span class="badge badge-cp-expired" title="Care pack / warranty ended">Expired</span>
+                                }
+                            </td>
+                            <td>@(b.CustomerName ?? "—")</td>
+                            <td>@(b.OemBrand ?? "—") / @(b.PrinterModel ?? "—")</td>
+                            <td>@(b.CarePackType ?? "—")</td>
+                            <td>@b.DeviceCount <span class="muted">/ @b.InvoiceQty qty</span></td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(b.PurchaseOrderNumber))
+                                {
+                                    <span class="ok-text">@b.PurchaseOrderNumber</span>
+                                }
+                                else
+                                {
+                                    <span class="muted">Pending</span>
+                                }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(b.OemInvoiceNumber))
+                                {
+                                    <span>@b.OemInvoiceNumber</span>
+                                    @if (string.IsNullOrEmpty(b.OemInvoicePdfPath))
+                                    {
+                                        <span class="muted"> (no PDF)</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="muted">—</span>
+                                }
+                            </td>
+                            <td>
+                                @if (b.VerificationComplete)
+                                {
+                                    <span class="ok-text">100%</span>
+                                }
+                                else
+                                {
+                                    <span class="muted">No</span>
+                                }
+                            </td>
+                            <td><span class="badge badge-cp-@b.Status.ToLowerInvariant()">@CarePackBatchStatus.Label(b.Status)</span></td>
+                            <td class="date-cell">@b.CreatedAt.ToString("dd-MMM-yyyy")</td>
+                            <td>
+                                <button class="btn btn-ghost btn-sm" @onclick="@(() => Nav.NavigateTo($"/care-packs/{b.Id}"))">Open</button>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    List<CarePackBatchListItem> _filtered = new();
+    HashSet<int> _selected = new();
+    string _msg = "", _search = "";
+    int _totalCount;
+    bool _loading = true, _canImport, _isAdmin, _busy, _isError, _confirmDelete;
+    CancellationTokenSource? _searchCts;
+
+    int ColSpan => _isAdmin ? 12 : 11;
+
+    bool AllSelected =>
+        _filtered.Count > 0 && _filtered.All(b => _selected.Contains(b.Id));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        _canImport = await Session.CanImportAsync();
+        _isAdmin = await Session.IsAdminAsync();
+        await LoadAsync(showLoading: true);
+    }
+
+    async Task OnSearchChanged()
+    {
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var token = _searchCts.Token;
+        try
+        {
+            await Task.Delay(250, token);
+            await LoadAsync(showLoading: false);
+        }
+        catch (TaskCanceledException) { /* newer keystroke */ }
+    }
+
+    async Task LoadAsync(bool showLoading)
+    {
+        if (showLoading) _loading = true;
+        try
+        {
+            _totalCount = await CarePack.CountBatchesAsync();
+            _filtered = await CarePack.ListBatchSummariesAsync(_search);
+        }
+        finally
+        {
+            if (showLoading) _loading = false;
+        }
+    }
+
+    async Task ExportCsv()
+    {
+        _busy = true;
+        _msg = "";
+        _isError = false;
+        try
+        {
+            var bytes = await CarePack.ExportRegistryCsvAsync(_search);
+            var name = $"CarePack_Registry_{DateTime.Now:yyyyMMdd_HHmm}.csv";
+            await Js.InvokeVoidAsync("rmaSaveFile", name, Convert.ToBase64String(bytes), "text/csv");
+            _msg = "Export downloaded.";
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    void Toggle(int id, bool on)
+    {
+        if (on) _selected.Add(id);
+        else _selected.Remove(id);
+        _confirmDelete = false;
+    }
+
+    void ToggleAll(ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b || string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        if (on)
+            foreach (var batch in _filtered) _selected.Add(batch.Id);
+        else
+            foreach (var batch in _filtered) _selected.Remove(batch.Id);
+        _confirmDelete = false;
+    }
+
+    void ClearSelection()
+    {
+        _selected.Clear();
+        _confirmDelete = false;
+    }
+
+    async Task DeleteSelected()
+    {
+        if (!_isAdmin || _selected.Count == 0) return;
+        _busy = true;
+        _msg = "";
+        _isError = false;
+        try
+        {
+            var ids = _selected.ToList();
+            var deleted = 0;
+            var skipped = new List<string>();
+            foreach (var id in ids)
+            {
+                var (ok, reason) = await CarePack.CanDeleteBatchAsync(id);
+                if (!ok)
+                {
+                    var batch = _filtered.FirstOrDefault(x => x.Id == id);
+                    skipped.Add($"{batch?.InvoiceNumber ?? id.ToString()}: {reason}");
+                    continue;
+                }
+                try
+                {
+                    await CarePack.DeleteBatchAsync(id);
+                    deleted++;
+                    _selected.Remove(id);
+                }
+                catch (Exception ex)
+                {
+                    skipped.Add($"Id {id}: {ex.Message}");
+                }
+            }
+            _confirmDelete = false;
+            await LoadAsync(showLoading: true);
+            if (skipped.Count == 0)
+                _msg = $"Deleted {deleted} care pack invoice(s).";
+            else
+            {
+                _msg = $"Deleted {deleted}; skipped {skipped.Count} — {string.Join("; ", skipped.Take(3))}";
+                _isError = deleted == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    public void Dispose()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+    }
+}

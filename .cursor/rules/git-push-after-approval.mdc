@@ -1,0 +1,14 @@
+---
+description: Push to GitHub only after the user tests and gives the go-ahead
+alwaysApply: true
+---
+
+# GitHub backup — only after user approval
+
+Remote: `https://github.com/sanjayinfinite/RMA-System.git` (branch `main`, private).
+
+1. After a change + installer build, **do not commit or push**. Report the version and setup path, and say it is waiting for the user's test go-ahead.
+2. Only when the user explicitly approves (e.g. "tested OK", "go ahead", "push it"), commit all pending changes with a message naming the version (e.g. `v1.3.59 — <summary>`) and `git push` to `origin main`.
+3. Git is at `C:\Program Files\Git\cmd\git.exe` if `git` is not on PATH.
+4. Never commit `Backups/`, `*.bak`, `Output/`, `publish/`, `bin/`, `obj/`, logs, or customer data (enforced by `.gitignore`); check `git status` before committing.
+5. Confirm after pushing that `git ls-remote origin main` matches local `HEAD`.

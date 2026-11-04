@@ -1,0 +1,36 @@
+# Build output
+bin/
+obj/
+publish/
+Output/
+*.user
+*.suo
+.vs/
+.vscode/
+.config/
+
+# Data / backups (customer data — never commit)
+Backups/
+*.bak
+*.mdf
+*.ldf
+Logs/
+*.log
+Photos/
+Excel/
+Challans/
+Batches/
+Imports/
+Keys/
+Reports/
+Drafts/
+CarePack/
+.db_create_consented
+
+# Bundled third-party installers
+installer/redist/*.exe
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

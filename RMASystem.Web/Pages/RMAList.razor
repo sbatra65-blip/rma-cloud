@@ -1,0 +1,386 @@
+@page "/rma"
+@inject AppDbContext Db
+@inject ExcelService ExcelSvc
+@inject TicketService TicketSvc
+@inject UserSessionService Session
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Models
+@using RMASystem.Services
+
+<PageTitle>RMA Tickets — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">RMA Tickets</h1>
+        <p class="page-hero-sub">Browse tickets, select one or more, regenerate OEM Excel, or delete eligible entries.</p>
+    </div>
+    <div class="page-hero-actions">
+        <a href="/new-rma" class="btn btn-primary">+ New RMA</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_msg))
+{
+    <div class="@(_isError ? "error-msg" : "success-msg")">@_msg</div>
+}
+
+<div class="card">
+    <div class="card-header-row">
+        <span class="card-title" style="margin:0;border:none;padding:0">All tickets</span>
+        <span class="muted">@_rows.Count shown</span>
+    </div>
+
+    <div class="search-bar" style="margin-bottom:12px">
+        <input class="search-input" @bind="_search" @bind:event="oninput"
+               placeholder="Search ticket #, SN, customer, OEM RMA…" />
+        <select class="form-control" style="max-width:200px" @bind="_statusFilter">
+            <option value="">All statuses</option>
+            @foreach (var s in RMAStatus.All)
+            {
+                <option value="@s">@RMAStatus.Label(s)</option>
+            }
+        </select>
+        <button class="btn btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading">Refresh</button>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-primary" type="button"
+                disabled="@(_busy || _selected.Count == 0)"
+                @onclick="RegenerateSelected">
+            @if (_busy) { <span class="spinner"></span> }
+            ↻ Regenerate Excel (@_selected.Count)
+        </button>
+        <button class="btn btn-ghost" type="button"
+                disabled="@(_busy || _selected.Count == 0)"
+                @onclick="RegenerateAndSaveSelected">
+            Regenerate &amp; Save As…
+        </button>
+        @if (!_confirmDelete)
+        {
+            <button class="btn btn-ghost" type="button"
+                    disabled="@(_busy || _selected.Count == 0 || !_canDeleteRole)"
+                    @onclick="() => _confirmDelete = true">
+                Delete selected (@_selected.Count)
+            </button>
+        }
+        else
+        {
+            <span class="muted" style="align-self:center">Delete @_selected.Count ticket(s)? Blocked ones are skipped.</span>
+            <button class="btn btn-ghost btn-sm" type="button" @onclick="() => _confirmDelete = false">Cancel</button>
+            <button class="btn btn-danger" type="button" disabled="@_busy" @onclick="DeleteSelected">
+                Confirm delete
+            </button>
+        }
+        <button class="btn btn-ghost btn-sm" type="button" @onclick="ClearSelection" disabled="@(_selected.Count == 0)">
+            Clear selection
+        </button>
+    </div>
+
+    <div class="tbl-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th><input type="checkbox" checked="@AllVisibleSelected" @onchange="ToggleAllVisible" /></th>
+                    <th>Ticket #</th>
+                    <th>Status</th>
+                    <th>Customer</th>
+                    <th>Model</th>
+                    <th>Serial</th>
+                    <th>Faulty part</th>
+                    <th>OEM RMA #</th>
+                    <th>Excel</th>
+                    <th>Created</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_loading)
+                {
+                    <tr><td colspan="11" class="empty-cell">Loading…</td></tr>
+                }
+                else if (!Filtered().Any())
+                {
+                    <tr><td colspan="11" class="empty-cell">No RMA tickets match. <a href="/new-rma">Create one</a></td></tr>
+                }
+                else
+                {
+                    @foreach (var t in Filtered())
+                    {
+                        <tr>
+                            <td>
+                                <input type="checkbox"
+                                       checked="@_selected.Contains(t.Id)"
+                                       @onchange="e => Toggle(t.Id, (bool)(e.Value ?? false))" />
+                            </td>
+                            <td>
+                                <strong class="ticket-link" @onclick="@(() => Nav.NavigateTo($"/rma/{t.Id}"))">
+                                    @t.InternalTicketNo
+                                </strong>
+                            </td>
+                            <td><StatusBadge Status="@t.Status" /></td>
+                            <td>@(t.CustomerCompany ?? "—")</td>
+                            <td>@(t.PrinterModel ?? "—")</td>
+                            <td><code class="sn">@(t.PrinterSn ?? "—")</code></td>
+                            <td>@(t.FaultyPart ?? "—")</td>
+                            <td>@(t.OemRmaNumber ?? "—")</td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(t.ExcelFilePath))
+                                {
+                                    <span class="ok-text" title="@t.ExcelFilePath">Ready</span>
+                                }
+                                else
+                                {
+                                    <span class="muted">—</span>
+                                }
+                            </td>
+                            <td class="date-cell">@t.CreatedAt.ToString("dd-MMM-yyyy")</td>
+                            <td style="white-space:nowrap">
+                                <a class="btn btn-sm btn-ghost" href="/rma/@t.Id">Open</a>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    List<RMATicket> _rows = new();
+    HashSet<int> _selected = new();
+    string _search = "", _statusFilter = "", _msg = "";
+    bool _loading = true, _busy, _isError, _confirmDelete, _canDeleteRole;
+
+    bool AllVisibleSelected
+    {
+        get
+        {
+            var ids = Filtered().Select(t => t.Id).ToList();
+            return ids.Count > 0 && ids.All(id => _selected.Contains(id));
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (_, role) = await Session.GetCurrentAsync();
+        _canDeleteRole = AppRoles.CanEditSerials(role);
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _msg = "";
+        try
+        {
+            _rows = await Db.RMATickets.AsNoTracking()
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(500)
+                .ToListAsync();
+        }
+        finally { _loading = false; }
+    }
+
+    IEnumerable<RMATicket> Filtered()
+    {
+        var q = _rows.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
+            q = q.Where(t => t.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLowerInvariant();
+            q = q.Where(t =>
+                t.InternalTicketNo.ToLowerInvariant().Contains(s) ||
+                (t.PrinterSn?.ToLowerInvariant().Contains(s) ?? false) ||
+                (t.CustomerCompany?.ToLowerInvariant().Contains(s) ?? false) ||
+                (t.OemRmaNumber?.ToLowerInvariant().Contains(s) ?? false) ||
+                (t.PrinterModel?.ToLowerInvariant().Contains(s) ?? false) ||
+                (t.FaultyPart?.ToLowerInvariant().Contains(s) ?? false));
+        }
+        return q;
+    }
+
+    void Toggle(int id, bool on)
+    {
+        if (on) _selected.Add(id);
+        else _selected.Remove(id);
+        _confirmDelete = false;
+    }
+
+    void ToggleAllVisible(ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b || string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        var ids = Filtered().Select(t => t.Id).ToList();
+        if (on)
+            foreach (var id in ids) _selected.Add(id);
+        else
+            foreach (var id in ids) _selected.Remove(id);
+        _confirmDelete = false;
+    }
+
+    void ClearSelection()
+    {
+        _selected.Clear();
+        _confirmDelete = false;
+    }
+
+    async Task<List<RMATicket>> LoadSelectedTrackedAsync()
+    {
+        var ids = _selected.ToList();
+        return await Db.RMATickets
+            .Include(t => t.Photos)
+            .Where(t => ids.Contains(t.Id))
+            .ToListAsync();
+    }
+
+    async Task RegenerateSelected()
+    {
+        if (_selected.Count == 0) return;
+        _busy = true;
+        _msg = "";
+        _isError = false;
+        try
+        {
+            var tickets = await LoadSelectedTrackedAsync();
+            var ok = 0;
+            var errors = new List<string>();
+            foreach (var t in tickets)
+            {
+                try
+                {
+                    await ExcelSvc.GenerateRmaFormAsync(t);
+                    ok++;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{t.InternalTicketNo}: {ex.Message}");
+                }
+            }
+            await LoadAsync();
+            _msg = errors.Count == 0
+                ? $"Regenerated OEM Excel for {ok} ticket(s)."
+                : $"Regenerated {ok}; {errors.Count} failed — {string.Join("; ", errors.Take(3))}";
+            _isError = errors.Count > 0;
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    async Task RegenerateAndSaveSelected()
+    {
+        if (_selected.Count == 0) return;
+        _busy = true;
+        _msg = "";
+        _isError = false;
+        try
+        {
+            var tickets = await LoadSelectedTrackedAsync();
+            var saved = 0;
+            var cancelled = 0;
+            var errors = new List<string>();
+
+            foreach (var t in tickets)
+            {
+                try
+                {
+                    await ExcelSvc.GenerateRmaFormAsync(t);
+                    var (bytes, fileName) = await ExcelSvc.GetOemExcelBytesAsync(t);
+                    var b64 = Convert.ToBase64String(bytes);
+                    var result = await Js.InvokeAsync<SaveFileResult>(
+                        "rmaSaveFile",
+                        fileName,
+                        b64,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                    if (result?.mode == "cancelled")
+                    {
+                        cancelled++;
+                        break;
+                    }
+                    if (result?.ok == true) saved++;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{t.InternalTicketNo}: {ex.Message}");
+                }
+            }
+
+            await LoadAsync();
+            if (cancelled > 0)
+                _msg = $"Saved {saved} file(s); remaining cancelled by user.";
+            else if (errors.Count == 0)
+                _msg = $"Regenerated and saved {saved} Excel file(s).";
+            else
+            {
+                _msg = $"Saved {saved}; {errors.Count} failed — {string.Join("; ", errors.Take(3))}";
+                _isError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    async Task DeleteSelected()
+    {
+        if (_selected.Count == 0) return;
+        _busy = true;
+        _msg = "";
+        _isError = false;
+        try
+        {
+            var ids = _selected.ToList();
+            var deleted = 0;
+            var skipped = new List<string>();
+            foreach (var id in ids)
+            {
+                var (ok, reason) = await TicketSvc.CanDeleteTicketAsync(id);
+                if (!ok)
+                {
+                    var t = _rows.FirstOrDefault(x => x.Id == id);
+                    skipped.Add($"{t?.InternalTicketNo ?? id.ToString()}: {reason}");
+                    continue;
+                }
+                try
+                {
+                    await TicketSvc.DeleteTicketAsync(id);
+                    deleted++;
+                    _selected.Remove(id);
+                }
+                catch (Exception ex)
+                {
+                    skipped.Add($"Id {id}: {ex.Message}");
+                }
+            }
+            _confirmDelete = false;
+            await LoadAsync();
+            if (skipped.Count == 0)
+                _msg = $"Deleted {deleted} ticket(s).";
+            else
+            {
+                _msg = $"Deleted {deleted}; skipped {skipped.Count} — {string.Join("; ", skipped.Take(3))}";
+                _isError = deleted == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            _msg = ex.Message;
+            _isError = true;
+        }
+        finally { _busy = false; }
+    }
+
+    class SaveFileResult
+    {
+        public bool ok { get; set; }
+        public string? mode { get; set; }
+    }
+}

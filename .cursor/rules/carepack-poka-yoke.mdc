@@ -1,0 +1,33 @@
+---
+description: Care Pack–specific poka-yoke (IRN, PO, serials, OEM PDF verification)
+globs: "**/CarePack*.cs,**/CarePack*.razor,**/SerialNumberParser.cs,**/ZohoBooksCarePack.cs,**/Docs/PO_*.md,**/Docs/CarePack_*.md"
+alwaysApply: false
+---
+
+# Care Pack Poka-Yoke
+
+Extends the global rule (`.cursor/rules/poka-yoke.mdc`). Source docs:
+
+- `RMASystem.Web/Docs/PO_Validation_Document.md`
+- `RMASystem.Web/Docs/CarePack_Override_Note.md`
+
+## Care Pack non-negotiables
+
+1. **Brand/model/SN/PO** — `BrandMismatchDetector`, `SerialNumberParser`, and PO↔invoice cross-checks must warn. Never hide a mismatch to ease import.
+2. **Mismatch blocks** — Normal import/PO accept is blocked. Only **Admin** override with mandatory reason, confirmation checkbox, and permanent audit (invoice values kept; corrected values registered).
+3. **Roles** — Admin = override / safe delete / override log. Manager = import + edit serials before PO chain. Technician = no import/override. Viewer = no serial/qty edits.
+4. **IRN is government-locked** — Never rewrite Zoho/IRN invoice data. Override only changes registered brand/model/type.
+5. **Document chain** — After PO link / OEM invoice or PDF / install / RMA on SN: lock serial edits and **block delete**. Delete only when the chain is empty (Admin).
+6. **100% verified** — Requires OEM PO linked + OEM invoice number + OEM invoice PDF stored. Status `COMPLETE` only when that gate passes.
+7. **Deadlines (stricter than contract)** — PO to OEM: app limit default **25** days from sales invoice (contract max 30). When serials match, late PO is allowed with a note (historical imports). SN mismatch + late still needs Admin Accept Anyway. OEM payment: simple **Paid / Not paid** flag (no bank/UTR required); payment due reports ignore marked-paid invoices.
+8. **OEM payments** — Mark Paid / Not paid on PO-validated batches with an OEM invoice number. Optional transfer allocations may still exist historically; new flow does not require transfer details.
+9. **Serial quality** — Do not enforce rigid SN length/format. Prefer labeled `S.No#` on product lines; multi-product invoices = separate batches (one per product). Enter serials **per product**, never as one shared list across products. Normalize SNs (`CleanToken`) before cross-validate. Warn on qty vs SN count and >10% invoice-side mismatch; **block register** when selected product SN count ≠ qty.
+9b. **Expired care pack** — If `WarrantyEnd` is before today, show **Expired** on Care Pack list/detail and **block new RMA** for that serial (dashboard + New RMA). View Care Pack remains allowed.
+9c. **Duplicates on create** — Always block registering a Care Pack when the **invoice number + product set** already exists, or when any **product serial** already exists in the registry (fail closed with a clear message). Manual/PDF re-register of an existing invoice is blocked entirely.
+10. **Clubbed OEM PO** — Multiple sales invoices may share one OEM PO, including **different customers / parties**. UI: select invoices **first**, then fetch Zoho PO / PDF / serials; confirm links all selected in one execution-strategy transaction. Match = all serials on *each* selected invoice ⊆ PO. Extra PO serials are informational. Show a multi-party note when customers differ; do not block. Any role except **Viewer** may select and validate PO when serials match.
+11. **OEM currency** — Vendor invoices may be **USD** (overseas) or **INR** (local purchase). Currency is stored on the batch; do not assume USD-only.
+11. **Convenience never removes gates** — Edit serials, override, and delete only inside the rules above.
+
+## When changing Care Pack code
+
+Re-read the docs before changing import, override, PO validate, SN parse, OEM PDF, verification, or delete. Fail closed with a clear message.

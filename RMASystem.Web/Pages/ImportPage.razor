@@ -1,0 +1,218 @@
+@page "/import"
+@inject ImportService ImportSvc
+@inject NavigationManager Nav
+
+<PageTitle>Import — RMA System</PageTitle>
+
+<div class="card" style="margin-bottom:16px">
+    <div class="card-title">Register Care Pack (manual first)</div>
+    <p class="help-text">
+        Day-to-day registration is typed manually — no Zoho or PDF required.
+        Optionally prefill from a sales invoice PDF, or fetch from Zoho when connected.
+    </p>
+    <div class="form-actions" style="justify-content:flex-start">
+        <a href="/care-packs/manual" class="btn btn-primary">
+            <i class="ti ti-keyboard" aria-hidden="true"></i> Manual entry
+        </a>
+        <a href="/care-packs/import?src=pdf" class="btn btn-ghost">
+            <i class="ti ti-file-type-pdf" aria-hidden="true"></i> Prefill from PDF
+        </a>
+        <a href="/care-packs/import?src=zoho" class="btn btn-ghost">
+            <i class="ti ti-cloud-download" aria-hidden="true"></i> From Zoho
+        </a>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Import Historical RMA Data from Excel</div>
+    <p class="help-text">
+        Upload your existing Excel file to bulk-import historical RMA records.
+        Records without photos will be flagged as "Imported — Photos Pending".
+    </p>
+
+    <!-- Step 1: File Upload -->
+    @if (_step == 1)
+    {
+        <div class="drop-zone" style="padding:40px">
+            <label for="import-file" style="cursor:pointer;display:block">
+                <div style="font-size:40px;margin-bottom:8px">📊</div>
+                <div style="font-weight:600;font-size:15px">Click to select Excel file</div>
+                <div style="font-size:12px;margin-top:4px;opacity:.7">.xlsx or .xls files only</div>
+            </label>
+        </div>
+        <InputFile id="import-file" OnChange="OnFileSelected" accept=".xlsx,.xls"
+                   style="display:none" />
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="error-msg">@_error</div>
+        }
+    }
+
+    <!-- Step 2: Column Mapper -->
+    @if (_step == 2 && _preview != null)
+    {
+        <div class="card-header-row" style="margin-bottom:12px">
+            <strong style="color:#1e3a5f">@_filename</strong>
+            <button class="btn btn-ghost btn-sm" @onclick="Reset">Change File</button>
+        </div>
+        <div class="section-hdr">Map Your Excel Columns to System Fields</div>
+        <p class="help-text">
+            For each system field, pick the matching column from your Excel.
+            Unmapped fields will be left blank.
+        </p>
+
+        <div class="mapper-container">
+            @foreach (var (key, label, required) in ImportSystemFields.Fields)
+            {
+                <div class="mapper-row">
+                    <div class="mapper-label">
+                        @label
+                        @if (required) { <span class="req-star">*</span> }
+                    </div>
+                    <select class="form-control" @bind="_mapping[key]">
+                        <option value="">-- not mapped --</option>
+                        @foreach (var col in _preview.Columns)
+                        {
+                            <option value="@col">@col</option>
+                        }
+                    </select>
+                </div>
+            }
+        </div>
+
+        <div style="margin-top:20px;display:flex;gap:10px">
+            <button class="btn btn-primary" @onclick="RunImport" disabled="@_running">
+                @if (_running) { <span class="spinner"></span> }
+                Run Import (@_preview.TotalRows rows)
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="error-msg">@_error</div>
+        }
+    }
+
+    <!-- Step 3: Result -->
+    @if (_step == 3 && _result != null)
+    {
+        <div class="import-summary">
+            <h3 class="summary-title">✅ Import Complete</h3>
+            <div class="stats-bar" style="max-width:600px">
+                <div class="stat-card s-total" style="cursor:default">
+                    <div class="num">@_result.TotalRows</div><div class="lbl">Total Rows</div>
+                </div>
+                <div class="stat-card s-open" style="cursor:default">
+                    <div class="num">@_result.Imported</div><div class="lbl">Imported</div>
+                </div>
+                <div class="stat-card s-await" style="cursor:default">
+                    <div class="num">@_result.Duplicates</div><div class="lbl">Duplicates Skipped</div>
+                </div>
+                <div class="stat-card s-closed" style="cursor:default">
+                    <div class="num">@_result.Errors</div><div class="lbl">Errors</div>
+                </div>
+            </div>
+
+            @if (_result.DuplicateList.Any())
+            {
+                <details style="margin-top:12px">
+                    <summary style="cursor:pointer;color:#92400e">
+                        ⚠ @_result.Duplicates duplicate(s)
+                    </summary>
+                    <ul style="margin-top:8px;font-size:12px">
+                        @foreach (var d in _result.DuplicateList)
+                        { <li>@d</li> }
+                    </ul>
+                </details>
+            }
+            @if (_result.ErrorList.Any())
+            {
+                <details style="margin-top:8px">
+                    <summary style="cursor:pointer;color:#dc2626">
+                        ✕ @_result.Errors error(s)
+                    </summary>
+                    <ul style="margin-top:8px;font-size:12px">
+                        @foreach (var e in _result.ErrorList)
+                        { <li>@e</li> }
+                    </ul>
+                </details>
+            }
+
+            <div style="margin-top:16px;display:flex;gap:10px">
+                <button class="btn btn-ghost" @onclick="Reset">Import Another File</button>
+                <a href="/" class="btn btn-primary">View Dashboard</a>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    int    _step = 1;
+    bool   _running;
+    string _filename = "", _error = "";
+    ImportPreview? _preview;
+    ImportResult?  _result;
+    IBrowserFile?  _file;
+    Dictionary<string, string> _mapping = new();
+
+    protected override void OnInitialized()
+    {
+        // Pre-populate mapping dictionary
+        foreach (var (key, _, _) in ImportSystemFields.Fields)
+            _mapping[key] = "";
+    }
+
+    async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _error = "";
+        _file  = e.File;
+        _filename = e.File.Name;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(50 * 1024 * 1024);
+            _preview = ImportSvc.Preview(stream);
+
+            // Auto-map columns where names match
+            foreach (var (key, label, _) in ImportSystemFields.Fields)
+            {
+                var match = _preview.Columns.FirstOrDefault(c =>
+                    c.ToLower().Contains(key.Replace("_", "").ToLower()) ||
+                    c.ToLower().Contains(label.ToLower().TrimEnd('*').Trim().Split(' ')[0].ToLower()));
+                if (match != null) _mapping[key] = match;
+            }
+            _step = 2;
+        }
+        catch (Exception ex) { _error = "Failed to read file: " + ex.Message; }
+    }
+
+    async Task RunImport()
+    {
+        if (!_mapping.TryGetValue("printer_sn", out var snCol) || string.IsNullOrEmpty(snCol))
+        {
+            _error = "Please map the Printer Serial Number field (required).";
+            return;
+        }
+        _running = true;
+        _error   = "";
+        try
+        {
+            await using var stream = _file!.OpenReadStream(50 * 1024 * 1024);
+            _result = await ImportSvc.RunImportAsync(stream, _filename,
+                _mapping.Where(kv => !string.IsNullOrEmpty(kv.Value))
+                        .ToDictionary(kv => kv.Key, kv => kv.Value));
+            _step = 3;
+        }
+        catch (Exception ex) { _error = "Import failed: " + ex.Message; }
+        finally { _running = false; }
+    }
+
+    void Reset()
+    {
+        _step    = 1;
+        _preview = null;
+        _result  = null;
+        _file    = null;
+        _error   = "";
+        _filename = "";
+        foreach (var key in _mapping.Keys.ToList()) _mapping[key] = "";
+    }
+}

@@ -1,0 +1,88 @@
+@inject DatabaseSetupState DbState
+@inject NavigationManager Nav
+@using RMASystem.Services
+@implements IDisposable
+
+<CascadingAuthenticationState>
+    <ErrorBoundary @ref="_boundary">
+        <ChildContent>
+            <Router AppAssembly="@typeof(App).Assembly">
+                <Found Context="routeData">
+                    <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(Shared.MainLayout)">
+                        <NotAuthorized>
+                            @if (context.User.Identity?.IsAuthenticated != true)
+                            {
+                                <RedirectToLogin />
+                            }
+                            else
+                            {
+                                <LayoutView Layout="@typeof(Shared.LoginLayout)">
+                                    <div class="login-shell">
+                                        <div class="login-card">
+                                            <div class="error-msg">You do not have permission for this page.</div>
+                                            <a href="/" class="btn btn-primary">Home</a>
+                                        </div>
+                                    </div>
+                                </LayoutView>
+                            }
+                        </NotAuthorized>
+                    </AuthorizeRouteView>
+                </Found>
+                <NotFound>
+                    <LayoutView Layout="@typeof(Shared.MainLayout)">
+                        <p>Page not found.</p>
+                    </LayoutView>
+                </NotFound>
+            </Router>
+        </ChildContent>
+        <ErrorContent Context="ex">
+            <LayoutView Layout="@typeof(Shared.LoginLayout)">
+                <div class="login-shell">
+                    <div class="login-card" style="max-width:520px">
+                        <div class="login-brand">RMA System</div>
+                        <h1 class="login-title">Something went wrong</h1>
+                        <div class="error-msg" style="text-align:left">@SqlResilience.UserMessage(ex)</div>
+                        <p class="help-text" style="text-align:left">
+                            The app process is still running. Retry the page, or open Setup if the database is unavailable.
+                        </p>
+                        <div class="form-actions" style="justify-content:flex-start;margin-top:16px">
+                            <button class="btn btn-primary" type="button" @onclick="Recover">Try again</button>
+                            <a class="btn btn-ghost" href="/setup">Database setup</a>
+                            <a class="btn btn-ghost" href="/">Home</a>
+                        </div>
+                    </div>
+                </div>
+            </LayoutView>
+        </ErrorContent>
+    </ErrorBoundary>
+</CascadingAuthenticationState>
+
+@code {
+    ErrorBoundary? _boundary;
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        MaybeRedirectToSetup();
+    }
+
+    void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _boundary?.Recover();
+        MaybeRedirectToSetup();
+    }
+
+    void MaybeRedirectToSetup()
+    {
+        if (!DbState.NeedsConsent && !DbState.SqlUnreachable) return;
+        var rel = Nav.ToBaseRelativePath(Nav.Uri).TrimStart('/');
+        if (rel.StartsWith("setup", StringComparison.OrdinalIgnoreCase)) return;
+        // Allow login only when SQL is down (user may still open page); when consent needed, force /setup
+        if (DbState.SqlUnreachable && rel.StartsWith("login", StringComparison.OrdinalIgnoreCase)) return;
+        Nav.NavigateTo("/setup");
+    }
+
+    void Recover() => _boundary?.Recover();
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

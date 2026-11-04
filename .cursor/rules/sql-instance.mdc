@@ -1,0 +1,12 @@
+---
+description: SQL Express instance is SQLEXPRESS01 — do not migrate existing DB
+alwaysApply: true
+---
+
+# SQL Server instance
+
+- The SQL Express instance name is **SQLEXPRESS01**. Use `Server=localhost\SQLEXPRESS01` (or `.\SQLEXPRESS01`).
+- Installed config is `C:\Program Files\RMA System\config.ini` — that file is the source of truth. Never overwrite `Server=` on upgrade (`onlyifdoesntexist`).
+- Do **not** default to `SQLEXPRESS`. Do not probe other instances when `Server=` is set.
+- Do **not** run EF `MigrateAsync` at startup unless `AutoMigrate=true` in config.ini. The live database already has tables (including CarePackDocumentAudits).
+- Log SQL failures to `Logs\sql-problems-yyyyMMdd.log` via `SqlProblemLog` (instance, config path, SQL error number).

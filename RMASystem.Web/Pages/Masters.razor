@@ -1,0 +1,583 @@
+@page "/masters"
+@using Microsoft.AspNetCore.Components.Forms
+@attribute [Authorize(Roles = "Admin,Manager")]
+@inject MasterDataService MasterData
+@inject UserSessionService Session
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Masters — RMA System</PageTitle>
+
+<div class="page-hero care-hero">
+    <div>
+        <h1 class="page-hero-title">Master data</h1>
+        <p class="page-hero-sub">Company-scoped OEM → Product → Model, Customers, and Care Pack Types. City/state stay manual. Delete is blocked when transactions exist.</p>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_error)) { <div class="error-msg">@_error</div> }
+@if (!string.IsNullOrEmpty(_ok)) { <div class="success-msg">@_ok</div> }
+
+<div class="card" style="margin-bottom:14px">
+    <div class="card-title">Import all masters</div>
+    <p class="help-text">
+        Download the Excel template (sheets: OEMs, Products, Models, Customers, CarePackTypes), fill rows, then upload.
+        Matching codes are updated; new codes are created. Or seed OEM/models/care-pack types from the built-in catalog.
+    </p>
+    <div class="form-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:8px">
+        <button class="btn btn-ghost" type="button" disabled="@_busy" @onclick="DownloadTemplate">Download template</button>
+        <label class="btn btn-primary" style="margin:0;cursor:pointer">
+            @(_busy ? "Working…" : "Upload Excel")
+            <InputFile OnChange="OnImportFile" accept=".xlsx" disabled="@_busy" style="display:none" />
+        </label>
+        <button class="btn btn-ghost" type="button" disabled="@_busy" @onclick="SeedCatalog">Import catalog defaults</button>
+    </div>
+</div>
+
+<div class="seg-toggle" style="margin-bottom:12px">
+    @foreach (var t in _tabs)
+    {
+        <button type="button" class="@(_tab == t.Key ? "active" : "")" @onclick="@(() => SwitchTab(t.Key))">@t.Label</button>
+    }
+</div>
+
+@if (_tab == "customers")
+{
+    <div class="card">
+        <div class="card-title">Add customer</div>
+        <div class="form-grid">
+            <div class="form-group"><label>Code</label><input class="form-control" @bind="_cCode" placeholder="Auto from name if blank" /></div>
+            <div class="form-group"><label>Name</label><input class="form-control" @bind="_cName" /></div>
+            <div class="form-group"><label>City (manual)</label><input class="form-control" @bind="_cCity" /></div>
+            <div class="form-group"><label>State (manual)</label><input class="form-control" @bind="_cState" /></div>
+            <div class="form-group"><label>Phone</label><input class="form-control" @bind="_cPhone" /></div>
+            <div class="form-group"><label>Email</label><input class="form-control" @bind="_cEmail" /></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="button" disabled="@_busy" @onclick="AddCustomer">Create</button></div>
+    </div>
+    <div class="card">
+        <div class="card-title">Customers (@_customers.Count)</div>
+        <div class="tbl-wrap">
+            <table>
+                <thead><tr><th>Code</th><th>Name</th><th>City</th><th>State</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var c in _customers)
+                {
+                    <tr>
+                        <td><code>@c.Code</code></td>
+                        <td>@c.Name</td>
+                        <td>@(c.City ?? "—")</td>
+                        <td>@(c.State ?? "—")</td>
+                        <td>@(c.IsActive ? "Yes" : "No")</td>
+                        <td class="master-row-actions">
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => BeginEditCustomer(c))">Edit</button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => Toggle("customer", c.Id, !c.IsActive))">
+                                @(c.IsActive ? "Disable" : "Enable")
+                            </button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => Delete("customer", c.Id, c.Name))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (_tab == "oems")
+{
+    <div class="card">
+        <div class="card-title">Add OEM / Vendor</div>
+        <div class="form-grid">
+            <div class="form-group"><label>Code</label><input class="form-control" @bind="_oCode" /></div>
+            <div class="form-group"><label>Name</label><input class="form-control" @bind="_oName" /></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="button" disabled="@_busy" @onclick="AddOem">Create</button></div>
+    </div>
+    <div class="card">
+        <div class="card-title">OEMs (@_oems.Count)</div>
+        <div class="tbl-wrap">
+            <table>
+                <thead><tr><th>Code</th><th>Name</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var o in _oems)
+                {
+                    <tr>
+                        <td><code>@o.Code</code></td>
+                        <td>@o.Name</td>
+                        <td>@(o.IsActive ? "Yes" : "No")</td>
+                        <td class="master-row-actions">
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => BeginEditOem(o))">Edit</button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => Toggle("oem", o.Id, !o.IsActive))">
+                                @(o.IsActive ? "Disable" : "Enable")
+                            </button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => Delete("oem", o.Id, o.Name))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (_tab == "products")
+{
+    <div class="card">
+        <div class="card-title">Add product (under OEM)</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>OEM</label>
+                <select class="form-control" @bind="_pOemId">
+                    <option value="0">— Select OEM —</option>
+                    @foreach (var o in _oems.Where(x => x.IsActive))
+                    {
+                        <option value="@o.Id">@o.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="form-group"><label>Code</label><input class="form-control" @bind="_pCode" /></div>
+            <div class="form-group"><label>Name</label><input class="form-control" @bind="_pName" /></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="button" disabled="@_busy" @onclick="AddProduct">Create</button></div>
+    </div>
+    <div class="card">
+        <div class="card-title">Products (@_products.Count)</div>
+        <div class="tbl-wrap">
+            <table>
+                <thead><tr><th>OEM</th><th>Code</th><th>Name</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var p in _products)
+                {
+                    <tr>
+                        <td>@(p.OemVendor?.Name ?? "—")</td>
+                        <td><code>@p.Code</code></td>
+                        <td>@p.Name</td>
+                        <td>@(p.IsActive ? "Yes" : "No")</td>
+                        <td class="master-row-actions">
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => BeginEditProduct(p))">Edit</button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => Toggle("product", p.Id, !p.IsActive))">
+                                @(p.IsActive ? "Disable" : "Enable")
+                            </button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => Delete("product", p.Id, p.Name))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (_tab == "models")
+{
+    <div class="card">
+        <div class="card-title">Add model (under Product)</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Product</label>
+                <select class="form-control" @bind="_mProductId">
+                    <option value="0">— Select Product —</option>
+                    @foreach (var p in _products.Where(x => x.IsActive))
+                    {
+                        <option value="@p.Id">@(p.OemVendor?.Name) / @p.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="form-group"><label>Code</label><input class="form-control" @bind="_mCode" placeholder="e.g. T6304E" /></div>
+            <div class="form-group"><label>Name</label><input class="form-control" @bind="_mName" /></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="button" disabled="@_busy" @onclick="AddModel">Create</button></div>
+    </div>
+    <div class="card">
+        <div class="card-title">Models (@_models.Count)</div>
+        <div class="tbl-wrap">
+            <table>
+                <thead><tr><th>Product</th><th>Code</th><th>Name</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var m in _models)
+                {
+                    <tr>
+                        <td>@(m.Product?.Name ?? "—")</td>
+                        <td><code>@m.Code</code></td>
+                        <td>@m.Name</td>
+                        <td>@(m.IsActive ? "Yes" : "No")</td>
+                        <td class="master-row-actions">
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => BeginEditModel(m))">Edit</button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => Toggle("model", m.Id, !m.IsActive))">
+                                @(m.IsActive ? "Disable" : "Enable")
+                            </button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => Delete("model", m.Id, m.Code))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (_tab == "carepack")
+{
+    <div class="card">
+        <div class="card-title">Add care pack type</div>
+        <div class="form-grid">
+            <div class="form-group"><label>Name</label><input class="form-control" @bind="_tName" placeholder="e.g. 3 Year" /></div>
+            <div class="form-group"><label>Duration years</label><input class="form-control" type="number" min="1" max="10" @bind="_tYears" /></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="button" disabled="@_busy" @onclick="AddType">Create</button></div>
+    </div>
+    <div class="card">
+        <div class="card-title">Care pack types (@_types.Count)</div>
+        <div class="tbl-wrap">
+            <table>
+                <thead><tr><th>Name</th><th>Years</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var t in _types)
+                {
+                    <tr>
+                        <td>@t.Name</td>
+                        <td>@t.DurationYears</td>
+                        <td>@(t.IsActive ? "Yes" : "No")</td>
+                        <td class="master-row-actions">
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => BeginEditType(t))">Edit</button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy"
+                                    @onclick="@(() => Toggle("carepacktype", t.Id, !t.IsActive))">
+                                @(t.IsActive ? "Disable" : "Enable")
+                            </button>
+                            <button class="btn btn-ghost btn-sm" type="button" disabled="@_busy" @onclick="@(() => Delete("carepacktype", t.Id, t.Name))">Delete</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_editKind != null)
+{
+    <div class="modal-backdrop" @onclick="CloseEdit">
+        <div class="modal-card modal-card-wide" @onclick:stopPropagation="true">
+            <div class="card-title">Edit @_editTitle</div>
+            @if (!string.IsNullOrEmpty(_editError))
+            {
+                <div class="error-msg">@_editError</div>
+            }
+            @if (_editKind == "customer")
+            {
+                <div class="form-grid">
+                    <div class="form-group"><label>Code</label><input class="form-control" @bind="_eCode" /></div>
+                    <div class="form-group"><label>Name</label><input class="form-control" @bind="_eName" /></div>
+                    <div class="form-group"><label>City</label><input class="form-control" @bind="_eCity" /></div>
+                    <div class="form-group"><label>State</label><input class="form-control" @bind="_eState" /></div>
+                    <div class="form-group"><label>Phone</label><input class="form-control" @bind="_ePhone" /></div>
+                    <div class="form-group"><label>Email</label><input class="form-control" @bind="_eEmail" /></div>
+                </div>
+            }
+            else if (_editKind is "oem" or "product" or "model")
+            {
+                @if (_editKind == "product")
+                {
+                    <div class="form-group">
+                        <label>OEM</label>
+                        <select class="form-control" @bind="_eParentId">
+                            @foreach (var o in _oems.Where(x => x.IsActive || x.Id == _eParentId))
+                            {
+                                <option value="@o.Id">@o.Name</option>
+                            }
+                        </select>
+                    </div>
+                }
+                @if (_editKind == "model")
+                {
+                    <div class="form-group">
+                        <label>Product</label>
+                        <select class="form-control" @bind="_eParentId">
+                            @foreach (var p in _products.Where(x => x.IsActive || x.Id == _eParentId))
+                            {
+                                <option value="@p.Id">@(p.OemVendor?.Name) / @p.Name</option>
+                            }
+                        </select>
+                    </div>
+                }
+                <div class="form-group"><label>Code</label><input class="form-control" @bind="_eCode" /></div>
+                <div class="form-group"><label>Name</label><input class="form-control" @bind="_eName" /></div>
+            }
+            else if (_editKind == "carepacktype")
+            {
+                <div class="form-group"><label>Name</label><input class="form-control" @bind="_eName" /></div>
+                <div class="form-group"><label>Duration years</label><input class="form-control" type="number" min="1" max="10" @bind="_eYears" /></div>
+            }
+            <div class="form-actions" style="justify-content:flex-end;margin-top:12px">
+                <button class="btn btn-ghost" type="button" @onclick="CloseEdit">Cancel</button>
+                <button class="btn btn-primary" type="button" disabled="@_busy" @onclick="SaveEdit">Save</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    record Tab(string Key, string Label);
+    readonly Tab[] _tabs =
+    [
+        new("customers", "Customers"),
+        new("oems", "OEMs"),
+        new("products", "Products"),
+        new("models", "Models"),
+        new("carepack", "Care Pack Types"),
+    ];
+
+    string _tab = "customers";
+    string? _error, _ok;
+    bool _busy;
+
+    List<Customer> _customers = [];
+    List<OemVendor> _oems = [];
+    List<Product> _products = [];
+    List<ProductModel> _models = [];
+    List<CarePackTypeMaster> _types = [];
+
+    string _cCode = "", _cName = "", _cCity = "", _cState = "", _cPhone = "", _cEmail = "";
+    string _oCode = "", _oName = "";
+    int _pOemId; string _pCode = "", _pName = "";
+    int _mProductId; string _mCode = "", _mName = "";
+    string _tName = ""; int _tYears = 5;
+
+    string? _editKind, _editTitle, _editError;
+    int _editId, _eParentId, _eYears = 5;
+    string _eCode = "", _eName = "", _eCity = "", _eState = "", _ePhone = "", _eEmail = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.EnsureSettingsAsync();
+        var (_, role) = await Session.GetCurrentAsync();
+        if (!AppRoles.CanManageMasters(role))
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+        await Reload();
+    }
+
+    async Task SwitchTab(string key)
+    {
+        _tab = key;
+        _error = _ok = null;
+        await Reload();
+    }
+
+    async Task Reload()
+    {
+        try
+        {
+            _customers = await MasterData.ListCustomersAsync(activeOnly: false);
+            _oems = await MasterData.ListOemsAsync(activeOnly: false);
+            _products = await MasterData.ListProductsAsync(activeOnly: false);
+            _models = await MasterData.ListModelsAsync(activeOnly: false);
+            _types = await MasterData.ListCarePackTypesAsync(activeOnly: false);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    async Task DownloadTemplate()
+    {
+        await Run(async () =>
+        {
+            var bytes = MasterData.BuildImportTemplate();
+            var b64 = Convert.ToBase64String(bytes);
+            await Js.InvokeAsync<object>("rmaSaveFile", "RMA_Masters_Template.xlsx", b64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            _ok = "Template downloaded.";
+        });
+    }
+
+    async Task OnImportFile(InputFileChangeEventArgs e)
+    {
+        await Run(async () =>
+        {
+            await using var stream = e.File.OpenReadStream(20 * 1024 * 1024);
+            await using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            ms.Position = 0;
+            var result = await MasterData.ImportFromExcelAsync(ms);
+            _ok = "Import: " + result.Summary;
+            if (result.Errors.Count > 0)
+                _error = string.Join(" | ", result.Errors.Take(8));
+        });
+    }
+
+    async Task SeedCatalog()
+    {
+        await Run(async () =>
+        {
+            await MasterData.SeedCurrentCompanyAsync();
+            _ok = "Catalog OEMs, products, models, and care pack types imported for this company.";
+        });
+    }
+
+    async Task AddCustomer()
+    {
+        await Run(async () =>
+        {
+            await MasterData.CreateCustomerAsync(_cCode, _cName, _cCity, _cState, phone: _cPhone, email: _cEmail);
+            _ok = "Customer created.";
+            _cCode = _cName = _cCity = _cState = _cPhone = _cEmail = "";
+        });
+    }
+
+    async Task AddOem()
+    {
+        await Run(async () =>
+        {
+            await MasterData.CreateOemAsync(_oCode, _oName);
+            _ok = "OEM created.";
+            _oCode = _oName = "";
+        });
+    }
+
+    async Task AddProduct()
+    {
+        await Run(async () =>
+        {
+            if (_pOemId <= 0) throw new InvalidOperationException("Select OEM.");
+            await MasterData.CreateProductAsync(_pOemId, _pCode, _pName);
+            _ok = "Product created.";
+            _pCode = _pName = "";
+        });
+    }
+
+    async Task AddModel()
+    {
+        await Run(async () =>
+        {
+            if (_mProductId <= 0) throw new InvalidOperationException("Select Product.");
+            await MasterData.CreateModelAsync(_mProductId, _mCode, _mName);
+            _ok = "Model created.";
+            _mCode = _mName = "";
+        });
+    }
+
+    async Task AddType()
+    {
+        await Run(async () =>
+        {
+            await MasterData.CreateCarePackTypeAsync(_tName, _tYears);
+            _ok = "Care pack type created.";
+            _tName = "";
+            _tYears = 5;
+        });
+    }
+
+    void BeginEditCustomer(Customer c)
+    {
+        _editKind = "customer"; _editTitle = "customer"; _editId = c.Id; _editError = null;
+        _eCode = c.Code; _eName = c.Name; _eCity = c.City ?? ""; _eState = c.State ?? "";
+        _ePhone = c.Phone ?? ""; _eEmail = c.Email ?? "";
+    }
+
+    void BeginEditOem(OemVendor o)
+    {
+        _editKind = "oem"; _editTitle = "OEM"; _editId = o.Id; _editError = null;
+        _eCode = o.Code; _eName = o.Name;
+    }
+
+    void BeginEditProduct(Product p)
+    {
+        _editKind = "product"; _editTitle = "product"; _editId = p.Id; _editError = null;
+        _eParentId = p.OemVendorId; _eCode = p.Code; _eName = p.Name;
+    }
+
+    void BeginEditModel(ProductModel m)
+    {
+        _editKind = "model"; _editTitle = "model"; _editId = m.Id; _editError = null;
+        _eParentId = m.ProductId; _eCode = m.Code; _eName = m.Name;
+    }
+
+    void BeginEditType(CarePackTypeMaster t)
+    {
+        _editKind = "carepacktype"; _editTitle = "care pack type"; _editId = t.Id; _editError = null;
+        _eName = t.Name; _eYears = t.DurationYears;
+    }
+
+    void CloseEdit()
+    {
+        _editKind = null;
+        _editError = null;
+    }
+
+    async Task SaveEdit()
+    {
+        _busy = true; _editError = null; _error = _ok = null;
+        try
+        {
+            switch (_editKind)
+            {
+                case "customer":
+                    await MasterData.UpdateCustomerAsync(_editId, _eCode, _eName, _eCity, _eState, phone: _ePhone, email: _eEmail);
+                    break;
+                case "oem":
+                    await MasterData.UpdateOemAsync(_editId, _eCode, _eName);
+                    break;
+                case "product":
+                    if (_eParentId <= 0) throw new InvalidOperationException("Select OEM.");
+                    await MasterData.UpdateProductAsync(_editId, _eParentId, _eCode, _eName);
+                    break;
+                case "model":
+                    if (_eParentId <= 0) throw new InvalidOperationException("Select Product.");
+                    await MasterData.UpdateModelAsync(_editId, _eParentId, _eCode, _eName);
+                    break;
+                case "carepacktype":
+                    await MasterData.UpdateCarePackTypeAsync(_editId, _eName, _eYears);
+                    break;
+            }
+            _ok = "Saved.";
+            CloseEdit();
+            await Reload();
+        }
+        catch (Exception ex) { _editError = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    async Task Toggle(string kind, int id, bool active)
+    {
+        await Run(async () =>
+        {
+            await MasterData.SetActiveAsync(kind, id, active);
+            _ok = active ? "Enabled." : "Disabled.";
+        });
+    }
+
+    async Task Delete(string kind, int id, string label)
+    {
+        var block = await MasterData.GetDeleteBlockReasonAsync(kind, id);
+        if (block != null)
+        {
+            _error = block;
+            _ok = null;
+            return;
+        }
+
+        var confirmed = await Js.InvokeAsync<bool>("confirm",
+            $"Delete '{label}' permanently? This cannot be undone. Only allowed when no transactions are linked.");
+        if (!confirmed) return;
+
+        await Run(async () =>
+        {
+            await MasterData.DeleteAsync(kind, id);
+            _ok = "Deleted.";
+        });
+    }
+
+    async Task Run(Func<Task> action)
+    {
+        _busy = true; _error = _ok = null;
+        try
+        {
+            await action();
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

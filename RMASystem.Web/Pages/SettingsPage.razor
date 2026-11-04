@@ -1,0 +1,546 @@
+@page "/settings"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject ZohoService ZohoSvc
+@inject CarePackService CarePack
+@inject DatabaseBackupService Backup
+@inject UserSessionService Session
+@inject NavigationManager Nav
+@using Microsoft.EntityFrameworkCore
+@using RMASystem.Services
+
+<PageTitle>Settings — RMA System</PageTitle>
+
+@if (!_allowed)
+{
+    <div class="error-msg">Settings are restricted to Admin. <a href="/">Back to Dashboard</a></div>
+}
+else
+{
+    <div class="card">
+        <div class="card-title">Application Settings</div>
+
+        <div class="tabs">
+            @foreach (var tab in _tabs)
+            {
+                <div class="tab @(_tab == tab ? "active" : "")"
+                     @onclick="() => _tab = tab">@tab</div>
+            }
+        </div>
+
+        @if (_tab == "Company")
+        {
+            <div class="form-grid" style="margin-top:16px">
+                @Field("company_name",    "Company Name",  "INFINITE SOLUTIONS")
+                @Field("company_contact", "Contact Name",  "Sanjay Batra")
+                @Field("company_email",   "Email",          "sanjay@infinitesolutions.co.in")
+                @Field("company_phone",   "Phone",          "9311011467")
+                @Field("company_address", "Address",        "312, VISHWADEEP TOWER")
+                @Field("company_city",    "City",           "New Delhi")
+                @Field("company_postal",  "Postal Code",    "110058")
+                @Field("company_country", "Country",        "INDIA")
+                @Field("ticket_prefix",   "Ticket Prefix",  "INF")
+            </div>
+        }
+
+        @if (_tab == "OEM Details")
+        {
+            <div class="form-grid" style="margin-top:16px">
+                @Field("oem_name",    "OEM Name",    "TSC Auto ID Technology Co., Ltd.")
+                @Field("oem_email",   "OEM Email",   "tsc_rma@tscprinters.com")
+                @Field("oem_phone",   "OEM Phone",   "+886-2-2267-6000")
+                @Field("oem_fax",     "OEM Fax",     "+886-2-2267-5581")
+                @Field("oem_address", "OEM Address", "No. 285, Shulin Dist., New Taipei City")
+            </div>
+        }
+
+        @if (_tab == "Email")
+        {
+            <p class="help-text" style="margin-top:12px">
+                Configure SMTP (optional send from app) and the <strong>copy-paste draft</strong> used in Zoho Mail
+                without OAuth tokens. Draft subject defaults to the OEM Excel file name
+                (e.g. <code>TE310_TEBT25513522_HEAD</code>).
+                Placeholders: <code>{{TOKEN}}</code> — see body defaults for the full list.
+            </p>
+            <div class="section-hdr" style="margin-top:12px">SMTP (optional — Send Email to OEM)</div>
+            <div class="form-grid" style="margin-top:8px">
+                @Field("smtp_host", "SMTP Host", "smtp.example.com")
+                @Field("smtp_port", "SMTP Port", "587")
+                @Field("smtp_user", "SMTP User", "")
+                @PasswordField("smtp_pass", "SMTP Password")
+                @Field("smtp_from", "From address", "sanjay@infinitesolutions.co.in")
+                @Field("smtp_ssl", "Use SSL/TLS (true/false)", "true")
+                @Field("oem_rma_email_to", "To (comma-separated)", "tsc_rma@tscprinters.com")
+                @Field("oem_rma_email_cc", "CC (comma-separated)", "")
+            </div>
+
+            <div class="section-hdr" style="margin-top:20px">Draft / send templates</div>
+            <div class="form-grid" style="margin-top:8px">
+                @Field("oem_rma_email_subject", "Subject template",
+                    "{{EXCEL_FILE_STEM}}")
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>Plain-text body (copy to Zoho Mail / SMTP)</label>
+                <textarea class="form-control" rows="14" @bind="_emailBody" @bind:event="oninput"></textarea>
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>HTML body (optional — richer paste)</label>
+                <textarea class="form-control" rows="12" @bind="_emailBodyHtml" @bind:event="oninput"></textarea>
+            </div>
+        }
+
+        @if (_tab == "Delivery Challan")
+        {
+            <p class="help-text" style="margin-top:12px">
+                Templates for <strong>Create Delivery Challan (Zoho)</strong> on RMA detail when goods return from OEM.
+                Uses the same <code>{{TOKEN}}</code> placeholders as Email (no Zoho token required to edit these).
+            </p>
+            <div class="form-grid" style="margin-top:16px">
+                @Field("challan_enabled", "Enable Zoho challan create (true/false)", "true")
+                @Field("challan_auto_dispatch", "Mark Dispatched to Customer after create (true/false)", "true")
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>Line item description</label>
+                <textarea class="form-control" rows="3" @bind="_challanLineDesc" @bind:event="oninput"></textarea>
+            </div>
+            <div class="form-group" style="margin-top:12px">
+                <label>Challan notes</label>
+                <textarea class="form-control" rows="4" @bind="_challanNotes" @bind:event="oninput"></textarea>
+            </div>
+        }
+
+        @if (_tab == "Paths")
+        {
+            <div class="form-grid" style="margin-top:16px">
+                @Field("base_dir", "Base Directory", @"C:\Sanjay Projects\Projects\RMA Windows")
+            </div>
+            <p class="help-text" style="margin-top:8px">
+                All photos, Excel files, batch lists, challans, and backups are stored inside
+                sub-folders of this directory.
+            </p>
+        }
+
+        @if (_tab == "Backup")
+        {
+            <p class="help-text" style="margin-top:12px">
+                Creates a SQL Server <code>.bak</code> of the RMA database plus a zip of photos / Care Pack files / config.
+                Files are stored under <code>@_backupFolder</code>.
+            </p>
+            <label class="check-row" style="margin-top:8px">
+                <input type="checkbox" @bind="_backupIncludeFiles" />
+                Include photos, Care Pack PDFs, Excel, challans in a zip
+            </label>
+            <div class="form-actions" style="justify-content:flex-start;margin-top:12px">
+                <button class="btn btn-primary" type="button" @onclick="RunBackup" disabled="@_backupBusy">
+                    @if (_backupBusy) { <span class="spinner"></span> }
+                    Backup now
+                </button>
+                <button class="btn btn-ghost" type="button" @onclick="RefreshBackups" disabled="@_backupBusy">Refresh list</button>
+            </div>
+            @if (!string.IsNullOrEmpty(_backupMsg))
+            {
+                <div class="@(_backupOk ? "success-msg" : "error-msg")" style="margin-top:12px;white-space:pre-wrap">@_backupMsg</div>
+            }
+            <div class="section-hdr" style="margin-top:20px">Recent backups</div>
+            @if (_backupRows.Count == 0)
+            {
+                <p class="muted">No backup files yet.</p>
+            }
+            else
+            {
+                <div class="tbl-wrap">
+                    <table>
+                        <thead><tr><th>File</th><th>Size</th><th>Written</th></tr></thead>
+                        <tbody>
+                        @foreach (var b in _backupRows)
+                        {
+                            <tr>
+                                <td><code>@b.Name</code></td>
+                                <td>@FormatBytes(b.Bytes)</td>
+                                <td>@b.Written.ToString("dd-MMM-yyyy HH:mm")</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            <p class="help-text" style="margin-top:10px">
+                If SQL backup fails with a permission error, grant the SQL Server service account
+                write access to the Backups folder, or copy backups from SQL’s default Backup directory.
+            </p>
+        }
+
+        @if (_tab == "Zoho Integration")
+        {
+            <p class="help-text" style="margin-top:12px">
+                Use a Zoho <strong>Self Client</strong> only (API Console → Add Client → Self Client).
+                You only enter <strong>Client ID</strong> and <strong>Client Secret</strong> here.
+                Open the console that matches your account:
+                <a href="https://api-console.zoho.com" target="_blank">api-console.zoho.com</a> (Global / .com)
+                — use this if your Zoho login is on zoho.com.
+            </p>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Data Center (must match Self Client console)</label>
+                    <select class="form-control" value="@GetDc()" @onchange="OnDcChanged">
+                        <option value="com">Global (.com) — accounts.zoho.com</option>
+                        <option value="in">India (.in) — accounts.zoho.in</option>
+                        <option value="eu">Europe (.eu)</option>
+                        <option value="au">Australia (.com.au)</option>
+                    </select>
+                </div>
+                @Field("zoho_client_id", "Client ID", "")
+                @PasswordField("zoho_client_secret", "Client Secret")
+                @Field("zoho_books_org_id", "Books Organisation ID", "")
+                @Field("zoho_poll_interval_mins", "Mail Poll Interval (mins)", "30")
+            </div>
+
+            <div style="margin-top:12px;font-size:12px;color:var(--text-secondary)">
+                Books refresh token: <strong>@(TokenStatus("zoho_books_refresh_token"))</strong>
+                &nbsp;|&nbsp;
+                Mail refresh token: <strong>@(TokenStatus("zoho_mail_refresh_token"))</strong>
+            </div>
+
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border, #ddd)">
+                <div class="card-title" style="font-size:14px;margin-bottom:8px">One-time setup: generate access</div>
+                <ol class="help-text" style="margin:0 0 12px 18px;line-height:1.5">
+                    <li>Save Client ID + Client Secret above (Data Center = <strong>Global (.com)</strong> for zoho.com).</li>
+                    <li>In Zoho API Console → your Self Client → <strong>Generate Code</strong>.</li>
+                    <li>Scope example: <code>ZohoBooks.fullaccess.all</code> (add Mail scopes if needed).</li>
+                    <li>Copy the code within ~1 minute, paste below, click <strong>Connect</strong>.</li>
+                </ol>
+                <p class="help-text">
+                    Do <strong>not</strong> paste that code into Client Secret. Client ID/Secret never change;
+                    the grant code is only used once and the app stores the refresh token for you.
+                </p>
+                <div class="form-grid">
+                    <div class="form-group" style="grid-column:1 / -1">
+                        <label>Grant code from Self Client (one-time)</label>
+                        <input class="form-control" type="text" @bind="_grantCode" placeholder="1000.xxxxxxxx..." />
+                    </div>
+                    <div class="form-group">
+                        <label>Connect for</label>
+                        <select class="form-control" @bind="_grantTarget">
+                            <option value="books">Zoho Books</option>
+                            <option value="mail">Zoho Mail</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+                    <button class="btn btn-primary btn-sm" @onclick="ExchangeGrant" disabled="@_exchanging">
+                        @if (_exchanging) { <span class="spinner"></span> }
+                        Connect (exchange grant code)
+                    </button>
+                    <button class="btn btn-ghost btn-sm" @onclick="TestBooks" disabled="@_polling">
+                        Test Books
+                    </button>
+                    <button class="btn btn-ghost btn-sm" @onclick="TestMailPoll" disabled="@_polling">
+                        @if (_polling) { <span class="spinner"></span> }
+                        Test Mail Poll
+                    </button>
+                </div>
+                @if (!string.IsNullOrEmpty(_pollResult))
+                {
+                    <p style="margin-top:10px;font-size:12px;color:var(--text-secondary);white-space:pre-wrap">@_pollResult</p>
+                }
+            </div>
+        }
+
+        @if (_tab == "Care Pack deadlines")
+        {
+            <p class="help-text" style="margin-top:12px">
+                Contractual maxima: PO within <strong>30</strong> days of sales invoice;
+                OEM payment within <strong>45</strong> days of OEM billing date.
+                App limits must be <em>stricter or equal</em> (defaults 25 / 40) so you act before the hard stop.
+            </p>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>PO to OEM — max days from sales invoice (default 25, max 30)</label>
+                    <input class="form-control" type="number" min="1" max="30" @bind="_poDays" />
+                </div>
+                <div class="form-group">
+                    <label>OEM payment — max days from OEM bill (default 40, max 45)</label>
+                    <input class="form-control" type="number" min="1" max="45" @bind="_payDays" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary btn-sm" type="button" disabled="@_saving" @onclick="SaveDeadlines">
+                    Save deadlines
+                </button>
+                @if (!string.IsNullOrEmpty(_deadlineMsg))
+                {
+                    <span class="success-inline">@_deadlineMsg</span>
+                }
+            </div>
+        }
+
+        <div class="card" style="margin-top:16px">
+            <div class="card-title">Users &amp; access</div>
+            <p class="help-text">
+                User accounts, enable/disable, password expiry, and live sessions are managed by Admin under
+                <a href="/admin/users">Users</a> and <a href="/admin/sessions">Sessions</a>.
+            </p>
+        </div>
+
+        <div style="margin-top:24px;display:flex;gap:12px;align-items:center">
+            <button class="btn btn-primary" @onclick="Save" disabled="@_saving">
+                @if (_saving) { <span class="spinner"></span> }
+                Save Settings
+            </button>
+            @if (!string.IsNullOrEmpty(_saveMsg))
+            {
+                <span class="success-inline">@_saveMsg</span>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    static readonly string[] _tabs =
+    {
+        "Company", "OEM Details", "Email", "Delivery Challan", "Paths", "Backup", "Zoho Integration", "Care Pack deadlines"
+    };
+
+    string _tab = "Company";
+    bool   _saving, _polling, _exchanging, _allowed, _backupBusy, _backupOk, _backupIncludeFiles = true;
+    string _saveMsg = "", _pollResult = "", _deadlineMsg = "", _backupMsg = "", _backupFolder = "";
+    string _grantCode = "";
+    string _grantTarget = "books";
+    string _emailBody = "", _emailBodyHtml = "";
+    string _challanLineDesc = "", _challanNotes = "";
+    int _poDays = 25, _payDays = 40;
+    List<(string Name, long Bytes, DateTime Written)> _backupRows = [];
+
+    Dictionary<string, string> _vals = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var (_, role) = await Session.GetCurrentAsync();
+        _allowed = AppRoles.CanAccessSettings(role);
+        if (!_allowed)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        _backupFolder = Backup.BackupFolder;
+        RefreshBackups();
+
+        var all = await Db.AppSettings.ToListAsync();
+        foreach (var s in all)
+            _vals[s.Key] = s.Value;
+        if (!_vals.ContainsKey("zoho_dc"))
+            _vals["zoho_dc"] = "com";
+        if (!_vals.ContainsKey("zoho_redirect_uri"))
+            _vals["zoho_redirect_uri"] = "";
+
+        EnsureDefault("smtp_port", "587");
+        EnsureDefault("smtp_ssl", "true");
+        EnsureDefault("oem_rma_email_to", "tsc_rma@tscprinters.com");
+        EnsureDefault("oem_rma_email_subject", "{{EXCEL_FILE_STEM}}");
+        EnsureDefault("oem_rma_email_body", OemEmailService.DefaultPlainBodyTemplate());
+        EnsureDefault("oem_rma_email_body_html", OemEmailService.DefaultHtmlBodyTemplate());
+        EnsureDefault("challan_enabled", "true");
+        EnsureDefault("challan_auto_dispatch", "true");
+        EnsureDefault("challan_line_description",
+            "{{PRINTER_MODEL}} Printer — SN: {{PRINTER_SERIAL}} — Repaired/Replaced Unit ({{FAULTY_PART}})");
+        EnsureDefault("challan_notes",
+            "OEM RMA#: {{OEM_RMA}} | Failure: {{FAULT_DESCRIPTION}} | Ref: {{INTERNAL_TICKET}}");
+
+        _emailBody = _vals.GetValueOrDefault("oem_rma_email_body") ?? "";
+        _emailBodyHtml = _vals.GetValueOrDefault("oem_rma_email_body_html") ?? "";
+        _challanLineDesc = _vals.GetValueOrDefault("challan_line_description") ?? "";
+        _challanNotes = _vals.GetValueOrDefault("challan_notes") ?? "";
+        (_poDays, _payDays) = await CarePack.GetDeadlineLimitsAsync();
+    }
+
+    void RefreshBackups()
+    {
+        _backupRows = Backup.ListBackups().ToList();
+    }
+
+    async Task RunBackup()
+    {
+        _backupMsg = "";
+        _backupBusy = true;
+        try
+        {
+            var result = await Backup.CreateBackupAsync(_backupIncludeFiles);
+            _backupOk = result.Ok;
+            _backupMsg = result.Message;
+            RefreshBackups();
+        }
+        catch (Exception ex)
+        {
+            _backupOk = false;
+            _backupMsg = ex.Message;
+        }
+        finally { _backupBusy = false; }
+    }
+
+    static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("0.0") + " KB";
+        return (bytes / (1024.0 * 1024.0)).ToString("0.00") + " MB";
+    }
+
+    void EnsureDefault(string key, string value)
+    {
+        if (!_vals.ContainsKey(key) || string.IsNullOrWhiteSpace(_vals[key]))
+            _vals[key] = value;
+    }
+
+    async Task SaveDeadlines()
+    {
+        _saving = true;
+        _deadlineMsg = "";
+        try
+        {
+            await CarePack.SetDeadlineLimitsAsync(_poDays, _payDays);
+            _deadlineMsg = "Deadlines saved.";
+        }
+        catch (Exception ex) { _deadlineMsg = "Error: " + ex.Message; }
+        finally { _saving = false; }
+    }
+
+    RenderFragment Field(string key, string label, string placeholder) => __builder =>
+    {
+        if (!_vals.ContainsKey(key)) _vals[key] = "";
+
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "form-group");
+
+            __builder.OpenElement(2, "label");
+            __builder.AddContent(3, label);
+            __builder.CloseElement();
+
+            __builder.OpenElement(4, "input");
+            __builder.AddAttribute(5, "class", "form-control");
+            __builder.AddAttribute(6, "type", "text");
+            __builder.AddAttribute(7, "value", _vals[key]);
+            __builder.AddAttribute(8, "placeholder", placeholder);
+            __builder.AddAttribute(9, "oninput",
+                EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(
+                    this, e => _vals[key] = e.Value?.ToString() ?? ""));
+            __builder.CloseElement();
+
+        __builder.CloseElement();
+    };
+
+    RenderFragment PasswordField(string key, string label) => __builder =>
+    {
+        if (!_vals.ContainsKey(key)) _vals[key] = "";
+
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "form-group");
+
+            __builder.OpenElement(2, "label");
+            __builder.AddContent(3, label);
+            __builder.CloseElement();
+
+            __builder.OpenElement(4, "input");
+            __builder.AddAttribute(5, "class", "form-control");
+            __builder.AddAttribute(6, "type", "password");
+            __builder.AddAttribute(7, "value", _vals[key]);
+            __builder.AddAttribute(8, "placeholder", "••••••••");
+            __builder.AddAttribute(9, "oninput",
+                EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(
+                    this, e => _vals[key] = e.Value?.ToString() ?? ""));
+            __builder.CloseElement();
+
+        __builder.CloseElement();
+    };
+
+    async Task Save()
+    {
+        _saving  = true;
+        _saveMsg = "";
+        try
+        {
+            _vals["oem_rma_email_body"] = _emailBody ?? "";
+            _vals["oem_rma_email_body_html"] = _emailBodyHtml ?? "";
+            _vals["challan_line_description"] = _challanLineDesc ?? "";
+            _vals["challan_notes"] = _challanNotes ?? "";
+            foreach (var (key, val) in _vals)
+            {
+                var v = val ?? "";
+                if (key.StartsWith("zoho_", StringComparison.OrdinalIgnoreCase))
+                    v = v.Trim();
+                await Db.SetSettingAsync(key, v);
+            }
+            _saveMsg = "✅ Settings saved";
+        }
+        catch (Exception ex) { _saveMsg = "Error: " + ex.Message; }
+        finally { _saving = false; }
+    }
+
+    async Task TestMailPoll()
+    {
+        _polling    = true;
+        _pollResult = "Polling Zoho Mail...";
+        try
+        {
+            var results = await ZohoSvc.PollMailAsync();
+            _pollResult = results.Any()
+                ? "Found: " + string.Join(", ", results)
+                : "No new OEM RMA emails found.";
+        }
+        catch (Exception ex) { _pollResult = "Error: " + ex.Message; }
+        finally { _polling = false; }
+    }
+
+    async Task TestBooks()
+    {
+        _polling = true;
+        _pollResult = "Testing Zoho Books token...";
+        try
+        {
+            await SaveQuietAsync();
+            _pollResult = await ZohoSvc.TestBooksConnectionAsync();
+        }
+        catch (Exception ex) { _pollResult = "Error: " + ex.Message; }
+        finally { _polling = false; }
+    }
+
+    async Task ExchangeGrant()
+    {
+        _exchanging = true;
+        _pollResult = "Exchanging grant code...";
+        try
+        {
+            await SaveQuietAsync();
+            var refresh = await ZohoSvc.ExchangeGrantCodeAsync(_grantTarget, _grantCode);
+            _vals[$"zoho_{_grantTarget}_refresh_token"] = refresh;
+            _grantCode = "";
+            _pollResult = $"OK: {_grantTarget} connected. Refresh token stored automatically. Click Test Books to verify.";
+        }
+        catch (Exception ex) { _pollResult = "Error: " + ex.Message; }
+        finally { _exchanging = false; }
+    }
+
+    string TokenStatus(string key)
+    {
+        if (_vals.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v))
+            return "saved";
+        return "not connected yet";
+    }
+
+    async Task SaveQuietAsync()
+    {
+        foreach (var (key, val) in _vals)
+        {
+            var v = val ?? "";
+            if (key.StartsWith("zoho_", StringComparison.OrdinalIgnoreCase))
+                v = v.Trim();
+            await Db.SetSettingAsync(key, v);
+        }
+    }
+
+    string GetDc() =>
+        _vals.TryGetValue("zoho_dc", out var d) && !string.IsNullOrEmpty(d) ? d : "com";
+
+    void OnDcChanged(ChangeEventArgs e) =>
+        _vals["zoho_dc"] = e.Value?.ToString() ?? "com";
+}
