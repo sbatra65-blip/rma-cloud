@@ -1,0 +1,47 @@
+{
+  // RMA Cloud — one Worker serves the PWA (static assets) and the /api.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rma-cloud",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // The OEM RMA Excel form ships inside the Worker as the default template.
+  "rules": [{ "type": "Data", "globs": ["**/*.xlsx"], "fallthrough": false }],
+
+  // Directory = logins, 2FA, sessions, companies and who belongs to which company (one instance).
+  // Company   = one private SQLite database per company (tickets, photos, masters, batches).
+  "durable_objects": {
+    "bindings": [
+      { "name": "DIRECTORY", "class_name": "Directory" },
+      { "name": "COMPANY", "class_name": "Company" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Directory", "Company"] }
+  ],
+
+  // Optional: uncomment after creating an R2 bucket named "rma-photos".
+  // Without it, photos are stored inside each company's own database.
+  // "r2_buckets": [{ "binding": "FILES", "bucket_name": "rma-photos" }],
+
+  // Daily RMA reminder email at 09:00 IST (03:30 UTC).
+  "triggers": { "crons": ["30 3 * * *"] },
+
+  "vars": {
+    "APP_NAME": "RMA Cloud",
+    "IDLE_MINUTES": "5",
+    "MAX_SESSION_HOURS": "12",
+    "PBKDF2_ITERATIONS": "100000",
+    "MAIL_FROM": "RMA Cloud <onboarding@resend.dev>"
+  },
+
+  "keep_vars": true,
+  "observability": { "enabled": true }
+}
