@@ -502,6 +502,10 @@ export class Company extends DurableObject {
 
   createTicket(user, { ticket, overrideReason, addToCarePack }) {
     const v = this.checkTicket(ticket);
+    // New RMAs: the customer is chosen from the customer list (dropdown), so names stay consistent for reports.
+    const cust = v.customer_id ? this.one('SELECT id, name, active FROM customers WHERE id = ?', v.customer_id) : null;
+    if (!cust || !cust.active) throw new ValidationError({ customer_company: 'Choose the customer from the list. An Admin or Manager can add a new customer.' });
+    v.customer_company = cust.name;
     const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
     if (!device && addToCarePack) {

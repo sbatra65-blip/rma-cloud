@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, uploadPhoto } from '../api.js';
-import { ErrorPanel, Field, Icon, Link, Skeleton, Status, fmtDate, navigate, query, todayISO, useToast } from '../ui.jsx';
+import { Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, can, fmtDate, navigate, query, todayISO, useToast } from '../ui.jsx';
 import { CarePackPicker, CoverNote } from './CarePackLink.jsx';
 
 // Fields shared by every part raised for this printer.
@@ -18,7 +18,7 @@ const newPart = () => ({ ...PART, key: Math.random().toString(36).slice(2), phot
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 const normSn = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
 
-export default function RmaForm({ user, boot, id, onChange }) {
+export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const toast = useToast();
   const editing = !!id;
   const [f, setF] = useState(SHARED);
@@ -28,6 +28,7 @@ export default function RmaForm({ user, boot, id, onChange }) {
   const [ticketNo, setTicketNo] = useState('');
   const [status, setStatus] = useState('');
   const [errors, setErrors] = useState({});
+  const [addCust, setAddCust] = useState(false);
   const [busy, setBusy] = useState('');
   const [dups, setDups] = useState({});
   const [override, setOverride] = useState({ on: false, reason: '' });
@@ -103,10 +104,22 @@ export default function RmaForm({ user, boot, id, onChange }) {
     customer_phone: c.phone || f.customer_phone, customer_address: c.address || f.customer_address, customer_city: c.city || f.customer_city,
     customer_state: c.state || f.customer_state, customer_postal: c.postal || f.customer_postal, customer_country: c.country || 'India',
   });
-  const pickDevice = (d) => setF((x) => ({
-    ...x, printer_sn: d.serial_number, printer_model: d.printer_model || x.printer_model, customer_company: d.customer_name || x.customer_company,
-    customer_city: d.customer_city || x.customer_city, purchase_date: x.purchase_date || d.invoice_date || '',
-  }));
+  const customers = masters.customers.filter((c) => c.active);
+  const pickDevice = (d) => {
+    // Care pack customer → the matching entry in the customer list, if there is one.
+    const c = customers.find((x) => norm(x.name) === norm(d.customer_name));
+    setF((x) => ({
+      ...x, ...(c ? { customer_id: String(c.id), customer_company: c.name, customer_city: c.city || d.customer_city || x.customer_city } : {}),
+      printer_sn: d.serial_number, printer_model: d.printer_model || x.printer_model, purchase_date: x.purchase_date || d.invoice_date || '',
+    }));
+    if (!c && d.customer_name) toast(`"${d.customer_name}" is not in the customer list — choose the customer in step 1.`, true);
+  };
+  const chooseCustomer = (val) => {
+    if (val === '__new') { setAddCust(true); return; }
+    if (val === '__name') return;
+    const c = customers.find((x) => String(x.id) === val);
+    if (c) pickCustomer(c); else setF({ ...f, customer_id: '', customer_company: '' });
+  };
 
   const blocked = parts.filter((p) => dups[p.key]?.blocks?.length);
   const sameMachine = editing ? [] : [...new Map(Object.values(dups).flatMap((d) => d?.sameMachine || []).map((t) => [t.id, t])).values()]
@@ -117,7 +130,8 @@ export default function RmaForm({ user, boot, id, onChange }) {
   async function submit(e) {
     e.preventDefault();
     const errs = {};
-    if (!f.customer_company.trim()) errs.customer_company = 'Company name is required';
+    if (!editing && !f.customer_id) errs.customer_company = 'Choose the customer from the list';
+    else if (!f.customer_company.trim()) errs.customer_company = 'Customer is required';
     if (!f.printer_model.trim()) errs.printer_model = 'Product model is required';
     if (!f.printer_sn.trim()) errs.printer_sn = 'Product serial number is required';
     parts.forEach((p, i) => {
@@ -202,6 +216,7 @@ export default function RmaForm({ user, boot, id, onChange }) {
   }
 
   return (
+    <>
     <form onSubmit={submit} noValidate>
       <div className="page-head">
         <div>
@@ -245,11 +260,15 @@ export default function RmaForm({ user, boot, id, onChange }) {
       <section className="panel">
         <div className="section-title"><i>1</i><h2>Customer</h2></div>
         <div className="fields">
-          <Field label="Company name" required error={errors.customer_company} className="wide">
-            <Suggest value={f.customer_company} onChange={(v) => setF({ ...f, customer_company: v, customer_id: '' })}
-              options={masters.customers.filter((c) => c.active).map((c) => ({ ...c, label: c.name, sub: [c.code, c.city, c.contact_name].filter(Boolean).join(' · ') }))}
-              onPick={pickCustomer} placeholder="Type to search the customer list" autoComplete="organization" />
-            {f.customer_id && <span className="hint">Linked to customer master — details filled in. You can still change them for this RMA.</span>}
+          <Field label="Customer" required error={errors.customer_company} className="wide"
+            hint={f.customer_id ? 'Details below are filled from the customer list. You can still change them for this RMA.'
+              : can.manage(user) ? 'Not in the list? Choose “+ Add a new customer” at the bottom.' : 'Not in the list? Ask an Admin or Manager to add the customer (Masters).'}>
+            <select value={f.customer_id || (f.customer_company ? '__name' : '')} onChange={(e) => chooseCustomer(e.target.value)}>
+              <option value="">Choose a customer…</option>
+              {!f.customer_id && f.customer_company && <option value="__name">{f.customer_company} (not in customer list)</option>}
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.city ? ` — ${c.city}` : ''}</option>)}
+              {can.manage(user) && <option value="__new">+ Add a new customer…</option>}
+            </select>
           </Field>
           <Field label="Contact name"><input type="text" value={f.customer_contact_name} onChange={set('customer_contact_name')} /></Field>
           <Field label="Phone" error={errors.customer_phone}><input type="tel" value={f.customer_phone} onChange={set('customer_phone')} /></Field>
@@ -336,6 +355,14 @@ export default function RmaForm({ user, boot, id, onChange }) {
         <button className="btn primary" disabled={!!busy}>{busy ? (busy === 'save' ? 'Saving…' : busy) : editing ? 'Save changes' : parts.length > 1 ? `Raise ${parts.length} RMAs` : 'Raise RMA'}</button>
       </div>
     </form>
+      {addCust && <AddCustomer onClose={() => setAddCust(false)} onAdded={async (rec) => {
+        const b = await reloadBoot();
+        const c = b.masters.customers.find((x) => norm(x.name) === norm(rec.name));
+        setAddCust(false);
+        if (c) pickCustomer(c);
+        toast(`${rec.name} added to the customer list`);
+      }} />}
+    </>
   );
 }
 
@@ -376,6 +403,44 @@ function PartPhotos({ part, onChange }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Quick add to the customer list without leaving the RMA form (Admin / Manager).
+function AddCustomer({ onClose, onAdded }) {
+  const [f, setF] = useState({ name: '', city: '', contact_name: '', phone: '', email: '', gstin: '' });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  async function save(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!f.name.trim()) { setErrors({ name: 'Enter the customer name' }); return; }
+    setBusy(true);
+    try {
+      await post('/api/masters/customers', { ...f, active: true });
+      await onAdded(f);
+    } catch (err) {
+      setErrors({ form: Object.keys(err.fields || {}).length ? null : err.message, ...(err.fields || {}) });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open onClose={onClose} title="Add a new customer">
+      <form className="stack" onSubmit={save} noValidate>
+        {errors.form && <div className="formerror">{errors.form}</div>}
+        <Field label="Customer name" required error={errors.name}><input type="text" autoFocus value={f.name} onChange={set('name')} /></Field>
+        <div className="fields">
+          <Field label="City" error={errors.city}><input type="text" value={f.city} onChange={set('city')} /></Field>
+          <Field label="Contact name" error={errors.contact_name}><input type="text" value={f.contact_name} onChange={set('contact_name')} /></Field>
+          <Field label="Phone" error={errors.phone}><input type="tel" value={f.phone} onChange={set('phone')} /></Field>
+          <Field label="Email" error={errors.email}><input type="email" value={f.email} onChange={set('email')} /></Field>
+          <Field label="GSTIN" error={errors.gstin}><input type="text" className="upper" maxLength={15} value={f.gstin} onChange={set('gstin')} /></Field>
+        </div>
+        <p className="tiny muted">More details (address, state) can be added later in Masters → Customers.</p>
+        <div className="row end"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Add customer'}</button></div>
+      </form>
+    </Dialog>
   );
 }
 

@@ -112,10 +112,14 @@ r = await login(anon, 'INF', 'owner@example.com', PW, ownerSecret);
 ok(r.status === 409 && r.data.active, 'second device blocked while owner is signed in');
 
 console.log('RMA tickets');
+r = await owner('POST', '/api/masters/customers', { name: 'Acme Logistics (Gurugram)', city: 'Gurugram' });
+const acmeId = r.data.customers.find((c) => c.name === 'Acme Logistics (Gurugram)').id;
 const base = {
-  customer_company: 'Acme Logistics', customer_city: 'Delhi', printer_model: 'TE310', printer_sn: 'teb t25370458',
+  customer_id: acmeId, customer_company: 'Typed name is ignored', customer_city: 'Delhi', printer_model: 'TE310', printer_sn: 'teb t25370458',
   faulty_part: 'Head', faulty_part_sn: 'h-1001', failure_description: 'Lines on print', tph_mileage: '12.5',
 };
+r = await owner('POST', '/api/rma', { ticket: { ...base, customer_id: '' } });
+ok(r.status === 422 && r.data.fields?.customer_company, 'customer must be chosen from the list');
 r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: '' } });
 ok(r.status === 422 && r.data.fields?.printer_sn, 'serial required');
 r = await owner('POST', '/api/rma', { ticket: base });
@@ -340,6 +344,9 @@ ok(r.status === 200 && r.data.user.company.code === 'SCP' && !r.data.user.isOwne
 r = await priya('GET', '/api/rma');
 ok(r.data.rows.length === 0, 'SCP sees none of INF\'s RMAs');
 r = await priya('POST', '/api/rma', { ticket: { ...base } });
+ok(r.status === 422, 'INF customer id cannot be used in SCP');
+r = await priya('POST', '/api/masters/customers', { name: 'SCP Customer' });
+r = await priya('POST', '/api/rma', { ticket: { ...base, customer_id: r.data.customers[0].id } });
 ok(r.status === 200 && r.data.ticket.ticket_no.startsWith('SCP-RMA-'), 'SCP numbering + same serial allowed in other company');
 r = await priya('GET', `/api/rma/${t1.id}`);
 ok(r.status === 404 || (r.data?.ticket?.customer_company !== 'Acme Logistics' || r.data.ticket.ticket_no.startsWith('SCP')), 'INF ticket id not readable from SCP');
