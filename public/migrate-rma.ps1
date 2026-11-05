@@ -10,7 +10,7 @@
 
   1. In RMA Cloud, log in as Admin -> Settings -> "Move data from the old system" -> Create migration key.
   2. Open PowerShell on the old PC and run, for example:
-       powershell -ExecutionPolicy Bypass -File .\migrate-rma.ps1 -Url https://rma.example.com -Key rmk_xxxxx
+       Unblock-File .\migrate-rma.ps1; powershell -ExecutionPolicy Bypass -File .\migrate-rma.ps1 -Url https://rma.example.com -Key rmk_xxxxx
   3. Try first with -DryRun to only count what would be moved.
 
 .PARAMETER Url             Address of RMA Cloud, e.g. https://rma-cloud.yourname.workers.dev

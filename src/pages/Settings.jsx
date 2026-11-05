@@ -247,7 +247,7 @@ function MigrationPanel() {
   const load = () => get('/api/admin/migration-key').then(setSt).catch(() => {});
   useEffect(() => { load(); }, []);
   const origin = location.origin;
-  const cmd = key ? `powershell -ExecutionPolicy Bypass -File .\\migrate-rma.ps1 -Url ${origin} -Key ${key.key}` : '';
+  const cmd = key ? `Unblock-File .\\migrate-rma.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File .\\migrate-rma.ps1 -Url ${origin} -Key ${key.key}` : '';
   async function create() {
     setBusy(true);
     try { setKey(await post('/api/admin/migration-key')); load(); } catch (e) { toast(e.message, true); } finally { setBusy(false); }
@@ -266,7 +266,8 @@ function MigrationPanel() {
       <ol className="small" style={{ margin: '12px 0 12px 18px', lineHeight: 1.7 }}>
         <li>On the PC where the old RMA System and SQL Server run, <a href="/migrate-rma.ps1" download>download the migration tool</a> (migrate-rma.ps1).</li>
         <li>Create a migration key below (valid 48 hours) and copy the command.</li>
-        <li>On that PC, open PowerShell in the folder with the tool and paste the command. Add <code>-DryRun</code> first to only count.</li>
+        <li>On that PC, open PowerShell in the folder with the tool and paste the command. Add <code>-DryRun</code> first to only count.
+          The command starts with <code>Unblock-File</code> because Windows blocks scripts downloaded from the internet.</li>
       </ol>
       {key ? (
         <div className="stack">

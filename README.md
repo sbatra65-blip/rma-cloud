@@ -114,12 +114,16 @@ care pack types and care packs (with printer serials and OEM invoice PDFs) can b
 2. On the PC where the old RMA System and SQL Server Express run, open PowerShell in the folder with the tool and paste the
    copied command. Try it first with `-DryRun` (counts only):
    ```
-   powershell -ExecutionPolicy Bypass -File .\migrate-rma.ps1 -Url https://your-rma-address -Key rmk_... -DryRun
+   Unblock-File .\migrate-rma.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\migrate-rma.ps1 -Url https://your-rma-address -Key rmk_... -DryRun
    ```
 3. Run it again without `-DryRun`. It reads the SQL Server named in `C:\Program Files\RMA System\config.ini`
    (or pass `-Server 'localhost\SQLEXPRESS01' -Database RMASystem`) with your Windows login, and the photos from
    `C:\ProgramData\RMA System\Photos` (or `-PhotoRoot`). Photos found in the folders but missing from the database are
    included too. Large photos are resized to 1600 px JPEG (`-MaxPhotoPx`).
+   If Windows says the script "is not digitally signed", run the `Unblock-File` line first (Windows marks downloaded
+   scripts as blocked). If your company policy still blocks it, run:
+   `& ([scriptblock]::Create((Get-Content .\migrate-rma.ps1 -Raw))) -Url https://your-rma-address -Key rmk_... -DryRun`
 4. It only reads the old system. It is safe to stop and run again: anything already in the cloud is skipped.
    Use `-Only tickets,photos` to run parts. A log file is written next to the tool.
 
