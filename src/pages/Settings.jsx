@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, del, downloadBlob, get, post } from '../api.js';
-import { Field, Icon, fmtMs, useToast } from '../ui.jsx';
+import { Field, Icon, copyText, fmtMs, useToast } from '../ui.jsx';
 
 const TOKENS = ['INTERNAL_TICKET', 'CUSTOMER', 'PRINTER_MODEL', 'PRINTER_SERIAL', 'FAULTY_PART', 'FAULTY_PART_SERIAL', 'PART_CODE', 'FAULT_DESCRIPTION',
   'TPH_MILAGE', 'PRINTER_MILAGE', 'FW_VERSION', 'OEM_RMA', 'PO_NUMBER', 'EXCEL_FILE_STEM', 'COMPANY_NAME', 'COMPANY_EMAIL', 'COMPANY_PHONE'];
@@ -137,6 +137,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
     </form>
     {user.company.modules?.includes('carepack') && <CarePackSettings s0={s0} reloadBoot={reloadBoot} />}
     {user.company.modules?.includes('zoho') && <ZohoSettings s0={s0} reloadBoot={reloadBoot} />}
+    <MigrationPanel />
     </>
   );
 }
@@ -233,6 +234,56 @@ function ZohoSettings({ s0, reloadBoot }) {
         <button type="button" className="btn ghost small" disabled={!st.connected || busy === 'test'} onClick={() => act('test', () => post('/api/settings/zoho/test'))}>{busy === 'test' ? 'Testing…' : 'Test connection'}</button>
         {(st.connected || st.secret) && <button type="button" className="btn danger small" disabled={busy === 'dis'} onClick={() => { if (confirm('Disconnect Zoho Books for this company? The saved secret and token are deleted.')) act('dis', () => del('/api/settings/zoho')); }}>Disconnect</button>}
       </div>
+    </section>
+  );
+}
+
+// Move data from the old Windows RMA System (SQL Server + photo folders) with the PowerShell tool.
+function MigrationPanel() {
+  const toast = useToast();
+  const [st, setSt] = useState(null);
+  const [key, setKey] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => get('/api/admin/migration-key').then(setSt).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const origin = location.origin;
+  const cmd = key ? `powershell -ExecutionPolicy Bypass -File .\\migrate-rma.ps1 -Url ${origin} -Key ${key.key}` : '';
+  async function create() {
+    setBusy(true);
+    try { setKey(await post('/api/admin/migration-key')); load(); } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
+  async function revoke() {
+    setBusy(true);
+    try { await del('/api/admin/migration-key'); setKey(null); load(); toast('Migration key cancelled'); } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <h2>Move data from the old system</h2>
+      <p className="muted small" style={{ marginTop: 4 }}>
+        Copies RMAs, their photos (from the photo folders), OEM batches, customers, models and care packs from the old Windows RMA System into this company.
+        It only reads the old system, and can be run again safely — anything already here is skipped.
+      </p>
+      <ol className="small" style={{ margin: '12px 0 12px 18px', lineHeight: 1.7 }}>
+        <li>On the PC where the old RMA System and SQL Server run, <a href="/migrate-rma.ps1" download>download the migration tool</a> (migrate-rma.ps1).</li>
+        <li>Create a migration key below (valid 48 hours) and copy the command.</li>
+        <li>On that PC, open PowerShell in the folder with the tool and paste the command. Add <code>-DryRun</code> first to only count.</li>
+      </ol>
+      {key ? (
+        <div className="stack">
+          <div className="warnbox small">This key is shown only now. Anyone with it can add data to this company until it expires or you cancel it.</div>
+          <p className="secret" style={{ wordBreak: 'break-all' }}>{cmd}</p>
+          <div className="row">
+            <button className="btn primary small" onClick={async () => toast(await copyText(cmd) ? 'Command copied' : 'Copy it by hand')}><Icon name="copy" size={16} /> Copy command</button>
+            <button className="btn ghost small" disabled={busy} onClick={revoke}>Cancel key</button>
+          </div>
+        </div>
+      ) : (
+        <div className="row">
+          <button className="btn primary small" disabled={busy} onClick={create}>{st?.active ? 'Create a new key' : 'Create migration key'}</button>
+          {st?.active && <><span className="small muted">A key made by {st.by} is active until {new Date(st.expires).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}.</span>
+            <button className="btn ghost small" disabled={busy} onClick={revoke}>Cancel key</button></>}
+        </div>
+      )}
     </section>
   );
 }

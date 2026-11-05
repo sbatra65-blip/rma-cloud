@@ -371,6 +371,10 @@ with sync_playwright() as p:
     d3.wait_for_selector('text=Zoho Books')
     d3.screenshot(path=f'{OUT}/34-settings-zoho.png', full_page=True)
     ok(d3.locator('text=Not connected').count() == 1, 'settings: Zoho section shows not connected')
+    d3.click('text=Create migration key')
+    d3.wait_for_selector('text=Copy command')
+    ok('migrate-rma.ps1 -Url' in d3.inner_text('.secret') and 'rmk_' in d3.inner_text('.secret'), 'settings: migration key + command shown')
+    d3.screenshot(path=f'{OUT}/35-settings-migration.png', full_page=True)
 
     # ---- console website ----
     ctx4 = browser.new_context(viewport={'width': 1440, 'height': 900})

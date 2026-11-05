@@ -1,6 +1,7 @@
 // Company: one private SQLite database per company (tickets, photos, masters, batches, settings).
 // Nothing here can see any other company's data. Business rules are ported from the
 // original RMASystem.Web services (TicketService, BatchService, ImportService, OemEmailService).
+import { migrateMethods } from './migrate.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
@@ -212,6 +213,8 @@ export class Company extends DurableObject {
       cpRegister: 'edit', cpZohoPreview: 'edit', cpUpdateHeader: 'edit', cpUpdateProduct: 'edit', cpOverride: 'edit', cpReplaceSerials: 'edit',
       cpDelete: 'edit', cpOemDetails: 'edit', cpPutPdf: 'edit', cpSetPaid: 'edit', cpRemoveDoc: 'edit', cpPoPreview: 'edit', cpPoConfirm: 'edit',
       cpZohoPos: 'edit', cpDraftSave: 'edit', cpDraftClear: 'edit', createChallan: 'edit',
+      migrateStatus: 'admin', migrateMasters: 'admin', migrateTickets: 'admin', migratePhotoCheck: 'admin', migratePhoto: 'admin',
+      migrateBatches: 'admin', migrateCarePacks: 'admin', migrateCpPdf: 'admin',
       cpSaveSettings: 'admin', zohoSaveConfig: 'admin', zohoConnect: 'admin', zohoTest: 'admin', zohoDisconnect: 'admin',
     };
     const need = PERMS[method];
@@ -1103,4 +1106,4 @@ export function parseLooseDate(v) {
   return { date, ms };
 }
 
-Object.assign(Company.prototype, carePackMethods);
+Object.assign(Company.prototype, carePackMethods, migrateMethods);

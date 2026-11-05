@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 // End-to-end API checks against `wrangler dev` (http://localhost:8787 by default).
 // Starts from an empty database: run `rm -rf .wrangler/state` first if you ran it before.
 import { createHmac } from 'node:crypto';
@@ -415,6 +416,79 @@ r = await opc('POST', '/api/console/logout');
 r = await opc('POST', '/api/console/login', { email: 'op@provider.example', password: PW });
 r = await opc('POST', '/api/console/login/verify', { loginToken: r.data.loginToken, code: await totp(opSecret) });
 ok(r.status === 200 && r.data.op.email === 'op@provider.example', 'operator logs in with password + 2FA');
+
+console.log('Migration from the old Windows system');
+const mig = async (method, path, payload, headers = {}, key = migKey) => {
+  const isBin = payload instanceof Uint8Array;
+  const res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${key}`, ...(isBin ? {} : payload ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: isBin ? payload : payload ? JSON.stringify(payload) : undefined });
+  const text = method === 'HEAD' ? '' : await res.text();
+  let data = null; try { data = JSON.parse(text); } catch { /* empty */ }
+  return { status: res.status, data };
+};
+let migKey = 'rmk_nothing_valid_here_123456';
+r = await mig('GET', '/api/migrate/status');
+ok(r.status === 401, 'migration API needs a key');
+r = await owner('POST', '/api/admin/migration-key');
+ok(r.status === 200 && r.data.key.startsWith('rmk_'), 'Admin creates migration key');
+migKey = r.data.key;
+r = await owner('GET', '/api/admin/migration-key');
+ok(r.data.active === true, 'key shows as active');
+r = await mig('GET', '/api/migrate/status');
+ok(r.status === 200 && r.data.company.code === 'INF', 'tool sees the right company');
+r = await mig('POST', '/api/migrate/masters', { oems: [{ code: 'tsc', name: 'TSC Auto ID' }, { code: 'PTX', name: 'Printronix' }],
+  products: [{ oem_code: 'PTX', code: 'IND', name: 'Industrial' }], models: [{ oem_code: 'PTX', product_code: 'IND', code: 'T6000', name: 'T6000e' }],
+  customers: [{ code: 'OLD1', name: 'Old Customer Ltd', city: 'Pune' }, { name: 'Acme Logistics (Gurugram)' }], cpTypes: [{ name: '7 Year', duration_years: 7 }] });
+ok(r.status === 200 && r.data.oems === 1 && r.data.products === 1 && r.data.models === 1 && r.data.customers === 1 && r.data.cpTypes === 1, 'masters moved; existing ones skipped');
+const oldRows = [
+  { ticket_no: 'INF-RMA-202405-0007', status: 'CLOSED', created_at: '2024-05-14T10:32:00', updated_at: '2024-06-01T09:00:00', closed_at: '2024-06-01T09:00:00',
+    customer_company: 'Old Customer Ltd', printer_model: 'T6000', printer_sn: 'PTX 990011', faulty_part: 'Head', faulty_part_sn: 'HX-77', failure_description: 'Faded print',
+    tph_mileage: 33.5, oem_rma_number: 'RMA-OLD-1', oem_rma_assign_date: '2024-05-16', batch_code: 'BATCH-202405-01', challan_number: 'DC-0099', is_imported: false },
+  { ticket_no: 'INF-RMA-202410-0003', status: 'DISPATCHED_TO_OEM', created_at: '2024-10-02T15:00:00', customer_company: 'Walk-in', printer_sn: 'ZZ1', faulty_part: 'Cutter' },
+  { ticket_no: '', status: 'OPEN' },
+];
+r = await mig('POST', '/api/migrate/tickets', { rows: oldRows });
+ok(r.status === 200 && r.data.created === 2 && r.data.errors.length === 1, 'old RMAs moved with their numbers; bad row reported');
+r = await mig('POST', '/api/migrate/tickets', { rows: oldRows.slice(0, 2) });
+ok(r.data.created === 0 && r.data.skipped === 2, 'running again skips what is already there');
+r = await owner('GET', '/api/rma?q=INF-RMA-202405-0007');
+const oldT = r.data.rows.find((x) => x.ticket_no === 'INF-RMA-202405-0007');
+r = await owner('GET', `/api/rma/${oldT?.id}`);
+ok(oldT && r.data.ticket.status === 'CLOSED' && r.data.ticket.customer_id, 'migrated RMA visible, closed, linked to customer');
+ok(new Date(r.data.ticket.created_at).toISOString().startsWith('2024-05-14T05:02') && r.data.events.some((e) => e.action === 'Migrated to cloud'), 'original date kept (IST) and history notes the move');
+r = await mig('HEAD', '/api/migrate/photo', null, { 'X-Ticket-No': 'INF-RMA-202405-0007', 'X-Direction': 'INBOUND', 'X-File-Name': 'INF-RMA-202405-0007_IN_01.jpg' });
+ok(r.status === 204, 'photo check: not uploaded yet');
+r = await mig('POST', '/api/migrate/photo', JPEG, { 'Content-Type': 'image/jpeg', 'X-Ticket-No': 'INF-RMA-202405-0007', 'X-Direction': 'INBOUND', 'X-File-Name': 'INF-RMA-202405-0007_IN_01.jpg', 'X-Captured-At': '2024-05-14T10:40:00' });
+ok(r.status === 200 && r.data.id, 'photo uploaded to migrated RMA');
+r = await mig('HEAD', '/api/migrate/photo', null, { 'X-Ticket-No': 'INF-RMA-202405-0007', 'X-Direction': 'INBOUND', 'X-File-Name': 'INF-RMA-202405-0007_IN_01.jpg' });
+ok(r.status === 200, 'photo check: already there');
+r = await mig('POST', '/api/migrate/photo', JPEG, { 'Content-Type': 'image/jpeg', 'X-Ticket-No': 'INF-RMA-202405-0007', 'X-Direction': 'INBOUND', 'X-File-Name': 'INF-RMA-202405-0007_IN_01.jpg' });
+ok(r.data.skipped === true, 'same photo again is skipped');
+r = await mig('POST', '/api/migrate/photo', JPEG, { 'Content-Type': 'image/jpeg', 'X-Ticket-No': 'NOPE-1', 'X-Direction': 'INBOUND', 'X-File-Name': 'a.jpg' });
+ok(r.status === 422, 'photo for unknown RMA refused');
+r = await mig('POST', '/api/migrate/batches', { rows: [{ batch_code: 'BATCH-202405-01', batch_month: '2024-05', dispatch_date: '2024-05-20', total: 1 }] });
+ok(r.data.created === 1, 'old OEM batch moved');
+r = await mig('POST', '/api/migrate/carepacks', { rows: [{ invoice_number: 'IS-GST-2425-0100', line_set_index: 1, customer_name: 'Old Customer Ltd', invoice_date: '2024-04-10',
+  oem_brand: 'Printronix', care_pack_type: '7 Year', printer_model: 'T6000', invoice_qty: 2, status: 'COMPLETE', po_number: 'PO-OLD-5', po_matched: true,
+  oem_invoice_number: 'PTX-INV-1', oem_invoice_date: '2024-05-01', oem_paid: true, verified: true,
+  devices: [{ serial_number: 'PTX990011', warranty_end: null }, { serial_number: 'PTX990012', warranty_end: '2028-04-09' }] }] });
+ok(r.status === 200 && r.data.created === 1 && r.data.devices === 2, 'old care pack invoice with serials moved');
+r = await owner('GET', '/api/carepack/serial?sn=PTX990011');
+ok(r.data.device && r.data.device.warranty_end === '2031-04-10', 'cover end worked out from care pack type when missing');
+const PDF = new TextEncoder().encode('%PDF-1.4\n%%EOF\n');
+r = await mig('POST', '/api/migrate/carepack-pdf', PDF, { 'Content-Type': 'application/pdf', 'X-Invoice': 'IS-GST-2425-0100', 'X-Set': '1', 'X-File-Name': 'PTX-INV-1.pdf' });
+ok(r.status === 200 && r.data.ok, 'old OEM invoice PDF moved');
+r = await mig('POST', '/api/migrate/tickets', { rows: [oldRows[0]] }, {}, migKey.slice(0, -2) + 'xx');
+ok(r.status === 401, 'wrong key refused');
+r = await mig('GET', '/api/migrate/status');
+ok(r.data.counts.migratedTickets === 2 && r.data.counts.carePackDevices >= 2, 'status counts moved data');
+r = await owner('DELETE', '/api/admin/migration-key');
+r = await mig('GET', '/api/migrate/status');
+ok(r.status === 401, 'cancelled key stops working');
+if (process.env.KEEP_MIGRATION_KEY) {
+  r = await owner('POST', '/api/admin/migration-key');
+  writeFileSync(process.env.KEEP_MIGRATION_KEY, r.data.key);
+}
 
 console.log('Recovery and reset');
 r = await owner('POST', '/api/auth/logout');

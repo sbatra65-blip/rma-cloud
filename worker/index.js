@@ -140,6 +140,12 @@ async function handle(request, env, ctx) {
   const client = clientInfo(request);
   const appName = env.APP_NAME || 'RMA Cloud';
 
+  // Migration tool (old Windows RMA System → cloud): Bearer key, no cookie, so no cross-site risk.
+  if (path.startsWith('/api/migrate/')) {
+    if (env.CONSOLE_HOST && url.hostname === env.CONSOLE_HOST) return err(404, 'Not found');
+    return handleMigrate(request, env, url, path, method);
+  }
+
   // Block cross-site writes: every non-GET must come from this site's own pages.
   if (method !== 'GET' && method !== 'HEAD') {
     const origin = request.headers.get('Origin');
@@ -537,6 +543,9 @@ async function handle(request, env, ctx) {
     const data = await dcall(env, reset ? 'resetSignIn' : 'resendInvite', { actor: user, userId: m[1] });
     return respond({ user: data.user, ...(await emailInvite(env, url, user, data, { reset })) });
   }
+  if (path === '/api/admin/migration-key' && method === 'GET') return respond(await dcall(env, 'migrateKeyStatus', { actor: user }));
+  if (path === '/api/admin/migration-key' && method === 'POST') return respond(await dcall(env, 'migrateKeyCreate', { actor: user }));
+  if (path === '/api/admin/migration-key' && method === 'DELETE') return respond(await dcall(env, 'migrateKeyRevoke', { actor: user }));
   if (path === '/api/admin/sessions' && method === 'GET') return respond(await dcall(env, 'listSessions', { actor: user }));
   m = path.match(/^\/api\/admin\/sessions\/([0-9a-f-]{36})$/);
   if (m && method === 'DELETE') return respond(await dcall(env, 'endSession', { actor: user, id: m[1] }));
@@ -553,6 +562,52 @@ function moduleFor(path) {
   if (path.startsWith('/api/batches')) return 'batches';
   if (path.startsWith('/api/import')) return 'import';
   return null;
+}
+
+// ======================= Migration from the old Windows RMA System =======================
+async function handleMigrate(request, env, url, path, method) {
+  const auth = request.headers.get('Authorization') || '';
+  const user = await dcall(env, 'migrateTouch', { token: auth.replace(/^Bearer\s+/i, '').trim() });
+  if (!user) return err(401, 'Migration key is missing, wrong or expired. An Admin can create a new one in Settings → Move data from the old system.');
+  const hdr = (k) => decodeURIComponent(request.headers.get(k) || '');
+  if (path === '/api/migrate/status' && method === 'GET') {
+    return json({ company: { name: user.companyName, code: user.companyCode }, by: user.name, expires: user.expires, counts: await ccall(env, user, 'migrateStatus', {}) });
+  }
+  if (path === '/api/migrate/masters' && method === 'POST') return json(await ccall(env, user, 'migrateMasters', await body(request)));
+  if (path === '/api/migrate/tickets' && method === 'POST') return json(await ccall(env, user, 'migrateTickets', await body(request)));
+  if (path === '/api/migrate/batches' && method === 'POST') return json(await ccall(env, user, 'migrateBatches', await body(request)));
+  if (path === '/api/migrate/carepacks' && method === 'POST') return json(await ccall(env, user, 'migrateCarePacks', await body(request)));
+  if (path === '/api/migrate/photo' && method === 'HEAD') {
+    const r = await ccall(env, user, 'migratePhotoCheck', { ticketNo: hdr('X-Ticket-No'), direction: hdr('X-Direction') === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND', name: hdr('X-File-Name') });
+    return new Response(null, { status: !r.ticket ? 404 : r.exists ? 200 : 204 });
+  }
+  if (path === '/api/migrate/photo' && method === 'POST') {
+    const bytes = await request.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > MAX_PHOTO) throw new ValidationError({ file: 'Photo is empty or larger than 10 MB' });
+    const mime = sniff(bytes);
+    if (!mime || !mime.startsWith('image/')) throw new ValidationError({ file: 'Not a JPG, PNG or WEBP photo' });
+    const args = {
+      ticketNo: hdr('X-Ticket-No'), direction: hdr('X-Direction') === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND',
+      name: hdr('X-File-Name').replace(/[^\w .()-]/g, '_').slice(0, 120) || 'photo.jpg', mime, capturedAt: hdr('X-Captured-At'), capturedBy: hdr('X-Captured-By'), notes: hdr('X-Notes'),
+    };
+    if (env.FILES) {
+      const check = await ccall(env, user, 'migratePhotoCheck', args);
+      if (!check.ticket) throw new ValidationError({ ticket_no: `RMA ${args.ticketNo} is not in the cloud yet.` });
+      if (check.exists) return json({ skipped: true });
+      const id = uuid();
+      const key = `co/${user.companyId}/photo/${id}`;
+      await env.FILES.put(key, bytes, { httpMetadata: { contentType: mime } });
+      try { return json(await ccall(env, user, 'migratePhoto', { ...args, bytes: bytes.byteLength, r2Id: id })); } catch (e) { await env.FILES.delete(key); throw e; }
+    }
+    return json(await ccall(env, user, 'migratePhoto', { ...args, bytes }));
+  }
+  if (path === '/api/migrate/carepack-pdf' && method === 'POST') {
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength > 15 * 1024 * 1024) throw new ValidationError({ file: 'PDF larger than 15 MB' });
+    if (new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') throw new ValidationError({ file: 'Not a PDF' });
+    return json(await ccall(env, user, 'migrateCpPdf', { invoice: hdr('X-Invoice'), set: hdr('X-Set'), name: hdr('X-File-Name').replace(/[^\w .()-]/g, '_').slice(0, 120) || 'oem-invoice.pdf', bytes }));
+  }
+  return err(404, 'Not found');
 }
 
 // ======================= Console (service provider website) =======================

@@ -142,7 +142,7 @@ export class Directory extends DurableObject {
       'loginPassword', 'loginVerify', 'touch', 'logout', 'publicUser',
       'listUsers', 'inviteUser', 'updateUser', 'resendInvite', 'resetSignIn', 'removeUser',
       'listSessions', 'endSession', 'authLog',
-      'updateCompany', 'reminderRecipients',
+      'updateCompany', 'reminderRecipients', 'migrateKeyCreate', 'migrateKeyStatus', 'migrateKeyRevoke', 'migrateTouch',
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
@@ -753,6 +753,39 @@ export class Directory extends DurableObject {
 
   appUrl() {
     return this.one("SELECT value FROM meta WHERE key = 'app_url'")?.value || null;
+  }
+
+  // ---------- Migration key (moving data from the old Windows RMA System) ----------
+  // An Admin creates a key; the PowerShell migration tool sends it as a Bearer token. Valid 48 hours, revocable.
+  async migrateKeyCreate({ actor }) {
+    this.requireAdmin(actor);
+    this.sql.exec("DELETE FROM pending WHERE purpose = 'migrate' AND user_id IN (SELECT id FROM users WHERE company_id = ?)", actor.companyId);
+    const token = `rmk_${newToken(32)}`;
+    const expires = Date.now() + 2 * DAY;
+    this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), actor.userId, 'migrate', expires);
+    this.log('migration_key_created', { companyId: actor.companyId, userId: actor.userId, email: actor.email });
+    return { key: token, expires };
+  }
+  migrateKeyStatus({ actor }) {
+    this.requireAdmin(actor);
+    const p = this.one(`SELECT p.expires, u.name FROM pending p JOIN users u ON u.id = p.user_id
+      WHERE p.purpose = 'migrate' AND u.company_id = ? AND p.expires > ?`, actor.companyId, Date.now());
+    return p ? { active: true, expires: p.expires, by: p.name } : { active: false };
+  }
+  migrateKeyRevoke({ actor }) {
+    this.requireAdmin(actor);
+    this.sql.exec("DELETE FROM pending WHERE purpose = 'migrate' AND user_id IN (SELECT id FROM users WHERE company_id = ?)", actor.companyId);
+    this.log('migration_key_revoked', { companyId: actor.companyId, userId: actor.userId, email: actor.email });
+    return { ok: true };
+  }
+  async migrateTouch({ token }) {
+    if (!/^rmk_[\w-]{20,}$/.test(String(token || ''))) return null;
+    const p = this.one("SELECT * FROM pending WHERE token_hash = ? AND purpose = 'migrate' AND expires > ?", await sha256(token), Date.now());
+    if (!p) return null;
+    const u = this.one(`SELECT u.id, u.name, u.email, u.role, u.disabled, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix, c.active, c.valid_until
+      FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, p.user_id);
+    if (!u || u.disabled || u.role !== 'Admin' || !u.active || this.expired({ valid_until: u.valid_until })) return null;
+    return { userId: u.id, name: `Migration (${u.name})`, email: u.email, role: 'Admin', companyId: u.cid, companyName: u.cname, companyCode: u.code, ticketPrefix: u.ticket_prefix, expires: p.expires };
   }
 
   // =====================================================================

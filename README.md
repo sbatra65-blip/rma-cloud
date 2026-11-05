@@ -102,6 +102,27 @@ existing numbers. Do the same with `Customers` → **Import → Customers**. Pho
 Photos are stored inside each company's database. For lots of photos, create an R2 bucket `rma-photos` and uncomment
 `r2_buckets` in `wrangler.jsonc`.
 
+## Moving data from the old Windows RMA System
+
+RMAs (with their numbers, statuses and dates), photos from the photo folders, OEM batches, customers, OEMs/products/models,
+care pack types and care packs (with printer serials and OEM invoice PDFs) can be copied straight from the old SQL Server.
+
+1. In RMA Cloud as Admin: **Company settings → Move data from the old system** → download `migrate-rma.ps1` and
+   **Create migration key** (valid 48 hours; shown once; can be cancelled).
+2. On the PC where the old RMA System and SQL Server Express run, open PowerShell in the folder with the tool and paste the
+   copied command. Try it first with `-DryRun` (counts only):
+   ```
+   powershell -ExecutionPolicy Bypass -File .\migrate-rma.ps1 -Url https://your-rma-address -Key rmk_... -DryRun
+   ```
+3. Run it again without `-DryRun`. It reads the SQL Server named in `C:\Program Files\RMA System\config.ini`
+   (or pass `-Server 'localhost\SQLEXPRESS01' -Database RMASystem`) with your Windows login, and the photos from
+   `C:\ProgramData\RMA System\Photos` (or `-PhotoRoot`). Photos found in the folders but missing from the database are
+   included too. Large photos are resized to 1600 px JPEG (`-MaxPhotoPx`).
+4. It only reads the old system. It is safe to stop and run again: anything already in the cloud is skipped.
+   Use `-Only tickets,photos` to run parts. A log file is written next to the tool.
+
+Checks: `scripts/migrate-tool-check.py` runs the real tool under PowerShell 7 against `wrangler dev` with fixture data.
+
 ## Local development
 
 ```bash
