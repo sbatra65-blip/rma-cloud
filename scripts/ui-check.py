@@ -377,14 +377,13 @@ with sync_playwright() as p:
     d3.screenshot(path=f'{OUT}/35-settings-migration.png', full_page=True)
 
     # ---- console website ----
-    ctx4 = browser.new_context(viewport={'width': 1440, 'height': 900})
+    ctx4 = ctx3  # signed in to the RMA app as the owner: console setup needs no key
     c4 = ctx4.new_page()
     c4.on('pageerror', lambda e: errors.append(str(e)))
     c4.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
     c4.goto(BASE + '/console')
-    c4.wait_for_selector('text=Set up the console')
-    c4.fill('#key', 'local-console-setup-key-123')
-    c4.fill('#nm', 'Op One')
+    c4.wait_for_selector('text=no setup key is needed')
+    ok(c4.locator('#key').count() == 0 and c4.input_value('#em') == 'sanjay@example.com', 'console setup for owner: just email + password (prefilled email)')
     c4.fill('#em', 'op@provider.example')
     c4.fill('#npw', PW)
     c4.fill('#npw2', PW)

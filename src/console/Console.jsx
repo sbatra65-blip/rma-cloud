@@ -231,22 +231,24 @@ function PasswordPair({ f, setF, errors, email }) {
 }
 
 function Setup({ info, onIn, toLogin }) {
-  const [f, setF] = useState({ key: '', name: '', email: '', password: '', confirm: '' });
+  const owner = info?.owner || null;
+  const [f, setF] = useState({ key: '', name: '', email: owner?.email || '', password: '', confirm: '' });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
   const [enroll, setEnroll] = useState(null);
+  useEffect(() => { if (owner && !f.email) setF((x) => ({ ...x, email: owner.email })); }, [owner]); // eslint-disable-line react-hooks/exhaustive-deps
   async function submit(e) {
     e.preventDefault();
     const errs = {};
-    if (!f.key) errs.key = 'Enter the setup key';
-    if (!f.name.trim()) errs.name = 'Enter your name';
+    if (!owner && !f.key) errs.key = 'Enter the setup key';
+    if (!owner && !f.name.trim()) errs.name = 'Enter your name';
     if (!EMAIL.test(f.email.trim())) errs.email = 'Enter a valid email address';
     if (passwordScore(f.password, f.email).score < 3) errs.password = passwordScore(f.password, f.email).msg || 'Choose a stronger password';
     if (f.password !== f.confirm) errs.confirm = 'Passwords do not match';
     setErrors(errs);
     if (Object.keys(errs).length) return;
     setBusy(true);
-    try { setEnroll(await post('/api/console/setup', f)); } catch (err) {
+    try { setEnroll(await post('/api/console/setup', owner ? { email: f.email, password: f.password, confirm: f.confirm } : f)); } catch (err) {
       if (err.status === 409) { toLogin(); return; }
       setErrors({ form: Object.keys(err.fields || {}).length ? null : err.message, ...(err.fields || {}) });
     } finally { setBusy(false); }
@@ -256,15 +258,17 @@ function Setup({ info, onIn, toLogin }) {
     <form className="stack" onSubmit={submit} noValidate>
       <div className="steps"><i className="on" /><i /><i /></div>
       <div><h2 style={{ fontSize: '1.5rem' }}>Set up the console</h2>
-        <p className="muted" style={{ marginTop: 6 }}>Create the first operator login. You need the <b>CONSOLE_SETUP_KEY</b> secret that was added to the Worker in Cloudflare.</p></div>
-      {info && !info.keyConfigured && <div className="warnbox">The setup key is not configured yet. In Cloudflare: Workers &amp; Pages → rma-cloud → Settings → Variables and Secrets → add secret <b>CONSOLE_SETUP_KEY</b>.</div>}
+        <p className="muted" style={{ marginTop: 6 }}>{owner
+          ? <>You are signed in to RMA Cloud as <b>{owner.name}</b>, who set the system up, so no setup key is needed. Choose the console login: email, password, then your authenticator app.</>
+          : <>Create the first console login. Easiest: log in to the RMA app (<a href="/">open it</a>) with the account that did the first setup, then come back here — you'll only need an email and password. Otherwise use the <b>CONSOLE_SETUP_KEY</b> secret.</>}</p></div>
+      {!owner && info && !info.keyConfigured && <div className="warnbox">No setup key is configured, so log in to the RMA app as the account that did the first setup and open this page again.</div>}
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
-      <Field label="Setup key" required htmlFor="key" error={errors.key}><input id="key" type="password" autoComplete="off" value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} /></Field>
-      <Field label="Your name" required htmlFor="nm" error={errors.name}><input id="nm" type="text" autoComplete="name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-      <Field label="Your email" required htmlFor="em" error={errors.email}><input id="em" type="email" autoComplete="username" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+      {!owner && <Field label="Setup key" required htmlFor="key" error={errors.key}><input id="key" type="password" autoComplete="off" value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} /></Field>}
+      {!owner && <Field label="Your name" required htmlFor="nm" error={errors.name}><input id="nm" type="text" autoComplete="name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>}
+      <Field label="Console email" required htmlFor="em" error={errors.email}><input id="em" type="email" autoComplete="username" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
       <PasswordPair f={f} setF={setF} errors={errors} email={f.email} />
       <button className="btn primary block" disabled={busy}>{busy ? 'Creating…' : 'Continue to two-step login'}</button>
-      <button type="button" className="btn ghost block" onClick={toLogin}>I already have a login</button>
+      <button type="button" className="btn ghost block" onClick={toLogin}>I already have a console login</button>
     </form>
   );
 }

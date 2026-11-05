@@ -42,21 +42,21 @@ async function totp(secret) {
 
 // ---- tiny client with its own cookie jar ----
 function client(ua = 'smoke') {
-  let cookie = '';
+  const jar = new Map(); // name -> value, like a browser (app and console cookies side by side)
   return async function call(method, path, body, { raw = false, headers = {} } = {}) {
     const isBin = body instanceof Uint8Array || body instanceof ArrayBuffer;
     const res = await fetch(BASE + path, {
       method,
       headers: {
-        Origin: BASE, 'User-Agent': ua, ...(cookie ? { Cookie: cookie } : {}),
+        Origin: BASE, 'User-Agent': ua, ...(jar.size ? { Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') } : {}),
         ...(body !== undefined && !isBin ? { 'Content-Type': 'application/json' } : {}), ...headers,
       },
       body: body === undefined ? undefined : isBin ? body : JSON.stringify(body),
     });
-    const set = res.headers.get('set-cookie');
-    if (set) {
-      const v = set.split(';')[0];
-      cookie = v.endsWith('=') ? '' : v;
+    for (const set of res.headers.getSetCookie?.() || []) {
+      const [k, ...rest] = set.split(';')[0].split('=');
+      const v = rest.join('=');
+      if (v) jar.set(k, v); else jar.delete(k);
     }
     if (raw) return res;
     const data = (res.headers.get('content-type') || '').includes('json') ? await res.json() : null;
@@ -310,14 +310,22 @@ ok(pageRes.status === 200 && (await pageRes.text()).includes('RMA Cloud Console'
 pageRes = await fetch(`${BASE}/rma`);
 ok(!(await pageRes.text()).includes('RMA Cloud Console'), 'app pages are not the console');
 r = await opc('GET', '/api/console/setup');
-ok(r.data.needsSetup && r.data.keyConfigured, 'console needs setup; key configured');
+ok(r.data.needsSetup && r.data.keyConfigured && !r.data.owner, 'console needs setup; stranger is not offered the easy path');
+r = await opc('POST', '/api/console/setup', { email: 'op@provider.example', password: PW, confirm: PW });
+ok(r.status === 422 && r.data.fields?.key, 'stranger without key refused');
 r = await opc('POST', '/api/console/setup', { key: 'wrong', name: 'Op', email: 'op@provider.example', password: PW, confirm: PW });
 ok(r.status === 422 && r.data.fields?.key, 'wrong setup key refused');
-r = await opc('POST', '/api/console/setup', { key: KEY, name: 'Op One', email: 'op@provider.example', password: PW, confirm: PW });
-ok(r.status === 200 && r.data.otpauth.includes('Console'), 'console setup → own authenticator entry');
+r = await owner('GET', '/api/console/setup');
+ok(r.data.owner?.email === 'owner@example.com', 'signed-in owner is offered setup without key');
+r = await owner('POST', '/api/console/setup', { email: 'op@provider.example', password: PW, confirm: PW });
+ok(r.status === 200 && r.data.otpauth.includes('Console'), 'owner sets up console with just email + password → own authenticator entry');
 const opSecret = r.data.secret;
-r = await opc('POST', '/api/console/enroll', { setupToken: r.data.setupToken, code: await totp(opSecret) });
+r = await owner('POST', '/api/console/enroll', { setupToken: r.data.setupToken, code: await totp(opSecret) });
 ok(r.status === 200 && r.data.recoveryCodes.length === 10, 'operator enrolled with 10 recovery codes');
+r = await opc('POST', '/api/console/login', { email: 'op@provider.example', password: PW });
+r = await opc('POST', '/api/console/login/verify', { loginToken: r.data.loginToken, code: await totp(opSecret) });
+ok(r.status === 200, 'operator logs in to the console with email, password and 2FA');
+r = await owner('POST', '/api/console/logout');
 r = await opc('GET', '/api/console/setup');
 ok(!r.data.needsSetup, 'console setup closed after first operator');
 r = await owner('GET', '/api/console/companies');

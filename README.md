@@ -50,13 +50,15 @@ Runs on Cloudflare Workers + Durable Objects and installs as an app on Android a
    - `ENC_KEY` — 32 random bytes, base64. Mac/Linux: `openssl rand -base64 32`. Windows PowerShell:
      `$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`.
      Keep a copy safe: changing it later breaks everyone's two-step login and Zoho connections.
-   - `CONSOLE_SETUP_KEY` — any long phrase; needed once to create the first console operator.
+   - `CONSOLE_SETUP_KEY` — optional; only needed if you set up the console without being logged in to the app (step 4).
    - `RESEND_API_KEY` — from resend.com → API Keys (Sending access).
 3. **Set up straight away** — open `https://rma-cloud.<you>.workers.dev`. The first screen creates the first company
    (e.g. *Infinite Solutions*, code `INF`) and its Admin login. Setup closes as soon as one login is complete,
    so do it right after the first deploy.
-4. **Console** — open `https://rma-cloud.<you>.workers.dev/console` → *Set up the console* → enter `CONSOLE_SETUP_KEY`,
-   your name, email, password, scan the QR code. From then on, create every new company there.
+4. **Console** — while still logged in to the RMA app with that first Admin login, open `/console`. It asks only for a
+   console email + password, then the authenticator QR code (no setup key needed: being signed in as the account that did
+   the first setup proves it's you). Without that login (e.g. console on its own domain), the `CONSOLE_SETUP_KEY`
+   secret is needed instead. After the first operator, invite others from inside the console.
    - Own address (optional): Worker → Settings → *Domains & Routes* → add custom domain e.g. `console.example.com`,
      then add variables `CONSOLE_HOST` = `console.example.com` and `APP_URL` = `https://rma.example.com` (the RMA app address,
      used in invite links). With `CONSOLE_HOST` set, the console answers only on that domain.

@@ -648,20 +648,37 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
   const cookie = (t) => ({ 'Set-Cookie': sessionCookie(t, CCOOKIE) });
 
   // ---- before login ----
+  // First console operator. Two ways, both secure:
+  //  1. Signed in to the RMA app as the owner (the login that did the very first setup, already protected by 2FA):
+  //     just email + password, then the authenticator. No setup key needed.
+  //  2. Otherwise (e.g. console on its own domain): the CONSOLE_SETUP_KEY secret.
+  const ownerSession = async () => {
+    const s = await dcall(env, 'touch', { token: readCookie(request) });
+    return s && s.isOwner ? s : null;
+  };
   if (path === '/api/console/setup' && method === 'GET') {
-    return json({ ...(await dcall(env, 'consoleNeedsSetup', {})), keyConfigured: !!env.CONSOLE_SETUP_KEY });
+    const st = await dcall(env, 'consoleNeedsSetup', {});
+    const owner = st.needsSetup ? await ownerSession() : null;
+    return json({ ...st, keyConfigured: !!env.CONSOLE_SETUP_KEY, owner: owner ? { name: owner.name, email: owner.email } : null },
+      200, owner?.newToken ? { 'Set-Cookie': sessionCookie(owner.newToken) } : {});
   }
   if (path === '/api/console/setup' && method === 'POST') {
-    if (!env.CONSOLE_SETUP_KEY) return err(503, 'Console setup is locked: add the CONSOLE_SETUP_KEY secret to the Worker first.');
     const b = await body(request);
-    if (!timingSafeEqual(String(b.key || ''), env.CONSOLE_SETUP_KEY)) {
-      await new Promise((r) => setTimeout(r, 800));
-      throw new ValidationError({ key: 'Setup key is not correct' });
+    const owner = await ownerSession();
+    let name = owner?.name;
+    if (!owner) {
+      if (!env.CONSOLE_SETUP_KEY) return err(403, 'To set up the console, first log in to the RMA app with the account that did the first setup, then open /console again.');
+      if (!timingSafeEqual(String(b.key || ''), env.CONSOLE_SETUP_KEY)) {
+        await new Promise((r) => setTimeout(r, 800));
+        throw new ValidationError({ key: 'Setup key is not correct' });
+      }
+      name = new Checker(b).text('name', { required: true, max: 80, label: 'Your name' }).done().name;
     }
-    const v = new Checker(b).text('name', { required: true, max: 80, label: 'Your name' }).email('email', { required: true }).done();
+    const v = new Checker(b).email('email', { required: true }).done();
     if (b.password !== b.confirm) throw new ValidationError({ confirm: 'Passwords do not match' });
     await checkNewPassword(b.password, v.email);
-    return json(await dcall(env, 'consoleSetupStart', { ...v, password: b.password, ip: client.ip }));
+    return json(await dcall(env, 'consoleSetupStart', { name: name || v.email.split('@')[0], email: v.email, password: b.password, ip: client.ip }),
+      200, owner?.newToken ? { 'Set-Cookie': sessionCookie(owner.newToken) } : {});
   }
   if (path === '/api/console/enroll' && method === 'POST') {
     const b = await body(request);
