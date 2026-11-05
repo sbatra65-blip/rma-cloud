@@ -83,7 +83,19 @@ export const migrateMethods = {
     if (!Array.isArray(rows) || !rows.length) throw new ValidationError({ _: 'No rows' });
     if (rows.length > MAX_ROWS) throw new ValidationError({ _: `Send at most ${MAX_ROWS} tickets per call` });
     const res = { created: 0, skipped: 0, errors: [] };
-    const custByName = (n) => (blank(n) ? null : this.one('SELECT id FROM customers WHERE name = ? COLLATE NOCASE', String(n).trim())?.id);
+    let customersAdded = 0;
+    // The old system often had no customer list; build it from the RMAs so the new customer dropdown is filled.
+    const custByName = (n, r) => {
+      if (blank(n)) return null;
+      const name = String(n).trim().slice(0, 200);
+      const hit = this.one('SELECT id FROM customers WHERE name = ? COLLATE NOCASE', name);
+      if (hit) return hit.id;
+      this.sql.exec(`INSERT INTO customers (code, name, state, city, address, postal, country, contact_name, email, phone, active, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`, this.nextCustomerCode(), name, nz(r.customer_state, 100), nz(r.customer_city, 100), nz(r.customer_address, 500),
+      nz(r.customer_postal, 20), nz(r.customer_country, 100) || 'India', nz(r.customer_contact_name, 150), nz(r.customer_email, 200), nz(r.customer_phone, 50), Date.now());
+      customersAdded++;
+      return this.one('SELECT last_insert_rowid() AS id').id;
+    };
     const modelByCode = (c) => (blank(c) ? null : this.one('SELECT id FROM models WHERE code = ? COLLATE NOCASE', String(c).trim())?.id);
     for (const r of rows) {
       const ticketNo = nz(r.ticket_no, 30);
@@ -96,7 +108,7 @@ export const migrateMethods = {
         const row = {
           ticket_no: ticketNo, status, is_imported: r.is_imported ? 1 : 0, created_at: created, updated_at: istMs(r.updated_at) || created,
           created_by: `Migrated${nz(r.created_by, 60) ? ` (${nz(r.created_by, 60)})` : ''}`, updated_by: user.name,
-          customer_id: custByName(r.customer_company), model_id: modelByCode(r.printer_model),
+          customer_id: custByName(r.customer_company, r), model_id: modelByCode(r.printer_model),
           customer_company: nz(r.customer_company, 200), customer_address: nz(r.customer_address), customer_city: nz(r.customer_city, 100),
           customer_state: nz(r.customer_state, 100), customer_postal: nz(r.customer_postal, 20), customer_country: nz(r.customer_country, 100),
           customer_contact_name: nz(r.customer_contact_name, 150), customer_email: nz(r.customer_email, 200), customer_phone: nz(r.customer_phone, 50),
@@ -126,7 +138,8 @@ export const migrateMethods = {
       }
     }
     // Keep the next new RMA number after the migrated ones.
-    this.audit(user, 'migrate_tickets', 'migration', null, { created: res.created, skipped: res.skipped, errors: res.errors.length });
+    res.customersAdded = customersAdded;
+    this.audit(user, 'migrate_tickets', 'migration', null, { created: res.created, skipped: res.skipped, customersAdded, errors: res.errors.length });
     return res;
   },
 

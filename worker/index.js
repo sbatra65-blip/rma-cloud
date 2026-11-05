@@ -573,10 +573,10 @@ async function handleMigrate(request, env, url, path, method) {
   if (path === '/api/migrate/status' && method === 'GET') {
     return json({ company: { name: user.companyName, code: user.companyCode }, by: user.name, expires: user.expires, counts: await ccall(env, user, 'migrateStatus', {}) });
   }
-  if (path === '/api/migrate/masters' && method === 'POST') return json(await ccall(env, user, 'migrateMasters', await body(request)));
-  if (path === '/api/migrate/tickets' && method === 'POST') return json(await ccall(env, user, 'migrateTickets', await body(request)));
-  if (path === '/api/migrate/batches' && method === 'POST') return json(await ccall(env, user, 'migrateBatches', await body(request)));
-  if (path === '/api/migrate/carepacks' && method === 'POST') return json(await ccall(env, user, 'migrateCarePacks', await body(request)));
+  if (path === '/api/migrate/masters' && method === 'POST') return json(await ccall(env, user, 'migrateMasters', await body(request, 8 * 1024 * 1024)));
+  if (path === '/api/migrate/tickets' && method === 'POST') return json(await ccall(env, user, 'migrateTickets', await body(request, 8 * 1024 * 1024)));
+  if (path === '/api/migrate/batches' && method === 'POST') return json(await ccall(env, user, 'migrateBatches', await body(request, 8 * 1024 * 1024)));
+  if (path === '/api/migrate/carepacks' && method === 'POST') return json(await ccall(env, user, 'migrateCarePacks', await body(request, 8 * 1024 * 1024)));
   if (path === '/api/migrate/photo' && method === 'HEAD') {
     const r = await ccall(env, user, 'migratePhotoCheck', { ticketNo: hdr('X-Ticket-No'), direction: hdr('X-Direction') === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND', name: hdr('X-File-Name') });
     return new Response(null, { status: !r.ticket ? 404 : r.exists ? 200 : 204 });

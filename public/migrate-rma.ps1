@@ -96,15 +96,26 @@ function HasColumn([string]$table, [string]$col) { return (Query "SELECT COUNT(*
 # ---------- Cloud API ----------
 $headers = @{ Authorization = "Bearer $Key" }
 function ApiError($e) {
-  try {
-    $resp = $e.Exception.Response
-    if ($resp) {
-      $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-      $txt = $reader.ReadToEnd()
-      try { $j = $txt | ConvertFrom-Json; if ($j.fields) { return "$($j.error) $(($j.fields | ConvertTo-Json -Compress))" }; return $j.error } catch { return $txt }
-    }
-  } catch { }
-  return $e.Exception.Message
+  # Windows PowerShell 5.1 puts the reply body in ErrorDetails; the response stream is often already read.
+  $status = $null
+  try { if ($e.Exception.Response) { $status = [int]$e.Exception.Response.StatusCode } } catch { }
+  $txt = $null
+  if ($e.ErrorDetails -and $e.ErrorDetails.Message) { $txt = $e.ErrorDetails.Message }
+  if (-not $txt) {
+    try { $reader = New-Object System.IO.StreamReader($e.Exception.Response.GetResponseStream()); $txt = $reader.ReadToEnd() } catch { }
+  }
+  $msg = $null
+  if ($txt) {
+    try {
+      $j = $txt | ConvertFrom-Json
+      $msg = $j.error
+      if ($j.fields) { $f = ($j.fields | ConvertTo-Json -Compress); if ($f -and $f -ne '{}') { $msg = "$msg $f" } }
+    } catch { $msg = $txt }
+  }
+  if (-not $msg) { $msg = $e.Exception.Message }
+  if (-not $msg) { $msg = 'Unknown error' }
+  if ($status) { $msg = "HTTP $status - $msg" }
+  return [string]$msg
 }
 function PostJson([string]$path, $obj) {
   $json = $obj | ConvertTo-Json -Depth 8 -Compress
@@ -182,7 +193,7 @@ if ($parts -contains 'masters') {
   if (HasTable 'Customers') {
     $cust = Query "SELECT Code AS code, Name AS name, State AS state, City AS city, Address AS address, Postal AS postal, Country AS country, ContactName AS contact_name, Email AS email, Phone AS phone, Gstin AS gstin, IsActive AS active FROM Customers $cw ORDER BY Id"
     $added = 0
-    foreach ($ch in (Chunks $cust 300)) { $r = PostJson '/api/migrate/masters' @{ customers = $ch }; $added += $r.customers }
+    foreach ($ch in (Chunks $cust 200)) { $r = PostJson '/api/migrate/masters' @{ customers = $ch }; $added += $r.customers }
     Log "  added $added customers (of $($cust.Count))" 'Green'
   }
 }
@@ -210,15 +221,16 @@ FROM RMATickets $cw ORDER BY Id
     foreach ($k in @('created_at', 'updated_at', 'oem_email_sent_at', 'closed_at', 'dup_at')) { $t[$k] = Iso $t[$k] }
     foreach ($k in @('purchase_date', 'delivery_to_user_date', 'oem_rma_assign_date', 'oem_dispatch_date', 'challan_date', 'dispatch_to_customer_date')) { $t[$k] = Day $t[$k] }
   }
-  $created = 0; $skipped = 0; $errs = 0; $done = 0
-  foreach ($ch in (Chunks $tickets 100)) {
+  $created = 0; $skipped = 0; $errs = 0; $done = 0; $custAdded = 0
+  foreach ($ch in (Chunks $tickets 25)) {
     $r = PostJson '/api/migrate/tickets' @{ rows = $ch }
-    $created += $r.created; $skipped += $r.skipped; $errs += $r.errors.Count; $done += $ch.Count
+    $created += $r.created; $skipped += $r.skipped; $errs += $r.errors.Count; $done += $ch.Count; $custAdded += [int]$r.customersAdded
     foreach ($e in $r.errors) { Log "  ! $($e.ticket_no): $($e.error)" 'Yellow' }
     Write-Progress -Activity 'RMA tickets' -Status "$done of $($tickets.Count)" -PercentComplete ([int](100 * $done / [Math]::Max(1, $tickets.Count)))
   }
   Write-Progress -Activity 'RMA tickets' -Completed
   Log "  $created moved, $skipped already there, $errs with problems" 'Green'
+  if ($custAdded) { Log "  $custAdded customers added to the customer list from the RMAs" 'Green' }
 }
 
 # ---------- OEM batches ----------
@@ -338,7 +350,7 @@ FROM CarePackBatches $cw ORDER BY Id
     $b.Remove('pdf_path'); $b.Remove('legacy_id')
   }
   $created = 0; $skipped = 0; $dc = 0
-  foreach ($ch in (Chunks $batches 50)) {
+  foreach ($ch in (Chunks $batches 20)) {
     $r = PostJson '/api/migrate/carepacks' @{ rows = $ch }
     $created += $r.created; $skipped += $r.skipped; $dc += $r.devices
     foreach ($e in $r.errors) { Log "  ! $($e.invoice): $($e.error)" 'Yellow' }

@@ -35,6 +35,8 @@ function Query([string]$sql, [hashtable]$params = @{}) {
   elseif ($sql -match 'InternalTicketNo AS n') { AddRow @{ n = 'INF-RMA-202503-0101' }; AddRow @{ n = 'INF-RMA-202503-0102' } }
   elseif ($sql -match 'FROM RMATickets') {
     AddRow @{ ticket_no = 'INF-RMA-202503-0101'; status = 'CLOSED'; is_imported = $false; created_at = $d; updated_at = $d.AddDays(9); customer_company = 'Migrated Buyer Pvt Ltd'; printer_model = 'TE210'; printer_sn = 'TE2 1000'; faulty_part = 'Platen'; tph_mileage = [double]12.5; purchase_date = [datetime]'2024-01-02'; closed_at = $d.AddDays(9); oem_rma_number = 'RMA-MIG-77'; batch_code = 'BATCH-202503-01'; oem_email_sent_at = $null; dup_at = $null; delivery_to_user_date = $null; oem_rma_assign_date = $null; oem_dispatch_date = [datetime]'2025-03-06'; challan_date = $null; dispatch_to_customer_date = $null; failure_description = "Line 1`nLine 2 with quotes "" and unicode test" }
+    $long = ('Printer prints faded on the left side, customer reports after cleaning. ' * 40)
+    for ($n = 1; $n -le 60; $n++) { AddRow @{ ticket_no = ('INF-RMA-202401-{0:D4}' -f $n); status = 'CLOSED'; created_at = $d.AddDays(-400 + $n); customer_company = ('Bulk Customer {0}' -f ($n % 7)); customer_city = 'Delhi'; customer_contact_name = 'Contact'; printer_sn = ('BULK{0:D5}' -f $n); faulty_part = 'Head'; failure_description = $long; closed_at = $d.AddDays(-390 + $n) } }
     AddRow @{ ticket_no = 'INF-RMA-202503-0102'; status = 'OPEN'; is_imported = $true; created_at = $d; updated_at = $null; customer_company = 'Walk-in'; printer_sn = 'X9'; faulty_part = 'Head'; closed_at = $null; oem_email_sent_at = $null; dup_at = $null; purchase_date = $null; delivery_to_user_date = $null; oem_rma_assign_date = $null; oem_dispatch_date = $null; challan_date = $null; dispatch_to_customer_date = $null }
   }
   elseif ($sql -match 'FROM MonthlyBatches') { AddRow @{ batch_code = 'BATCH-202503-01'; batch_month = '2025-03'; dispatch_date = [datetime]'2025-03-06'; remarks = 'old batch'; total = 1; created_at = $d } }
@@ -75,15 +77,15 @@ ok(code == 0 and 'Dry run' in out and '2 RMAs' in out, 'dry run counts only', ou
 code, out = run()
 print(out)
 ok(code == 0, 'first run exits cleanly', out)
-ok('2 moved, 0 already there' in out, 'tickets moved', out)
+ok('62 moved, 0 already there' in out and 'customers added to the customer list from the RMAs' in out, 'tickets moved', out)
 ok('added 0 OEMs, 0 products, 1 models' in out and 'added 1 customers' in out, 'masters moved (new model under existing OEM/product, new customer)', out)
 ok(re.search(r'2 uploaded .*?, 0 already there, 1 files missing', out) is not None, 'photo from DB (fallback path) + photo only on disk uploaded; missing file reported', out)
 ok('1 invoices (2 printer serials) moved' in out and '1 OEM invoice PDFs uploaded' in out, 'care pack + PDF moved', out)
 code, out2 = run()
-ok(code == 0 and '0 moved, 2 already there' in out2 and re.search(r'0 uploaded .*?, 2 already there', out2) and '0 invoices (0 printer serials) moved, 1 already there' in out2, 'second run adds nothing', out2)
+ok(code == 0 and '0 moved, 62 already there' in out2 and re.search(r'0 uploaded .*?, 2 already there', out2) and '0 invoices (0 printer serials) moved, 1 already there' in out2, 'second run adds nothing', out2)
 code, out3 = run('-Only', 'tickets')
 ok(code == 0 and 'Photos' not in out3 and 'Care packs' not in out3, '-Only limits what runs', out3)
-code, out4 = subprocess.run([pwsh, '-NoProfile', '-File', str(test), '-Url', 'http://localhost:8787', '-Key', 'rmk_wrongwrongwrongwrongwrong', '-Yes'], cwd=work, capture_output=True, text=True).returncode, ''
-ok(code == 1, 'wrong key stops with an error')
+r4 = subprocess.run([pwsh, '-NoProfile', '-File', str(test), '-Url', 'http://localhost:8787', '-Key', 'rmk_wrongwrongwrongwrongwrong', '-Yes'], cwd=work, capture_output=True, text=True)
+ok(r4.returncode == 1 and 'HTTP 401 - Migration key is missing' in (r4.stdout + r4.stderr), 'wrong key: stops and shows the real reason', r4.stdout + r4.stderr)
 print(f"{'all passed' if not fails else f'{fails} failed'}")
 sys.exit(1 if fails else 0)
