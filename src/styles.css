@@ -263,8 +263,9 @@ table.data a:hover { text-decoration: underline; }
 .filters { display: grid; gap: 10px; margin-bottom: 14px; }
 @media (min-width: 720px) { .filters.inline { grid-template-columns: 2fr repeat(3, 1fr) auto; align-items: end; } }
 .search { position: relative; }
-.search input { padding-left: 42px; }
-.search svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+/* Higher specificity than the generic input rule below, so the text never runs under the lens. */
+.search input, .search input[type='search'], .search input[type='text'] { padding-left: 44px; }
+.search svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; z-index: 1; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
 .chip { white-space: nowrap; border: 1px solid var(--line); background: var(--surface); padding: 6px 12px; border-radius: 999px;
   font-weight: 650; font-size: 0.84rem; cursor: pointer; color: var(--text); display: inline-flex; gap: 6px; align-items: center; }
