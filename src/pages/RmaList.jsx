@@ -34,30 +34,30 @@ export default function RmaList({ user, boot }) {
     <>
       <div className="page-head">
         <div><h1>RMAs</h1><p className="muted">{data ? `${data.rows.length}${data.more ? '+' : ''} shown` : 'Loading…'}</p></div>
-        <div className="row">
-          <Link to="/devices" className="btn ghost"><Icon name="history" size={18} /> Device history</Link>
-          <Link to="/reports" className="btn ghost"><Icon name="download" size={18} /> Export</Link>
-          {can.edit(user) && <Link to="/rma/new" className="btn primary"><Icon name="plus" size={18} /> New RMA</Link>}
+        <div className="row head-actions">
+          <Link to="/devices" className="btn ghost" aria-label="Device history"><Icon name="history" size={18} /> <span>Device history</span></Link>
+          <Link to="/reports" className="btn ghost" aria-label="Export"><Icon name="download" size={18} /> <span>Export</span></Link>
+          {can.edit(user) && <Link to="/rma/new" className="btn primary wide-only"><Icon name="plus" size={18} /> New RMA</Link>}
         </div>
       </div>
 
-      <div className="views" role="group" aria-label="Saved views" style={{ marginBottom: 12 }}>
+      <div className="views scroll-sm" role="group" aria-label="Saved views" style={{ marginBottom: 12 }}>
         {VIEWS.map(([k, label, p]) => <button key={k} type="button" aria-pressed={activeView === k} onClick={() => pickView(p)}>{label}</button>)}
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', marginBottom: 14 }}>
-        <div className="search" style={{ flex: '1 1 320px' }}>
+      <div className="filterbar">
+        <div className="search">
           <Icon name="search" size={18} />
-          <input type="search" placeholder="RMA no., serial, customer, OEM RMA, part, PO, challan…" value={f.q} onChange={(e) => set('q', e.target.value)} aria-label="Search RMAs" />
+          <input type="search" placeholder="Search RMA, serial, customer, part…" value={f.q} onChange={(e) => set('q', e.target.value)} aria-label="Search RMAs" />
         </div>
-        <label className="small" style={{ display: 'grid', gap: 4, fontWeight: 750, color: 'var(--text-2)' }}>Stage
+        <label className="small filter">Stage
           <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value, open: e.target.value ? '' : '1', view: '' })}>
             <option value="">Any</option>
             {boot.statuses.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
         {cats.length > 1 && (
-          <label className="small" style={{ display: 'grid', gap: 4, fontWeight: 750, color: 'var(--text-2)' }}>Device
+          <label className="small filter">Device
             <select value={f.category} onChange={(e) => set('category', e.target.value)}>
               <option value="">All devices</option>
               {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

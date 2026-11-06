@@ -490,3 +490,22 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
   .panel, .queue, .pipe, .kpis div { border-color: #ccc; break-inside: avoid; }
   body, .app { background: #fff; }
 }
+
+/* Lists: search + filters. Phones: one compact header row, chips scroll sideways, filters side by side. */
+.filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.filterbar .search { flex: 1 1 320px; }
+.filterbar .filter { display: grid; gap: 4px; font-weight: 750; color: var(--text-2); }
+@media (max-width: 719px) {
+  .page-head { align-items: center; flex-wrap: nowrap; }
+  .page-head h1 { font-size: 1.6rem; }
+  .head-actions { flex-wrap: nowrap; gap: 8px; }
+  .head-actions .btn { min-height: 44px; min-width: 44px; padding: 0 12px; }
+  .head-actions .btn > span { display: none; }
+  .wide-only { display: none !important; }
+  .views.scroll-sm { flex-wrap: nowrap; overflow-x: auto; margin-right: -16px; padding-right: 16px; scrollbar-width: none; }
+  .views.scroll-sm::-webkit-scrollbar { display: none; }
+  .views.scroll-sm button { flex: none; }
+  .filterbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .filterbar .search { grid-column: 1 / -1; }
+  .filterbar .filter select { min-height: 44px; }
+}

@@ -23,9 +23,9 @@ export default function Dashboard({ user }) {
           <p className="muted small" style={{ fontWeight: 650 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
           <h1 style={{ fontSize: '1.85rem', letterSpacing: '-0.02em' }}>{greet}, {user.name.split(' ')[0]}</h1>
         </div>
-        <div className="row">
-          <Link to="/devices" className="btn ghost"><Icon name="history" size={18} /> Device history</Link>
-          {can.edit(user) && <Link to="/rma/new" className="btn primary"><Icon name="plus" size={18} /> New RMA</Link>}
+        <div className="row head-actions">
+          <Link to="/devices" className="btn ghost" aria-label="Device history"><Icon name="history" size={18} /> <span>Device history</span></Link>
+          {can.edit(user) && <Link to="/rma/new" className="btn primary wide-only"><Icon name="plus" size={18} /> New RMA</Link>}
         </div>
       </div>
 
