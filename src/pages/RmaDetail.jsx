@@ -93,7 +93,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
           <h1 className="mono" style={{ fontSize: '1.35rem' }}>{t.ticket_no}</h1>
           <p className="row tight" style={{ marginTop: 6 }}>
             <Status s={t.status} label={t.status_label} />
-            <span className="small" style={{ fontWeight: 700 }}>{t.customer_company}</span>
+            <span className="small" style={{ fontWeight: 600 }}>{t.customer_company}</span>
             <span className="muted small">{[t.category, t.printer_model, t.faulty_part].filter(Boolean).join(' · ')} · raised {fmtMs(t.created_at)} by {t.created_by || '—'} · {ageDays(t.created_at)} days</span>
             {t.is_imported ? <span className="pill">Imported</span> : null}
           </p>

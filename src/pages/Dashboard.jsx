@@ -21,7 +21,7 @@ export default function Dashboard({ user }) {
     <>
       <div className="page-head">
         <div>
-          <p className="muted small" style={{ fontWeight: 650 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+          <p className="muted small" style={{ fontWeight: 600 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
           <h1 style={{ fontSize: '1.85rem', letterSpacing: '-0.02em' }}>{greet}, {user.name.split(' ')[0]}</h1>
         </div>
         <div className="row head-actions">
@@ -56,7 +56,7 @@ export default function Dashboard({ user }) {
         <section className="queue main" aria-labelledby="q-h">
           <div className="qhead">
             <div><h2 id="q-h">Needs your next step</h2><p className="muted small">Late ones first. The button opens the RMA at that step.</p></div>
-            {d.queueTotal > 0 && <Link to="/reminders" className="small" style={{ fontWeight: 700 }}>All {d.queueTotal} reminders</Link>}
+            {d.queueTotal > 0 && <Link to="/reminders" className="small" style={{ fontWeight: 600 }}>All {d.queueTotal} reminders</Link>}
           </div>
           {d.queue.length ? d.queue.map((q) => (
             <div key={`${q.id}${q.kind}`} className="qrow">
@@ -115,7 +115,7 @@ function CarePackBox({ cp }) {
     <section className="panel">
       <div className="spread"><h2>Care packs</h2><Link to="/care-packs" className="small">{cp.devices} printers covered</Link></div>
       <form onSubmit={look} style={{ margin: '12px 0 8px', display: 'grid', gap: 6 }}>
-        <label htmlFor="cp-sn" className="small" style={{ fontWeight: 750, color: 'var(--text-2)' }}>Is this printer covered?</label>
+        <label htmlFor="cp-sn" className="small" style={{ fontWeight: 650, color: 'var(--text-2)' }}>Is this printer covered?</label>
         <div style={{ display: 'flex', gap: 8 }}>
           <input id="cp-sn" type="search" placeholder="Printer serial" value={sn} onChange={(e) => { setSn(e.target.value); setCover(undefined); }} aria-label="Check printer cover" style={{ flex: 1, minWidth: 0 }} />
           <button className="btn ghost">Check</button>
@@ -138,7 +138,7 @@ function AgeBars({ ages }) {
     <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
       {rows.map(([label, n, c]) => (
         <div key={label} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 32px', gap: 10, alignItems: 'center', fontSize: '0.88rem' }}>
-          <span style={{ fontWeight: 650, color: 'var(--text-2)' }}>{label}</span>
+          <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>{label}</span>
           <span style={{ height: 8, borderRadius: 999, background: 'var(--mist)', overflow: 'hidden' }}>
             <i style={{ display: 'block', height: '100%', width: `${(n / max) * 100}%`, background: c, borderRadius: 999 }} />
           </span>

@@ -119,14 +119,14 @@ export default function RmaList({ user, boot }) {
                     <tr key={t.id} onClick={(e) => { if (!['A', 'INPUT'].includes(e.target.tagName)) navigate(`/rma/${t.id}`); }} style={{ cursor: 'pointer' }} className={sel.has(t.id) ? 'selected' : ''}>
                       {bulk && <td>{!t.closed_at && <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}</td>}
                       <td className="nowrap"><Link to={`/rma/${t.id}`} className="mono">{t.ticket_no}</Link>{t.is_imported ? <div className="tiny muted">Imported</div> : null}</td>
-                      <td style={{ fontWeight: 650 }}>{t.customer_company || '—'}<div className="tiny muted" style={{ fontWeight: 500 }}>{t.customer_city}</div></td>
+                      <td style={{ fontWeight: 600 }}>{t.customer_company || '—'}<div className="tiny muted" style={{ fontWeight: 500 }}>{t.customer_city}</div></td>
                       <td>{t.printer_model || '—'}<div className="tiny muted mono">{t.printer_sn}{t.category && t.category !== 'Printer' ? ` · ${t.category}` : ''}</div></td>
                       <td>{t.faulty_part || '—'}{t.head_override_reason ? <span className="pill warn" style={{ marginLeft: 6 }} title={t.head_override_reason}>Head limit</span> : null}
                         {t.faulty_part_sn ? <div className="tiny muted mono">{t.faulty_part_sn}</div> : null}</td>
                       <td><Status s={t.status} /></td>
                       <td className="mono" style={{ color: 'var(--text-2)' }}>{t.oem_rma_number || '—'}</td>
                       <td className="num">{t.inbound_photos}{t.outbound_photos ? ` / ${t.outbound_photos}` : ''}</td>
-                      <td className="nowrap num" style={{ textAlign: 'right', fontWeight: 700, color: age > 30 && !t.closed_at ? 'var(--rust)' : undefined }}>
+                      <td className="nowrap num" style={{ textAlign: 'right', fontWeight: 600, color: age > 30 && !t.closed_at ? 'var(--rust)' : undefined }}>
                         {t.closed_at ? <span className="muted" style={{ fontWeight: 500 }}>{fmtMs(t.closed_at)}</span> : `${age} d`}</td>
                     </tr>
                   );

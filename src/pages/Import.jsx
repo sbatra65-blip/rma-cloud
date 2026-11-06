@@ -161,7 +161,7 @@ function Importer({ kind, fields, onDone }) {
           </div>
           {kind === 'rma' && <p className="muted small">Dates can be 18-07-2026, 18/07/2026, 18-Jul-2026 or 2026-07-18 (day first). Words like "sent to TSC", "rma received", "challan done", "closed" become statuses; anything else is Open. Without "Keep old ticket number", RMAs are numbered by the month they were raised.</p>}
           <details>
-            <summary className="small" style={{ cursor: 'pointer', fontWeight: 700 }}>First rows as read</summary>
+            <summary className="small" style={{ cursor: 'pointer', fontWeight: 600 }}>First rows as read</summary>
             <div className="tablewrap" style={{ marginTop: 8 }}>
               <table className="data"><thead><tr>{fields.filter(([k]) => map[k]).map(([k, l]) => <th key={k}>{l}</th>)}</tr></thead>
                 <tbody>{sheet.rows.slice(0, 5).map((r) => <tr key={r._row}>{fields.filter(([k]) => map[k]).map(([k]) => <td key={k}>{r[map[k]]}</td>)}</tr>)}</tbody></table>
