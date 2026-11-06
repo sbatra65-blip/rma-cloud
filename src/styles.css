@@ -509,3 +509,18 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
   .filterbar .search { grid-column: 1 / -1; }
   .filterbar .filter select { min-height: 44px; }
 }
+
+/* Active only / All switch */
+.seg { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--mist); border: 1px solid var(--line); gap: 2px; }
+.seg button { border: 0; background: transparent; min-height: 34px; padding: 0 14px; border-radius: 999px; font-weight: 750; font-size: 0.85rem; color: var(--text-2); cursor: pointer; font-family: inherit; }
+.seg button[aria-checked='true'] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
+.seg.small button { min-height: 30px; padding: 0 12px; font-size: 0.8rem; }
+/* Bulk select */
+.selbar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 12px;
+  border-radius: var(--radius); background: var(--ink); color: #fff; }
+.selbar .linkbtn { color: #fff; }
+table.data tr.selected td { background: var(--accent-tint); }
+.tcard-wrap { position: relative; }
+.tcard-wrap.has-check .tcard { padding-left: 48px; }
+.tcheck { position: absolute; left: 14px; top: 18px; width: 22px; height: 22px; z-index: 1; accent-color: var(--accent); }
+@media (max-width: 719px) { .selbar { top: auto; bottom: 84px; position: sticky; } }

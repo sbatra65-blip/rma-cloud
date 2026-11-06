@@ -296,7 +296,8 @@ async function handle(request, env, ctx) {
 
   // ---------- RMA data ----------
   if (path === '/api/bootstrap' && method === 'GET') return respond(await ccall(env, user, 'bootstrap'));
-  if (path === '/api/dashboard' && method === 'GET') return respond(await ccall(env, user, 'dashboard'));
+  if (path === '/api/dashboard' && method === 'GET') return respond(await ccall(env, user, 'dashboard', { show: url.searchParams.get('show') || '' }));
+  if (path === '/api/rma/bulk-close' && method === 'POST') return respond(await ccall(env, user, 'bulkClose', await body(request)));
   if (path === '/api/reminders' && method === 'GET') return respond(await ccall(env, user, 'reminders'));
 
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));

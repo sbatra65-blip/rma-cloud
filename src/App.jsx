@@ -179,7 +179,7 @@ function Shell() {
         <Link to="/rma" aria-current={route === '/rma' || /^\/rma\/\d/.test(route) ? 'page' : undefined}><Icon name="ticket" /><span>RMAs</span></Link>
         {can.edit(user)
           ? <Link to="/rma/new" className="add" aria-label="New RMA" aria-current={route === '/rma/new' ? 'page' : undefined}><Icon name="plus" size={28} /><span>New</span></Link>
-          : <Link to="/rma?open=" aria-current={undefined}><Icon name="list" /><span>Open</span></Link>}
+          : <Link to="/devices" aria-current={route.startsWith('/devices') ? 'page' : undefined}><Icon name="history" /><span>Devices</span></Link>}
         <Link to="/reminders" aria-current={current('/reminders') ? 'page' : undefined}><Icon name="bell" /><span>Reminders</span>
           {reminderCount ? <i className="badge-dot">{reminderCount > 99 ? '99+' : reminderCount}</i> : null}</Link>
         <Link to="/more" aria-current={route === '/more' ? 'page' : undefined}><Icon name="more" /><span>More</span></Link>

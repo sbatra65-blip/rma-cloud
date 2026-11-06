@@ -250,6 +250,25 @@ r = await owner('GET', '/api/devices/history?sn=a');
 ok(r.status === 422, 'device history needs 3+ characters');
 { const sg = (await owner('GET', '/api/settings')).data; r = await owner('POST', '/api/settings', { ...(sg.settings || sg), head_claim_limit: 25 }); }
 ok(r.status === 422, 'head limit setting validated');
+r = await owner('GET', '/api/rma?show=all');
+const allN = r.data.rows.length;
+const doneTicket = r.data.rows.find((t) => t.status === 'CLOSED' || t.status === 'DISPATCHED_TO_CUSTOMER');
+r = await owner('GET', '/api/rma?show=active');
+ok(r.data.rows.every((t) => !['CLOSED', 'CLOSED_RETURNED', 'DISPATCHED_TO_CUSTOMER'].includes(t.status)) && (!doneTicket || r.data.rows.length < allN), 'Active only hides completed RMAs');
+r = await owner('GET', '/api/rma?show=active&status=CLOSED');
+ok(r.data.rows.every((t) => t.status === 'CLOSED'), 'chosen stage overrides Active only');
+r = await owner('GET', `/api/rma?show=active&category=${mt.id}`);
+const mtIds = r.data.rows.map((t) => t.id);
+r = await owner('POST', '/api/rma/bulk-close', { ids: mtIds, remarks: '' });
+ok(r.status === 422 && r.data.fields?.remarks, 'bulk close needs a remark');
+r = await owner('POST', '/api/rma/bulk-close', { ids: mtIds, type: 'close_returned', remarks: 'Old RMAs, delivered' });
+ok(r.status === 200 && r.data.closed === mtIds.length, 'bulk close', r.data);
+r = await owner('GET', `/api/rma?show=active&category=${mt.id}`);
+ok(r.data.rows.length === 0, 'bulk-closed RMAs leave Active only');
+r = await owner('GET', `/api/rma/${mtIds[0]}`);
+ok(r.data.ticket.status === 'CLOSED_RETURNED' && r.data.events.some((e) => /bulk close/.test(e.action || e.title || JSON.stringify(e))), 'bulk close recorded in RMA history');
+r = await owner('GET', '/api/dashboard?show=active');
+ok(r.data.recent.every((t) => !['CLOSED', 'CLOSED_RETURNED', 'DISPATCHED_TO_CUSTOMER'].includes(t.status)), 'dashboard recent respects Active only');
 r = await owner('GET', '/api/dashboard');
 ok(Array.isArray(r.data.queue) && typeof r.data.queueTotal === 'number', 'dashboard has next-step queue');
 

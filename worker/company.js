@@ -22,6 +22,8 @@ export const STATUS = {
   CLOSED: 'CLOSED',
   CLOSED_RETURNED: 'CLOSED_RETURNED',
 };
+// Finished from the customer's side. Hidden when someone chooses "Active only".
+export const COMPLETED = ['DISPATCHED_TO_CUSTOMER', 'CLOSED', 'CLOSED_RETURNED'];
 export const STATUS_LABELS = {
   OPEN: 'Open',
   AWAITING_OEM_RMA: 'Awaiting OEM RMA',
@@ -209,7 +211,7 @@ export class Company extends DurableObject {
     const PERMS = {
       // read: everyone in the company
       bootstrap: 'read', dashboard: 'read', listTickets: 'read', getTicket: 'read', checkDuplicates: 'read', emailContext: 'read',
-      deviceHistory: 'read', searchDevices: 'read',
+      deviceHistory: 'read', searchDevices: 'read', bulkClose: 'edit',
       getPhoto: 'read', listBatches: 'read', getBatch: 'read', batchCandidates: 'read', reminders: 'read', getTemplate: 'read',
       listMasters: 'read', importLog: 'read',
       // edit: everyone except Viewer
@@ -695,7 +697,7 @@ export class Company extends DurableObject {
     return { ok: true, r2Photos: photos.filter((p) => p.store === 'r2').map((p) => p.id) };
   }
 
-  listTickets(user, { status = '', q = '', from = '', to = '', customer = '', open = '', limit = 500, batch = '', view = '', category = '' } = {}) {
+  listTickets(user, { status = '', q = '', from = '', to = '', customer = '', open = '', show = '', limit = 500, batch = '', view = '', category = '' } = {}) {
     const where = [];
     const args = [];
     // Saved views on the RMA list.
@@ -706,6 +708,8 @@ export class Company extends DurableObject {
     if (category && /^\d+$/.test(String(category))) { where.push('category_id = ?'); args.push(Number(category)); }
     if (status && ALL_STATUS.includes(status)) { where.push('status = ?'); args.push(status); }
     if (open === '1') where.push("status NOT IN ('CLOSED','CLOSED_RETURNED')");
+    // "Active only": hides completed RMAs (closed, or sent back to the customer). A chosen stage always wins.
+    if (show === 'active' && !status && view !== 'closedmonth') where.push(`status NOT IN (${COMPLETED.map(() => '?').join(',')})`), args.push(...COMPLETED);
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) { where.push('created_at >= ?'); args.push(Date.parse(from + 'T00:00:00+05:30')); }
     if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) { where.push('created_at <= ?'); args.push(Date.parse(to + 'T23:59:59+05:30')); }
     if (customer) { where.push('customer_company LIKE ?'); args.push(`%${String(customer).slice(0, 100)}%`); }
@@ -733,8 +737,33 @@ export class Company extends DurableObject {
     };
   }
 
+  // Close many finished RMAs at once (old ones sent back to the customer, imported history…). Admin and Manager.
+  bulkClose(user, { ids, type = 'close', remarks = '' } = {}) {
+    if (!['Admin', 'Manager'].includes(user.role)) throw Object.assign(new Error('Only an Admin or Manager can close RMAs in bulk.'), { status: 403 });
+    const list = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!list.length) throw new ValidationError({ ids: 'Select at least one RMA' });
+    if (list.length > 1000) throw new ValidationError({ ids: 'Close at most 1000 at a time' });
+    const why = String(remarks || '').trim().slice(0, 500);
+    if (!why) throw new ValidationError({ remarks: 'Give a remark, e.g. "Delivered to customer, old RMAs closed"' });
+    const toStatus = type === 'close_returned' ? STATUS.CLOSED_RETURNED : STATUS.CLOSED;
+    const now = Date.now();
+    let closed = 0;
+    const skipped = [];
+    for (const id of list) {
+      const t = this.one('SELECT id, ticket_no, status FROM tickets WHERE id = ?', id);
+      if (!t) continue;
+      if (t.status === STATUS.CLOSED || t.status === STATUS.CLOSED_RETURNED) { skipped.push(t.ticket_no); continue; }
+      this.sql.exec(`UPDATE tickets SET status = ?, closed_at = ?, closure_type = ?, closure_remarks = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+        toStatus, now, toStatus === STATUS.CLOSED ? 'REPAIRED' : 'RETURNED', why, now, user.name, id);
+      this.event(id, user, `status: ${label(toStatus)} (bulk close, was ${label(t.status)})`, why);
+      closed++;
+    }
+    this.audit(user, 'bulk_close', 'ticket', null, { closed, skipped: skipped.length, to: toStatus });
+    return { closed, skipped };
+  }
+
   // ---------- Dashboard ----------
-  dashboard(user) {
+  dashboard(user, { show = '' } = {}) {
     const counts = Object.fromEntries(ALL_STATUS.map((s) => [s, 0]));
     for (const r of this.all('SELECT status, COUNT(*) AS n FROM tickets GROUP BY status')) counts[r.status] = r.n;
     const now = Date.now();
@@ -748,7 +777,8 @@ export class Company extends DurableObject {
     const closedThisMonth = this.one("SELECT COUNT(*) AS n FROM tickets WHERE closed_at >= ?", monthStart).n;
     const createdThisMonth = this.one('SELECT COUNT(*) AS n FROM tickets WHERE created_at >= ?', monthStart).n;
     const avgClose = this.one('SELECT AVG(closed_at - created_at) AS ms FROM tickets WHERE closed_at IS NOT NULL AND closed_at >= ?', now - 180 * 86400000).ms;
-    const recent = this.all('SELECT id, ticket_no, status, customer_company, printer_model, printer_sn, faulty_part, created_at, updated_at FROM tickets ORDER BY updated_at DESC LIMIT 8')
+    const recent = this.all(`SELECT id, ticket_no, status, customer_company, printer_model, printer_sn, faulty_part, created_at, updated_at FROM tickets
+      ${show === 'active' ? `WHERE status NOT IN (${COMPLETED.map((c) => `'${c}'`).join(',')})` : ''} ORDER BY updated_at DESC LIMIT 8`)
       .map((r) => ({ ...r, status_label: label(r.status) }));
     const topParts = this.all(`SELECT faulty_part AS name, COUNT(*) AS n FROM tickets WHERE created_at >= ? AND faulty_part IS NOT NULL
       GROUP BY UPPER(faulty_part) ORDER BY n DESC LIMIT 5`, now - 365 * 86400000);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { get, qs } from '../api.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { ErrorPanel, FLOW, Icon, Link, SHORT, Skeleton, Status, ago, can, navigate, useLoad } from '../ui.jsx';
+import { ErrorPanel, FLOW, Icon, Link, SHORT, ShowToggle, Skeleton, Status, ago, can, navigate, useLoad, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
@@ -9,7 +9,8 @@ const STAGE_COLOR = {
 };
 
 export default function Dashboard({ user }) {
-  const [d, reload, error] = useLoad(() => get('/api/dashboard'));
+  const [show] = useShow();
+  const [d, reload, error] = useLoad(() => get(`/api/dashboard?show=${show}`), [show]);
   if (error && !d) return <ErrorPanel error={error} retry={reload} />;
   if (!d) return <Skeleton rows={6} />;
   const hour = new Date().getHours();
@@ -77,7 +78,8 @@ export default function Dashboard({ user }) {
             {d.topParts.length > 0 && <p className="muted small" style={{ marginTop: 14 }}>Most returned part (12 months): <b style={{ color: 'var(--text)' }}>{d.topParts[0].name} ({d.topParts[0].n})</b></p>}
           </section>
           <section className="panel">
-            <div className="spread" style={{ marginBottom: 6 }}><h2>Recently updated</h2><Link to="/rma" className="small">All RMAs</Link></div>
+            <div className="spread" style={{ marginBottom: 8 }}><h2>Recently updated</h2><Link to="/rma" className="small">All RMAs</Link></div>
+            <ShowToggle className="small" />
             {d.recent.length ? d.recent.slice(0, 5).map((t) => (
               <Link key={t.id} to={`/rma/${t.id}`} className="linkrow">
                 <span style={{ display: 'grid', minWidth: 0 }}><span className="mono" style={{ fontSize: '0.82rem' }}>{t.ticket_no}</span>

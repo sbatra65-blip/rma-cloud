@@ -283,3 +283,35 @@ export function Strength({ score }) {
     </div>
   );
 }
+
+// "Active only" or "All": one choice for the whole app, remembered on this device.
+// Completed = sent back to the customer or closed.
+export const COMPLETED = ['DISPATCHED_TO_CUSTOMER', 'CLOSED', 'CLOSED_RETURNED'];
+const SHOW_KEY = 'rma.show';
+function readShow() {
+  try { return localStorage.getItem(SHOW_KEY) === 'all' ? 'all' : 'active'; } catch { return 'active'; }
+}
+let showNow = readShow();
+export function useShow() {
+  const [v, setV] = useState(showNow);
+  useEffect(() => {
+    const on = () => setV(showNow);
+    window.addEventListener('rma-show', on);
+    return () => window.removeEventListener('rma-show', on);
+  }, []);
+  const set = (x) => {
+    showNow = x === 'all' ? 'all' : 'active';
+    try { localStorage.setItem(SHOW_KEY, showNow); } catch { /* private mode */ }
+    window.dispatchEvent(new Event('rma-show'));
+  };
+  return [v, set];
+}
+export function ShowToggle({ className = '' }) {
+  const [v, set] = useShow();
+  return (
+    <div className={`seg ${className}`} role="radiogroup" aria-label="Which RMAs to show">
+      <button type="button" role="radio" aria-checked={v === 'active'} onClick={() => set('active')}>Active only</button>
+      <button type="button" role="radio" aria-checked={v === 'all'} onClick={() => set('all')}>All</button>
+    </div>
+  );
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { downloadBlob, get, qs } from '../api.js';
 import { writeTable } from '../excel.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { Empty, ErrorPanel, Icon, Link, SHORT, Skeleton, Status, fmtDate, fmtMs, navigate, todayISO } from '../ui.jsx';
+import { COMPLETED, Empty, ErrorPanel, Icon, Link, SHORT, ShowToggle, Skeleton, Status, fmtDate, fmtMs, navigate, todayISO, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
@@ -56,10 +56,13 @@ function History({ sn }) {
   const [d, setD] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [show] = useShow();
   useEffect(() => { get(`/api/devices/history?${qs({ sn })}`).then(setD).catch(setError); }, [sn]);
   if (error) return <ErrorPanel error={error} />;
   if (!d) return <Skeleton rows={6} />;
   const s = d.summary;
+  // Totals above always count every RMA; "Active only" just trims the timeline.
+  const shown = show === 'all' ? d.tickets : d.tickets.filter((t) => !COMPLETED.includes(t.status));
   const overHeads = s.headLimit && s.heads >= s.headLimit;
 
   async function excel() {
@@ -107,10 +110,10 @@ function History({ sn }) {
 
       <div className="dash-cols" style={{ marginTop: 0 }}>
         <section className="panel main">
-          <h2 style={{ marginBottom: 14 }}>Timeline</h2>
-          {d.tickets.length ? (
+          <div className="spread" style={{ marginBottom: 14, gap: 10 }}><h2>Timeline</h2><ShowToggle className="small noprint" /></div>
+          {shown.length ? (
             <ol className="timeline">
-              {[...d.tickets].reverse().map((t) => (
+              {[...shown].reverse().map((t) => (
                 <li key={t.id} style={{ '--c': STAGE_COLOR[t.status] }}>
                   <div style={{ display: 'grid', gap: 4 }}>
                     <div className="spread" style={{ gap: 8 }}>
@@ -126,7 +129,7 @@ function History({ sn }) {
                 </li>
               ))}
             </ol>
-          ) : <p className="muted">No RMA has been raised for this device.</p>}
+          ) : <p className="muted">{d.tickets.length ? `All ${d.tickets.length} RMAs for this device are completed. Choose “All” to see them.` : 'No RMA has been raised for this device.'}</p>}
         </section>
         <div className="side">
           <section className="panel">
