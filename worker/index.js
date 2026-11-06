@@ -297,13 +297,15 @@ async function handle(request, env, ctx) {
   // ---------- RMA data ----------
   if (path === '/api/bootstrap' && method === 'GET') return respond(await ccall(env, user, 'bootstrap'));
   if (path === '/api/dashboard' && method === 'GET') return respond(await ccall(env, user, 'dashboard', { show: url.searchParams.get('show') || '' }));
+  { const rp = path.match(/^\/api\/rma\/(\d+)\/received-part$/);
+    if (rp && method === 'POST') return respond(await ccall(env, user, 'setReceivedPart', { ...(await body(request)), id: rp[1] })); }
   if (path === '/api/rma/bulk-close' && method === 'POST') return respond(await ccall(env, user, 'bulkClose', await body(request)));
   if (path === '/api/reminders' && method === 'GET') return respond(await ccall(env, user, 'reminders'));
 
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
-    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason }));
+    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote }));
   }
   if (path === '/api/devices' && method === 'GET') return respond(await ccall(env, user, 'searchDevices', { q: url.searchParams.get('q') }));
   if (path === '/api/devices/history' && method === 'GET') return respond(await ccall(env, user, 'deviceHistory', { sn: url.searchParams.get('sn') }));

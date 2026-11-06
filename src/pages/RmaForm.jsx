@@ -36,6 +36,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const [cover, setCover] = useState(null);
   const [cpAdd, setCpAdd] = useState({ reason: '', batchId: '' });
   const [headReason, setHeadReason] = useState({});
+  const [snNote, setSnNote] = useState({});
 
   // Load the ticket (edit) or copy customer + printer from another RMA (?from=ID, "raise another part").
   useEffect(() => {
@@ -162,6 +163,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     }
     parts.forEach((p, i) => {
       if (dups[p.key]?.heads && !String(headReason[p.key] || '').trim()) errs[`p${i}_head`] = 'Give a reason to raise another print-head RMA for this printer';
+      if (dups[p.key]?.partCheck?.match === false && !String(snNote[p.key] || '').trim()) errs[`p${i}_snnote`] = 'Check the serial, or say why it differs';
     });
     if (expired) errs.printer_sn = `Care pack / warranty for this serial ended on ${fmtDate(cover.warranty_end)}. Expired cover cannot start a new RMA.`;
     if (Object.keys(errs).length) errs.form = 'Please fix the highlighted fields.';
@@ -198,6 +200,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         const body = {
           ticket: { ...f, category_id: f.category_id || defaultCat?.id || '', ...strip(p) },
           headReason: headReason[p.key] || undefined,
+          partSnNote: snNote[p.key] || undefined,
           overrideReason: override.on && dups[p.key]?.blocks?.length ? override.reason : undefined,
           addToCarePack: i === 0 && notInCarePack && cpAdd.on ? { reason: cpAdd.reason, batchId: cpAdd.batchId || null } : undefined,
         };
@@ -209,6 +212,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
       }
     } catch (err) {
       const i = created.length;
+      if (err.data?.code === 'part_serial_mismatch') setDups((d) => ({ ...d, [parts[i].key]: { ...(d[parts[i].key] || { blocks: [], sameMachine: [] }), partCheck: err.data.partCheck } }));
       if (err.data?.code === 'head_limit') setDups((d) => ({ ...d, [parts[i].key]: { ...(d[parts[i].key] || { blocks: [], sameMachine: [] }), heads: err.data.heads } }));
       setErrors({ form: `${created.length ? `Raised ${created.map((t) => t.ticket_no).join(', ')}. ` : ''}Part ${i + 1} (${parts[i].faulty_part}) was not raised: ${err.message}`, ...prefixFields(err.fields, i) });
       if (created.length) { setParts((ps) => ps.slice(created.length)); onChange?.(); }
@@ -364,6 +368,8 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
               <textarea value={p.failure_description} onChange={(e) => setPart(p.key, 'failure_description', e.target.value)} />
             </Field>
           </div>
+          {!editing && dups[p.key]?.partCheck && <PartSerialCheck c={dups[p.key].partCheck} error={errors[`p${i}_snnote`]} value={snNote[p.key] || ''}
+            onNote={(v) => setSnNote((x) => ({ ...x, [p.key]: v }))} onUse={(sn) => setPart(p.key, 'faulty_part_sn', sn)} />}
           {!editing && dups[p.key]?.heads && <HeadBox h={dups[p.key].heads} serial={f.printer_sn} error={errors[`p${i}_head`]}
             value={headReason[p.key] || ''} onChange={(v) => setHeadReason((x) => ({ ...x, [p.key]: v }))} />}
           {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
@@ -387,6 +393,31 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         toast(`${rec.name} added to the customer list`);
       }} />}
     </>
+  );
+}
+
+// Cross-check: the faulty part should be the one last received from the OEM for this printer.
+function PartSerialCheck({ c, value, onNote, onUse, error }) {
+  const l = c.last;
+  const from = <><Link to={`/rma/${l.id}`}>{l.ticket_no}</Link>{l.goods_received_date ? `, received ${fmtDate(l.goods_received_date)}` : ''}</>;
+  if (c.match === true) return <p className="small" style={{ marginTop: 10, color: 'var(--ok)' }}><Icon name="check" size={16} style={{ verticalAlign: '-3px' }} /> Matches the {l.faulty_part.toLowerCase()} received from the OEM on {from}.</p>;
+  if (c.match === null) {
+    return (
+      <div className="callout" style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="small">Last {l.faulty_part.toLowerCase()} received for this printer: <span className="mono">{l.received_part_sn}</span> ({from}).</span>
+        <button type="button" className="btn ghost small" onClick={() => onUse(l.received_part_sn)}>Use this serial</button>
+      </div>
+    );
+  }
+  return (
+    <div className="headbox" role="alert" style={{ marginTop: 14 }}>
+      <b className="t"><Icon name="alert" size={18} style={{ verticalAlign: '-3px' }} /> Part serial does not match</b>
+      <span className="small">The last {l.faulty_part.toLowerCase()} received from the OEM for this printer was <span className="mono">{l.received_part_sn}</span> ({from}). You entered <span className="mono">{c.entered}</span>.</span>
+      <div className="row"><button type="button" className="btn ghost small" onClick={() => onUse(l.received_part_sn)}>Use {l.received_part_sn}</button></div>
+      <Field label="Or say why it differs" required error={error} hint="Saved on the RMA, e.g. head bought locally, or swapped from another printer">
+        <input type="text" maxLength={500} value={value} onChange={(e) => onNote(e.target.value)} />
+      </Field>
+    </div>
   );
 }
 

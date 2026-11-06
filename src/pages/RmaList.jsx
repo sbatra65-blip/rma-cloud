@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { get, post, qs } from '../api.js';
-import { Dialog, Empty, ErrorPanel, Field, Icon, Link, ShowToggle, Skeleton, Status, ageDays, can, fmtMs, navigate, query, useShow, useToast } from '../ui.jsx';
+import { Dialog, Empty, RECEIVED_STAGES, ErrorPanel, Field, Icon, Link, ShowToggle, Skeleton, Status, ageDays, can, fmtMs, navigate, query, useShow, useToast } from '../ui.jsx';
 
 // Saved views: one click for the lists people ask for most. "Active only / All" applies on top.
 const VIEWS = [
@@ -102,6 +102,7 @@ export default function RmaList({ user, boot }) {
                   <h3>{t.customer_company || '—'}</h3>
                   <span className="meta">{[t.category !== 'Printer' ? t.category : null, t.printer_model, t.printer_sn].filter(Boolean).join(' · ')}</span>
                   <span className="meta">{t.faulty_part || '—'}{t.oem_rma_number ? ` · OEM ${t.oem_rma_number}` : ''} · {ageDays(t.created_at)}d old</span>
+                  <SnPair t={t} />
                 </Link>
               </div>
             ))}
@@ -111,7 +112,7 @@ export default function RmaList({ user, boot }) {
               <thead><tr>
                 {bulk && <th style={{ width: 36 }}><input type="checkbox" checked={allOn} disabled={!closable.length} aria-label="Select all shown that are not closed"
                   onChange={() => setSel(allOn ? new Set() : new Set(closable.map((t) => t.id)))} /></th>}
-                <th>RMA</th><th>Customer</th><th>Device</th><th>Faulty part</th><th>Stage</th><th>OEM RMA</th><th>Photos</th><th style={{ textAlign: 'right' }}>Age</th></tr></thead>
+                <th>RMA</th><th>Customer</th><th>Device</th><th>Part · serial sent → received</th><th>Stage</th><th>OEM RMA</th><th>Photos</th><th style={{ textAlign: 'right' }}>Age</th></tr></thead>
               <tbody>
                 {data.rows.map((t) => {
                   const age = ageDays(t.created_at);
@@ -122,7 +123,7 @@ export default function RmaList({ user, boot }) {
                       <td style={{ fontWeight: 600 }}>{t.customer_company || '—'}<div className="tiny muted" style={{ fontWeight: 500 }}>{t.customer_city}</div></td>
                       <td>{t.printer_model || '—'}<div className="tiny muted mono">{t.printer_sn}{t.category && t.category !== 'Printer' ? ` · ${t.category}` : ''}</div></td>
                       <td>{t.faulty_part || '—'}{t.head_override_reason ? <span className="pill warn" style={{ marginLeft: 6 }} title={t.head_override_reason}>Head limit</span> : null}
-                        {t.faulty_part_sn ? <div className="tiny muted mono">{t.faulty_part_sn}</div> : null}</td>
+                        <SnPair t={t} /></td>
                       <td><Status s={t.status} /></td>
                       <td className="mono" style={{ color: 'var(--text-2)' }}>{t.oem_rma_number || '—'}</td>
                       <td className="num">{t.inbound_photos}{t.outbound_photos ? ` / ${t.outbound_photos}` : ''}</td>
@@ -141,6 +142,19 @@ export default function RmaList({ user, boot }) {
       {closing && <BulkClose ids={[...sel]} rows={data?.rows || []} onClose={() => setClosing(false)}
         onDone={(r) => { setClosing(false); setSel(new Set()); setTick((n) => n + 1); toast(`${r.closed} RMA${r.closed === 1 ? '' : 's'} closed${r.skipped.length ? `, ${r.skipped.length} already closed` : ''}`); }} />}
     </>
+  );
+}
+
+// Faulty part serial sent to the OEM → serial of the part received back.
+function SnPair({ t }) {
+  if (!t.faulty_part_sn && !t.received_part_sn && !RECEIVED_STAGES.includes(t.status)) return null;
+  return (
+    <div className="snpair">
+      {t.faulty_part_sn || '—'}
+      {RECEIVED_STAGES.includes(t.status) && <><span className="arrow" aria-label="received">→</span>
+        {t.received_part_sn ? <span className="new">{t.received_part_sn}</span> : <span style={{ color: 'var(--amber)', fontFamily: 'var(--font)' }}>received serial missing</span>}</>}
+      {t.part_sn_note && <span className="pill warn" style={{ marginLeft: 6, fontFamily: 'var(--font)' }} title={t.part_sn_note}>Serial differs</span>}
+    </div>
   );
 }
 

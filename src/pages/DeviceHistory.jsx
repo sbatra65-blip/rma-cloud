@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { downloadBlob, get, qs } from '../api.js';
 import { writeTable } from '../excel.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { COMPLETED, Empty, ErrorPanel, Icon, Link, SHORT, ShowToggle, Skeleton, Status, fmtDate, fmtMs, navigate, todayISO, useShow } from '../ui.jsx';
+import { COMPLETED, Empty, ErrorPanel, Icon, Link, ReceivedPartSn, SHORT, ShowToggle, Skeleton, Status, can, fmtDate, fmtMs, navigate, todayISO, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
@@ -10,8 +10,8 @@ const STAGE_COLOR = {
 };
 
 // RMA history for one device serial: search, then a printable / downloadable report.
-export default function DeviceHistory({ sn }) {
-  return sn ? <History sn={sn} /> : <Search />;
+export default function DeviceHistory({ sn, user }) {
+  return sn ? <History sn={sn} user={user} /> : <Search />;
 }
 
 function Search() {
@@ -52,12 +52,14 @@ function Search() {
   );
 }
 
-function History({ sn }) {
+function History({ sn, user }) {
   const [d, setD] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [show] = useShow();
-  useEffect(() => { get(`/api/devices/history?${qs({ sn })}`).then(setD).catch(setError); }, [sn]);
+  const [tick, setTick] = useState(0);
+  const editable = can.edit(user);
+  useEffect(() => { get(`/api/devices/history?${qs({ sn })}`).then(setD).catch(setError); }, [sn, tick]);
   if (error) return <ErrorPanel error={error} />;
   if (!d) return <Skeleton rows={6} />;
   const s = d.summary;
@@ -69,15 +71,15 @@ function History({ sn }) {
     setBusy(true);
     try {
       const rows = d.tickets.map((t) => [t.ticket_no, fmtDate(new Date(t.created_at).toISOString().slice(0, 10)), t.customer_company || '', t.category || '', t.printer_model || '',
-        t.faulty_part || '', t.faulty_part_sn || '', t.tph_mileage ?? '', t.failure_description || '', t.oem_rma_number || '', t.oem_dispatch_date || '',
-        SHORT[t.status] || t.status, t.closed_at ? fmtDate(new Date(t.closed_at).toISOString().slice(0, 10)) : '', t.days ?? '', t.head_override_reason || t.dup_reason || '']);
+        t.faulty_part || '', t.faulty_part_sn || '', t.received_part_sn || '', t.tph_mileage ?? '', t.failure_description || '', t.oem_rma_number || '', t.oem_dispatch_date || '',
+        t.goods_received_date || '', SHORT[t.status] || t.status, t.closed_at ? fmtDate(new Date(t.closed_at).toISOString().slice(0, 10)) : '', t.days ?? '', [t.head_override_reason, t.part_sn_note, t.dup_reason].filter(Boolean).join(' · ')]);
       for (const t of d.asPart) rows.push([t.ticket_no, fmtDate(new Date(t.created_at).toISOString().slice(0, 10)), t.customer_company || '', t.category || '', t.printer_model || '',
-        `${t.faulty_part || ''} (this serial was the part, in device ${t.printer_sn || '?'})`, t.faulty_part_sn || '', '', t.failure_description || '', t.oem_rma_number || '', t.oem_dispatch_date || '',
-        SHORT[t.status] || t.status, '', t.days ?? '', '']);
+        `${t.faulty_part || ''} (this serial was the ${t.role === 'received' ? 'part received' : 'faulty part'}, in device ${t.printer_sn || '?'})`, t.faulty_part_sn || '', t.received_part_sn || '', '',
+        t.failure_description || '', t.oem_rma_number || '', t.oem_dispatch_date || '', t.goods_received_date || '', SHORT[t.status] || t.status, '', t.days ?? '', '']);
       const blob = await writeTable({ sheet: 'Device history', title: `RMA history — ${d.serial}`,
         subtitle: `${[s.categories.join('/'), s.models.join(', '), s.customers.join(', ')].filter(Boolean).join(' · ')} · ${s.total} RMAs, ${s.heads} print-head · generated ${fmtDate(todayISO())}`,
-        headers: ['RMA', 'Raised', 'Customer', 'Device', 'Model', 'Faulty part', 'Part serial', 'TPH mileage', 'Failure', 'OEM RMA', 'To OEM', 'Stage', 'Closed', 'Days', 'Notes'],
-        rows, widths: [22, 12, 24, 14, 14, 22, 18, 10, 36, 14, 12, 16, 12, 6, 36] });
+        headers: ['RMA', 'Raised', 'Customer', 'Device', 'Model', 'Faulty part', 'Faulty part serial (sent)', 'Received part serial (new)', 'TPH mileage', 'Failure', 'OEM RMA', 'To OEM', 'Back from OEM', 'Stage', 'Closed', 'Days', 'Notes'],
+        rows, widths: [22, 12, 24, 14, 14, 20, 20, 20, 10, 36, 16, 12, 12, 16, 12, 6, 36] });
       downloadBlob(blob, `Device_History_${d.serial}_${todayISO()}.xlsx`.replace(/[^\w.-]/g, '_'));
     } finally { setBusy(false); }
   }
@@ -100,17 +102,19 @@ function History({ sn }) {
         <div><b>{s.total}</b><span>RMAs</span></div>
         <div><b>{s.open}</b><span>Open now</span></div>
         <div style={overHeads ? { borderColor: 'var(--amber)', background: 'var(--amber-tint)' } : undefined}><b style={overHeads ? { color: 'var(--amber)' } : undefined}>{s.heads}{s.headLimit ? <small className="muted" style={{ fontSize: '0.85rem' }}> / {s.headLimit}</small> : null}</b><span>Print-head claims</span></div>
+        {s.currentHead && <div><b className="mono" style={{ fontSize: '1rem', fontWeight: 550 }}>{s.currentHead.received_part_sn}</b><span>Head fitted now (from {s.currentHead.ticket_no})</span></div>}
         <div><b>{s.avgDays ?? '—'}</b><span>Average days to close</span></div>
         <div><b style={{ fontSize: '1rem' }}>{s.first ? fmtMs(s.first) : '—'}</b><span>First RMA</span></div>
         <div><b style={{ fontSize: '1rem' }}>{s.last ? fmtMs(s.last) : '—'}</b><span>Latest RMA</span></div>
       </div>
 
+      {s.missingReceived > 0 && <div className="warnbox noprint" style={{ marginBottom: 14 }}>{s.missingReceived} RMA{s.missingReceived === 1 ? ' is' : 's are'} back from the OEM without the received part serial.{editable ? ' Enter it in the list below.' : ''}</div>}
       {overHeads && <div className="warnbox" style={{ marginBottom: 14 }}>This device has reached the print-head limit ({s.headLimit}). A new print-head RMA will need a reason.</div>}
       {d.cover !== undefined && <div style={{ marginBottom: 14 }}><CoverNote cover={d.cover || false} /></div>}
 
       <div className="dash-cols" style={{ marginTop: 0 }}>
         <section className="panel main">
-          <div className="spread" style={{ marginBottom: 14, gap: 10 }}><h2>Timeline</h2><ShowToggle className="small noprint" /></div>
+          <div className="spread" style={{ marginBottom: 14, gap: 10 }}><h2>RMAs and parts</h2><ShowToggle className="small noprint" /></div>
           {shown.length ? (
             <ol className="timeline">
               {[...shown].reverse().map((t) => (
@@ -121,8 +125,15 @@ function History({ sn }) {
                       <Status s={t.status} />
                     </div>
                     <b>{t.faulty_part || 'Part not set'}{t.head ? <span className="pill warn" style={{ marginLeft: 6 }}>Print head</span> : null}</b>
-                    <span className="muted small">{[t.customer_company, t.printer_model, t.faulty_part_sn && `part ${t.faulty_part_sn}`, t.tph_mileage != null && `TPH ${t.tph_mileage}`,
-                      t.oem_rma_number && `OEM RMA ${t.oem_rma_number}`, t.days != null && `closed in ${t.days} days`].filter(Boolean).join(' · ')}</span>
+                    <dl className="partkv">
+                      <dt>Faulty serial (sent)</dt><dd className="mono">{t.faulty_part_sn || '—'}</dd>
+                      <dt>Received serial (new)</dt><dd><ReceivedPartSn ticket={t} canEdit={editable} compact onSaved={() => setTick((n) => n + 1)} />{!t.canReceive && <span className="muted small">Not back yet</span>}</dd>
+                      {t.oem_rma_number && <><dt>OEM RMA</dt><dd className="mono">{t.oem_rma_number}</dd></>}
+                      {t.goods_received_date && <><dt>Back from OEM</dt><dd>{fmtDate(t.goods_received_date)}</dd></>}
+                    </dl>
+                    <span className="muted small">{[t.customer_company, t.printer_model, t.tph_mileage != null && `TPH ${t.tph_mileage}`,
+                      t.days != null && `closed in ${t.days} days`].filter(Boolean).join(' · ')}</span>
+                    {t.part_sn_note && <span className="small" style={{ color: 'var(--amber)' }}>Part serial note: {t.part_sn_note}</span>}
                     {t.failure_description && <span className="small">{t.failure_description}</span>}
                     {t.head_override_reason && <span className="small" style={{ color: 'var(--amber)' }}>Head limit override: {t.head_override_reason}</span>}
                   </div>
@@ -140,12 +151,12 @@ function History({ sn }) {
           </section>
           {d.asPart.length > 0 && (
             <section className="panel">
-              <h2>As a faulty part</h2>
-              <p className="muted small">This serial was the faulty part in another device.</p>
+              <h2>This serial as a part</h2>
+              <p className="muted small">Sent as a faulty part, or received from the OEM, in another device.</p>
               {d.asPart.map((t) => (
                 <Link key={t.id} to={`/rma/${t.id}`} className="linkrow">
                   <span style={{ display: 'grid' }}><span className="mono" style={{ fontSize: '0.82rem' }}>{t.ticket_no}</span>
-                    <span className="muted small">{t.faulty_part} in {t.printer_sn || '—'}</span></span>
+                    <span className="muted small">{t.role === 'received' ? 'Received' : 'Faulty'} {t.faulty_part} in {t.printer_sn || '—'}</span></span>
                   <Status s={t.status} />
                 </Link>
               ))}

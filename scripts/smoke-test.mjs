@@ -169,13 +169,27 @@ r = await owner('POST', '/api/batches', { ticketIds: [t1.id], dispatch_date: new
 ok(r.status === 200 && /^BATCH-\d{6}$/.test(r.data.batch.batch_code) && r.data.tickets[0].status === 'DISPATCHED_TO_OEM', 'batch created, ticket dispatched');
 r = await owner('DELETE', `/api/rma/${t1.id}`);
 ok(r.status === 409, 'cannot delete after OEM dispatch');
-for (const [action, data] of [['goods_received', {}], ['dispatch_customer', { challan_number: 'DC-77' }], ['close', { closure_remarks: 'Head replaced' }]]) {
+r = await owner('POST', `/api/rma/${t1.id}/action`, { action: 'goods_received', data: {} });
+ok(r.status === 422 && r.data.fields?.received_part_sn, 'goods received for a head asks for the new head serial');
+for (const [action, data] of [['goods_received', { received_part_sn: 'h-new 1' }], ['dispatch_customer', { challan_number: 'DC-77' }], ['close', { closure_remarks: 'Head replaced' }]]) {
   r = await owner('POST', `/api/rma/${t1.id}/action`, { action, data });
 }
-ok(r.status === 200 && r.data.ticket.status === 'CLOSED' && r.data.ticket.closure_type === 'REPAIRED', 'goods back → customer → closed');
+ok(r.status === 200 && r.data.ticket.status === 'CLOSED' && r.data.ticket.closure_type === 'REPAIRED' && r.data.ticket.received_part_sn === 'H-NEW1', 'goods back (new head serial saved) → customer → closed', r.data?.ticket?.received_part_sn);
 ok(r.data.events.length >= 6, 'history recorded');
+r = await owner('POST', `/api/rma/${t1.id}/received-part`, { received_part_sn: 'H-NEW-1' });
+ok(r.status === 200 && r.data.ticket.received_part_sn === 'H-NEW-1', 'received part serial corrected later');
+r = await owner('POST', `/api/rma/${t2.id}/received-part`, { received_part_sn: 'X1' });
+ok(r.status === 422, 'received serial only after goods are back');
+r = await owner('POST', '/api/rma/check-duplicates', { printer_sn: 'TEBT25370458', faulty_part: 'Print head', faulty_part_sn: '' });
+ok(r.data.partCheck?.last?.received_part_sn === 'H-NEW-1' && r.data.partCheck.match === null, 'new head RMA suggests the last received head serial');
+r = await owner('POST', '/api/rma/check-duplicates', { printer_sn: 'TEBT25370458', faulty_part: 'Head', faulty_part_sn: 'hnew1' });
+ok(r.data.partCheck?.match === true, 'entered serial matches last received head');
 r = await owner('POST', '/api/rma', { ticket: { ...base } });
-ok(r.status === 200, 'closed RMA no longer blocks a new one for same part');
+ok(r.status === 409 && r.data.code === 'part_serial_mismatch' && r.data.partCheck?.last?.ticket_no === t1.ticket_no, 'different head serial than last received is challenged');
+r = await owner('GET', '/api/rma?q=H-NEW-1');
+ok(r.data.rows.some((t) => t.id === t1.id), 'search by received part serial');
+r = await owner('POST', '/api/rma', { ticket: { ...base }, partSnNote: 'Customer fitted an old spare head' });
+ok(r.status === 200 && r.data.ticket.part_sn_note?.startsWith('Customer fitted'), 'closed RMA no longer blocks a new one; serial difference reason saved');
 
 console.log('Dashboard, reminders, import, masters');
 r = await owner('GET', '/api/dashboard');
@@ -229,10 +243,10 @@ r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Thermal p
 ok(r.status === 409 && r.data.code === 'head_limit' && r.data.heads?.tickets?.length === 2, 'third head RMA needs a reason');
 r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Head cable', faulty_part_sn: 'HC-1' } });
 ok(r.status === 200, 'head cable is not a print head');
-r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Thermal print head', faulty_part_sn: 'H-3' }, headReason: 'OEM approved third head' });
+r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Thermal print head', faulty_part_sn: 'H-3' }, headReason: 'OEM approved third head', partSnNote: 'Spare head' });
 ok(r.status === 200 && r.data.ticket.head_override_reason?.startsWith('OEM approved third head') && r.data.ticket.head_override_by?.includes('(Admin)'), 'head override with reason stamped on RMA', r.data?.ticket?.head_override_by);
 const tHead = r.data.ticket;
-r = await owner('POST', '/api/rma', { ticket: { ...base, category_id: mt.id, printer_sn: 'TEBT25370458', faulty_part: 'Head', faulty_part_sn: 'H-4' } });
+r = await owner('POST', '/api/rma', { ticket: { ...base, category_id: mt.id, printer_sn: 'TEBT25370458', faulty_part: 'Head', faulty_part_sn: 'H-4' }, partSnNote: 'Test' });
 ok(r.status === 200 && r.data.ticket.category === 'Mobile terminal', 'mobile terminal: no print-head limit');
 r = await owner('GET', '/api/rma?view=heads');
 ok(r.data.rows.length === 1 && r.data.rows[0].id === tHead.id, 'list view: head limit overridden');
@@ -244,6 +258,9 @@ r = await owner('GET', '/api/devices?q=37045');
 ok(r.data.some((d) => d.serial === 'TEBT25370458'), 'device search by part of serial');
 r = await owner('GET', '/api/devices/history?sn=tebt 25370458');
 ok(r.status === 200 && r.data.summary.total >= 6 && r.data.summary.heads === 4 && r.data.tickets.some((t) => t.head_override_reason), 'device history with summary and head count', r.data?.summary);
+ok(r.data.summary.currentHead?.received_part_sn === 'H-NEW-1', 'device history shows the head fitted now');
+r = await owner('GET', '/api/devices/history?sn=HNEW1');
+ok(r.data.asPart.some((t) => t.role === 'received'), 'device history finds a serial received as a new part');
 r = await owner('GET', '/api/devices/history?sn=H1001');
 ok(r.data.asPart.length >= 1, 'device history finds a serial used as faulty part');
 r = await owner('GET', '/api/devices/history?sn=a');

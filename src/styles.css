@@ -34,6 +34,7 @@
   --radius: 10px;
   --shadow: none;
   --float: 0 10px 30px rgba(22, 38, 61, 0.14);
+  --font: 'Manrope Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: light;
@@ -529,3 +530,14 @@ table.data tr.selected td { background: var(--accent-tint); }
 /* Ticket numbers and serials: mono at a regular weight reads cleaner than bold. */
 .mono, .tcard .no, .qrow .no, input.upper, .codes, .cochip b { font-weight: 500; }
 h1.mono { font-weight: 550; letter-spacing: -0.01em; }
+/* Received part serial */
+.rsn { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rsn-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rsn-form input { flex: 1 1 160px; min-width: 0; min-height: 40px; padding: 6px 10px; }
+.snpair { font-family: var(--mono); font-size: 0.8rem; color: var(--text-2); }
+.snpair .arrow { color: var(--muted); margin: 0 4px; font-family: inherit; }
+.snpair .new { color: var(--ok); }
+.partkv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 12px; margin: 2px 0; font-size: 0.88rem; align-items: center; }
+.partkv dt { color: var(--text-2); }
+.partkv dd { margin: 0; }
+@media (max-width: 519px) { .partkv { grid-template-columns: 1fr; gap: 0 0; } .partkv dd { margin-bottom: 6px; } }

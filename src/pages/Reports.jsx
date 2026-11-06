@@ -25,15 +25,15 @@ export default function Reports({ user, boot }) {
         sheet: 'RMA Report',
         title: `${user.company.name} — RMA report`,
         subtitle: `${fmtDate(applied.from)} to ${fmtDate(applied.to)}${applied.status ? ` · ${boot.statuses.find((s) => s.value === applied.status)?.label}` : ''}${applied.customer ? ` · customer "${applied.customer}"` : ''} · ${rows.length} RMAs`,
-        headers: ['Ticket', 'Status', 'Raised', 'Age (days)', 'Customer', 'City', 'Contact', 'Phone', 'PO number', 'Model', 'Serial', 'Faulty part', 'Part serial', 'Part number',
+        headers: ['Ticket', 'Status', 'Raised', 'Age (days)', 'Customer', 'City', 'Contact', 'Phone', 'PO number', 'Model', 'Serial', 'Faulty part', 'Part serial (sent)', 'Received part serial', 'Part number',
           'Failure', 'TPH mileage', 'Printer mileage', 'FW', 'Purchase date', 'OEM RMA #', 'OEM RMA date', 'OEM email sent', 'Batch', 'Dispatched to OEM',
           'Back from OEM', 'Challan', 'Dispatched to customer', 'Closed', 'Closure', 'Remarks', 'Photos in', 'Photos out', 'Imported'],
-        widths: [22, 18, 12, 9, 26, 12, 16, 14, 14, 12, 18, 16, 16, 14, 34, 10, 10, 10, 12, 18, 12, 16, 16, 12, 12, 14, 12, 16, 10, 24, 8, 8, 8],
+        widths: [22, 18, 12, 9, 26, 12, 16, 14, 14, 12, 18, 16, 16, 16, 14, 34, 10, 10, 10, 12, 18, 12, 16, 16, 12, 12, 14, 12, 16, 10, 24, 8, 8, 8],
         rows: rows.map((t) => [t.ticket_no, t.status_label, fmtMs(t.created_at), ageDays(t.created_at), t.customer_company, t.customer_city, t.customer_contact_name,
-          t.customer_phone, t.po_number, t.printer_model, t.printer_sn, t.faulty_part, t.faulty_part_sn, t.faulty_part_no, t.failure_description,
+          t.customer_phone, t.po_number, t.printer_model, t.printer_sn, t.faulty_part, t.faulty_part_sn, t.received_part_sn, t.faulty_part_no, t.failure_description,
           t.tph_mileage, t.printer_mileage, t.fw_version, t.purchase_date, t.oem_rma_number, t.oem_rma_assign_date, t.oem_email_sent_at ? fmtMs(t.oem_email_sent_at, true) : '',
           t.batch_code, t.oem_dispatch_date, t.goods_received_date, t.challan_number, t.dispatch_to_customer_date, t.closed_at ? fmtMs(t.closed_at) : '',
-          t.closure_type, t.closure_remarks, t.inbound_photos, t.outbound_photos, t.is_imported ? 'Yes' : '']),
+          t.closure_type, [t.closure_remarks, t.part_sn_note].filter(Boolean).join(' · '), t.inbound_photos, t.outbound_photos, t.is_imported ? 'Yes' : '']),
       });
       downloadBlob(blob, `RMA_Report_${user.company.code}_${todayISO()}.xlsx`);
     } catch (e) {

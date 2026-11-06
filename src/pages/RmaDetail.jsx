@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { api, del, downloadBlob, get, post, shareFile, uploadPhoto } from '../api.js';
 import { blobToBase64, fillOemTemplate } from '../excel.js';
 import {
-  Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, Stepper, ageDays, can, copyText, fmtDate, fmtMs, navigate, todayISO, useLoad, useToast,
+  Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, Stepper, ageDays, can, copyText, fmtDate, fmtMs, navigate, todayISO, useLoad, useToast, ReceivedPartSn, RECEIVED_STAGES, isHeadPart,
 } from '../ui.jsx';
 import { CoverNote } from './CarePackLink.jsx';
 
@@ -165,6 +165,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
               <dt>Serial number</dt><dd className="mono">{t.printer_sn || '—'}{data.otherTicketsOnPrinter ? <Link to={`/devices/${encodeURIComponent(t.printer_sn)}`} className="small" style={{ marginLeft: 8 }}>{data.otherTicketsOnPrinter} other RMA{data.otherTicketsOnPrinter === 1 ? '' : 's'}</Link> : null}</dd>
               <dt>Faulty part</dt><dd>{t.faulty_part || '—'}</dd>
               <dt>Part serial</dt><dd className="mono">{t.faulty_part_sn || '—'}</dd>
+              {RECEIVED_STAGES.includes(t.status) && <><dt>Received part serial</dt><dd><ReceivedPartSn ticket={t} canEdit={editable} onSaved={() => after('Received part serial saved')} /></dd></>}
               <dt>Part number</dt><dd>{t.faulty_part_no || '—'}</dd>
               {(isPrinter || t.tph_mileage != null) && <><dt>TPH mileage</dt><dd>{t.tph_mileage ?? '—'}</dd></>}
               {(isPrinter || t.printer_mileage != null) && <><dt>Printer mileage</dt><dd>{t.printer_mileage ?? '—'}</dd></>}
@@ -208,6 +209,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
             <dt>Dispatched to OEM</dt><dd>{fmtDate(t.oem_dispatch_date)}</dd>
             <dt>Batch</dt><dd>{t.batch_code ? <Link to={`/batches/${t.batch_code}`}>{t.batch_code}</Link> : '—'}</dd>
             <dt>Goods back from OEM</dt><dd>{fmtDate(t.goods_received_date)}</dd>
+            <dt>Received part serial</dt><dd><ReceivedPartSn ticket={t} canEdit={editable} onSaved={() => after('Received part serial saved')} /></dd>
             <dt>Delivery challan</dt><dd>{t.challan_number ? `${t.challan_number} · ${fmtDate(t.challan_date)}` : '—'}</dd>
             <dt>Dispatched to customer</dt><dd>{fmtDate(t.dispatch_to_customer_date)}{t.dispatch_docket ? ` · ${t.dispatch_docket}` : ''}</dd>
             <dt>Closed</dt><dd>{t.closed_at ? `${fmtMs(t.closed_at, true)} · ${t.closure_type === 'REPAIRED' ? 'Repaired' : 'Returned'}` : '—'}</dd>
@@ -243,6 +245,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
 }
 
 function ActionDialog({ action, ticket, settings, onClose, after }) {
+  const headPart = isHeadPart(ticket.faulty_part);
   const toast = useToast();
   const [challanBusy, setChallanBusy] = useState(false);
   const challanOk = settings?.challan_enabled !== '0' && settings?.zoho_connected;
@@ -257,7 +260,7 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
     } finally { setChallanBusy(false); }
   }
   const [d, setD] = useState({
-    oem_rma_number: '', oem_rma_assign_date: todayISO(), goods_received_date: todayISO(),
+    oem_rma_number: '', oem_rma_assign_date: todayISO(), goods_received_date: todayISO(), received_part_sn: '', noSerial: false,
     dispatch_to_customer_date: todayISO(), challan_number: '', challan_date: todayISO(), dispatch_docket: '', closure_remarks: '',
   });
   const [errors, setErrors] = useState({});
@@ -267,6 +270,7 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
   async function go(e) {
     e.preventDefault();
     if (action === 'oem_rma' && !d.oem_rma_number.trim()) return setErrors({ oem_rma_number: 'Enter the OEM RMA number' });
+    if (action === 'goods_received' && headPart && !d.received_part_sn.trim() && !d.noSerial) return setErrors({ received_part_sn: 'Enter the serial number of the head received from the OEM' });
     setBusy(true);
     try {
       await post(`/api/rma/${ticket.id}/action`, { action, data: { ...d, allowSame: confirmSame } });
@@ -292,8 +296,15 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
           {errors.sameAsk && <label className="check"><input type="checkbox" checked={confirmSame} onChange={(e) => setConfirmSame(e.target.checked)} />The OEM gave one RMA # for several tickets — use it anyway</label>}
           <Field label="Received on"><input type="date" max={todayISO()} value={d.oem_rma_assign_date} onChange={set('oem_rma_assign_date')} /></Field>
         </>}
-        {action === 'goods_received' && <Field label="Received from OEM on" error={errors.goods_received_date}>
-          <input type="date" max={todayISO()} value={d.goods_received_date} onChange={set('goods_received_date')} /></Field>}
+        {action === 'goods_received' && <>
+          <Field label={headPart ? 'Serial number of the head received' : 'Serial number of the part received'} required={headPart && !d.noSerial} error={errors.received_part_sn}
+            hint={`Faulty part sent was ${ticket.faulty_part || 'the part'}${ticket.faulty_part_sn ? ` ${ticket.faulty_part_sn}` : ''}. Shows in the device history.`}>
+            <input type="text" className="upper" autoFocus value={d.received_part_sn} onChange={set('received_part_sn')} disabled={d.noSerial} />
+          </Field>
+          {headPart && <label className="check"><input type="checkbox" checked={d.noSerial} onChange={(e) => setD({ ...d, noSerial: e.target.checked, received_part_sn: '' })} />No serial on the received head — I'll add it later</label>}
+          <Field label="Received from OEM on" error={errors.goods_received_date}>
+            <input type="date" max={todayISO()} value={d.goods_received_date} onChange={set('goods_received_date')} /></Field>
+        </>}
         {action === 'dispatch_customer' && <>
           <Field label="Dispatched on"><input type="date" max={todayISO()} value={d.dispatch_to_customer_date} onChange={set('dispatch_to_customer_date')} /></Field>
           <div className="fields">

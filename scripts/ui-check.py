@@ -322,6 +322,7 @@ with sync_playwright() as p:
     d3.click('main a.btn:has-text("Device history")')
     d3.wait_for_selector('.kpis')
     ok('TEBT25370458' in d3.inner_text('h1'), 'device history opens from the RMA')
+    ok(d3.locator('.partkv dt:has-text("Received serial (new)")').count() >= 1, 'device history shows sent and received part serials')
     d3.screenshot(path=f'{OUT}/26-device-history.png', full_page=True)
     d3.goto(BASE + '/devices')
     d3.get_by_label('Device serial number').fill('25370')

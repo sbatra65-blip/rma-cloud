@@ -1,4 +1,5 @@
 import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from 'react';
+import { post as apiPost } from './api.js';
 
 // ---------- Version (filled in at build time from package.json) ----------
 export function VersionLabel() {
@@ -313,5 +314,51 @@ export function ShowToggle({ className = '' }) {
       <button type="button" role="radio" aria-checked={v === 'active'} onClick={() => set('active')}>Active only</button>
       <button type="button" role="radio" aria-checked={v === 'all'} onClick={() => set('all')}>All</button>
     </div>
+  );
+}
+
+// Same rule as the server (worker/devices.js): "Head", "Print head", "TPH"… but not "Head cable".
+export function isHeadPart(part) {
+  const p = String(part || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!p) return false;
+  if (/\b(cable|sensor|bracket|spring|cover|lever|connector|cleaner|pen)\b/.test(p)) return false;
+  if (/\btph\b/.test(p)) return true;
+  const core = p.replace(/\b(assy|assembly|unit|kit|module|replacement|new|set|dpi|mm|inch|for|the|of|and)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(thermal )?(print ?)?head$/.test(core);
+}
+export const RECEIVED_STAGES = ['GOODS_RECEIVED_FROM_OEM', 'DISPATCHED_TO_CUSTOMER', 'CLOSED', 'CLOSED_RETURNED'];
+
+// Serial of the part received back from the OEM: shows it, and lets editors add or correct it.
+export function ReceivedPartSn({ ticket, canEdit, onSaved, compact = false }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(ticket.received_part_sn || '');
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const back = RECEIVED_STAGES.includes(ticket.status);
+  if (!back) return compact ? null : <span className="muted">Not back from the OEM yet</span>;
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await apiPost(`/api/rma/${ticket.id}/received-part`, { received_part_sn: v });
+      setEditing(false); setErr(null);
+      onSaved?.(r.ticket);
+    } catch (x) { setErr(x.fields?.received_part_sn || x.message); } finally { setBusy(false); }
+  }
+  if (!editing && ticket.received_part_sn) {
+    return (
+      <span className="rsn"><span className="mono">{ticket.received_part_sn}</span>
+        {canEdit && <button type="button" className="linkbtn small" onClick={() => setEditing(true)}>Change</button>}</span>
+    );
+  }
+  if (!canEdit) return <span className="pill warn">Serial not recorded</span>;
+  return (
+    <form className="rsn-form" onSubmit={save}>
+      <input type="text" className="upper" value={v} onChange={(e) => setV(e.target.value)} placeholder={isHeadPart(ticket.faulty_part) ? 'New head serial' : 'Received part serial'}
+        aria-label={`Received part serial for ${ticket.ticket_no}`} autoFocus={editing} />
+      <button className="btn primary small" disabled={busy || !v.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+      {editing && <button type="button" className="btn ghost small" onClick={() => { setEditing(false); setV(ticket.received_part_sn || ''); setErr(null); }}>Cancel</button>}
+      {err && <span className="small" style={{ color: 'var(--rust)', flexBasis: '100%' }}>{err}</span>}
+    </form>
   );
 }

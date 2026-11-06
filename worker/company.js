@@ -2,13 +2,13 @@
 // Nothing here can see any other company's data. Business rules are ported from the
 // original RMASystem.Web services (TicketService, BatchService, ImportService, OemEmailService).
 import { migrateMethods } from './migrate.js';
-import { deviceMethods, migrateV3 } from './devices.js';
+import { deviceMethods, isHeadPart, migrateV3, migrateV4 } from './devices.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
 import { CP_DEFAULTS, carePackMethods, migrateCarePack } from './carepack.js';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const CHUNK = 1_500_000; // bytes per stored file chunk (row limit is 2 MB)
 const TEMPLATE_ID = 'oem-template';
 
@@ -132,6 +132,7 @@ export class Company extends DurableObject {
     if (v < 2) migrateCarePack(this.sql);
     if (v >= 1) {
       if (v < 3) migrateV3(this.sql);
+      if (v < 4) migrateV4(this.sql);
       this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
       return;
     }
@@ -191,6 +192,7 @@ export class Company extends DurableObject {
       CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
     `);
     migrateV3(this.sql);
+    migrateV4(this.sql);
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
   }
 
@@ -211,7 +213,7 @@ export class Company extends DurableObject {
     const PERMS = {
       // read: everyone in the company
       bootstrap: 'read', dashboard: 'read', listTickets: 'read', getTicket: 'read', checkDuplicates: 'read', emailContext: 'read',
-      deviceHistory: 'read', searchDevices: 'read', bulkClose: 'edit',
+      deviceHistory: 'read', searchDevices: 'read', bulkClose: 'edit', setReceivedPart: 'edit',
       getPhoto: 'read', listBatches: 'read', getBatch: 'read', batchCandidates: 'read', reminders: 'read', getTemplate: 'read',
       listMasters: 'read', importLog: 'read',
       // edit: everyone except Viewer
@@ -485,7 +487,8 @@ export class Company extends DurableObject {
         sameMachine.push(brief(t));
       }
     }
-    return { blocks: blocks.slice(0, 20), sameMachine: sameMachine.slice(0, 20), heads };
+    const partCheck = this.lastPartCheck({ printer_sn_norm: productSn, faulty_part, faulty_part_sn }, excludeId);
+    return { blocks: blocks.slice(0, 20), sameMachine: sameMachine.slice(0, 20), heads, partCheck };
   }
 
   // ---------- Tickets ----------
@@ -535,7 +538,7 @@ export class Company extends DurableObject {
     };
   }
 
-  createTicket(user, { ticket, overrideReason, addToCarePack, headReason }) {
+  createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote }) {
     const v = this.checkTicket(ticket);
     // New RMAs: the customer is chosen from the customer list (dropdown), so names stay consistent for reports.
     const cust = v.customer_id ? this.one('SELECT id, name, active FROM customers WHERE id = ?', v.customer_id) : null;
@@ -544,17 +547,19 @@ export class Company extends DurableObject {
     const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
     const head = this.applyHeadGate(user, v, headReason);
+    const psn = this.applyPartSerialGate(v, partSnNote, 0);
     if (!device && addToCarePack) {
       this.cpAddOverrideSerial(user, { serial: v.printer_sn, reason: addToCarePack.reason, batchId: addToCarePack.batchId, customer: v.customer_company, model: v.printer_model });
     }
     const now = Date.now();
     const ticketNo = this.nextTicketNo(user.ticketPrefix || 'INF', istParts(now).ym);
-    const row = { ...v, ...dup, ...head, ticket_no: ticketNo, status: STATUS.OPEN, created_at: now, updated_at: now, created_by: user.name, updated_by: user.name };
+    const row = { ...v, ...dup, ...head, ...psn, ticket_no: ticketNo, status: STATUS.OPEN, created_at: now, updated_at: now, created_by: user.name, updated_by: user.name };
     const cols = Object.keys(row);
     this.sql.exec(`INSERT INTO tickets (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
     const id = this.one('SELECT last_insert_rowid() AS id').id;
     this.event(id, user, 'created', [dup.dup_reason ? `Duplicate override: ${overrideReason}` : null,
-      head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null].filter(Boolean).join(' · ') || null);
+      head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null,
+      psn.part_sn_note ? `Part serial differs from last received: ${psn.part_sn_note}` : null].filter(Boolean).join(' · ') || null);
     this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason, headOverride: !!head.head_override_reason });
     return this.getTicket(user, { id });
   }
@@ -641,8 +646,13 @@ export class Company extends DurableObject {
       set = { status: STATUS.OEM_RECEIVED, oem_rma_number: v.oem_rma_number, oem_rma_assign_date: v.oem_rma_assign_date || d };
       note = v.oem_rma_number;
     } else if (action === 'goods_received') {
-      const v = new Checker(data).date('goods_received_date', { label: 'Date received', notFuture: true }).done();
+      const v = new Checker(data).date('goods_received_date', { label: 'Date received', notFuture: true })
+        .text('received_part_sn', { max: 100, label: 'Received part serial' }).done();
+      const rsn = String(v.received_part_sn || '').replace(/\s+/g, '').toUpperCase();
+      if (!rsn && isHeadPart(t.faulty_part) && !data.noSerial) throw new ValidationError({ received_part_sn: 'Enter the serial number of the head received from the OEM' });
       set = { status: STATUS.GOODS_RECEIVED, goods_received_date: v.goods_received_date || d };
+      if (rsn) Object.assign(set, { received_part_sn: rsn, received_part_sn_norm: normSn(rsn), received_part_at: now, received_part_by: user.name });
+      note = rsn ? `Received part serial ${rsn}` : null;
     } else if (action === 'dispatch_customer') {
       const v = new Checker(data).date('dispatch_to_customer_date', { label: 'Dispatch date', notFuture: true })
         .text('challan_number', { max: 100, label: 'Challan number' }).date('challan_date', { label: 'Challan date', notFuture: true })
@@ -718,9 +728,9 @@ export class Company extends DurableObject {
       const s = `%${String(q).trim().slice(0, 100)}%`;
       const sn = normSn(q);
       where.push(`(ticket_no LIKE ? OR printer_sn LIKE ? OR customer_company LIKE ? OR oem_rma_number LIKE ? OR printer_model LIKE ?
-        OR faulty_part LIKE ? OR faulty_part_sn LIKE ? OR po_number LIKE ? OR challan_number LIKE ?${sn ? ' OR printer_sn_norm = ? OR faulty_part_sn_norm = ?' : ''})`);
-      args.push(s, s, s, s, s, s, s, s, s);
-      if (sn) args.push(sn, sn);
+        OR faulty_part LIKE ? OR faulty_part_sn LIKE ? OR received_part_sn LIKE ? OR po_number LIKE ? OR challan_number LIKE ?${sn ? ' OR printer_sn_norm = ? OR faulty_part_sn_norm = ? OR received_part_sn_norm = ?' : ''})`);
+      args.push(s, s, s, s, s, s, s, s, s, s);
+      if (sn) args.push(sn, sn, sn);
     }
     const lim = Math.min(Math.max(Number(limit) || 500, 1), 5000);
     const rows = this.all(
