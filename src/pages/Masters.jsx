@@ -7,6 +7,7 @@ const KINDS = {
   oems: { label: 'OEMs', one: 'OEM' },
   products: { label: 'Products', one: 'product' },
   models: { label: 'Models', one: 'model' },
+  categories: { label: 'Device categories', one: 'device category' },
   cp_types: { label: 'Care pack types', one: 'care pack type' },
 };
 
@@ -25,7 +26,8 @@ export default function Masters({ user, boot, reloadBoot }) {
     customers: [r.code, r.city, r.contact_name, r.phone, r.gstin].filter(Boolean).join(' · '),
     oems: r.code,
     products: `${r.code} · ${oemName(r.oem_id)}`,
-    models: `${r.name} · ${product(r.product_id)?.name || '—'} · ${oemName(product(r.product_id)?.oem_id)}`,
+    models: `${r.name} · ${product(r.product_id)?.name || '—'} · ${oemName(product(r.product_id)?.oem_id)}${r.category_id ? ` · ${(m.categories || []).find((c) => c.id === r.category_id)?.name || ''}` : ''}`,
+    categories: `${r.code} · ${r.has_head ? 'Has a print head (head-claim limit applies)' : 'No print head'}`,
     cp_types: `${r.duration_years} year${r.duration_years === 1 ? '' : 's'} of cover`,
   }[kind]);
 
@@ -125,6 +127,14 @@ function EditDialog({ kind, record, masters, onClose, onSaved }) {
                 {masters.products.map((p) => <option key={p.id} value={p.id}>{masters.oems.find((o) => o.id === p.oem_id)?.code} · {p.name}</option>)}</select>
             </Field>
             {text('code', 'Model code', { req: true, hint: 'As printed on the RMA, e.g. TE310' })}{text('name', 'Description', { req: true })}
+            <Field label="Device category" hint="Picks the category on a new RMA for this model" className="wide">
+              <select value={f.category_id || ''} onChange={set('category_id')}><option value="">Not set</option>
+                {(masters.categories || []).filter((c) => c.active || c.id === f.category_id).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            </Field>
+          </>}
+          {kind === 'categories' && <>
+            {text('code', 'Code', { req: true, upper: true, hint: 'e.g. MT' })}{text('name', 'Name', { req: true, hint: 'e.g. Mobile terminal, Scanner' })}
+            <label className="check wide"><input type="checkbox" checked={!!f.has_head} onChange={set('has_head')} />Has a print head (asks for printer and TPH mileage, and the print-head claim limit applies)</label>
           </>}
           {kind === 'cp_types' && <>{text('name', 'Name', { req: true, hint: 'e.g. 3 Year' })}{text('duration_years', 'Cover (years)', { req: true, type: 'number', hint: 'Cover ends this many years after the sales invoice date' })}</>}
         </div>

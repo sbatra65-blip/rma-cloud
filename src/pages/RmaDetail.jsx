@@ -6,6 +6,20 @@ import {
 } from '../ui.jsx';
 import { CoverNote } from './CarePackLink.jsx';
 
+// What happens next, in words, for the pinned card at the top of an RMA.
+function nextStep(t) {
+  const since = (d) => (d ? Math.max(0, Math.round((Date.now() - Date.parse(`${d}T00:00:00+05:30`)) / 86400000)) : null);
+  switch (t.status) {
+    case 'OPEN': return ['Next step: send it to the OEM', t.excel_generated_at ? 'OEM Excel is ready. Email it to the OEM, or mark it sent.' : 'Make the OEM Excel, then email it to the OEM.'];
+    case 'AWAITING_OEM_RMA': return ['Next step: OEM RMA number', t.oem_email_sent_at ? `Emailed to the OEM ${fmtMs(t.oem_email_sent_at)}. Enter the OEM RMA number when it arrives.` : 'Enter the OEM RMA number when the OEM replies.'];
+    case 'OEM_RMA_RECEIVED': return ['Next step: dispatch to the OEM', `OEM RMA ${t.oem_rma_number || ''} received. Add it to this month's OEM batch.`];
+    case 'DISPATCHED_TO_OEM': { const d = since(t.oem_dispatch_date); return ['Next step: goods back from the OEM', d !== null ? `At the OEM for ${d} day${d === 1 ? '' : 's'}${t.oem_rma_number ? ` (OEM RMA ${t.oem_rma_number})` : ''}.` : 'Waiting for the OEM to send it back.']; }
+    case 'GOODS_RECEIVED_FROM_OEM': return ['Next step: send it to the customer', 'Create the delivery challan and dispatch.'];
+    case 'DISPATCHED_TO_CUSTOMER': return ['Next step: close the RMA', 'Close it once the customer confirms.'];
+    default: return null;
+  }
+}
+
 const ACTIONS = {
   mark_sent: { label: 'Mark sent to OEM', icon: 'mail', cls: 'ghost', help: 'Use this if you emailed the OEM outside the app.' },
   oem_rma: { label: 'Enter OEM RMA #', icon: 'edit', cls: 'primary' },
@@ -40,6 +54,8 @@ export default function RmaDetail({ user, boot, id, onChange }) {
   const inbound = photos.filter((p) => p.direction === 'INBOUND');
   const outbound = photos.filter((p) => p.direction === 'OUTBOUND');
   const editable = can.edit(user);
+  const cat = (boot?.masters?.categories || []).find((c) => c.id === t.category_id);
+  const isPrinter = cat ? !!cat.has_head : !t.category || t.category === 'Printer';
   const after = async (msg) => { await reload(); onChange?.(); if (msg) toast(msg); };
 
   async function excel(mode) {
@@ -77,12 +93,14 @@ export default function RmaDetail({ user, boot, id, onChange }) {
           <h1 className="mono" style={{ fontSize: '1.35rem' }}>{t.ticket_no}</h1>
           <p className="row tight" style={{ marginTop: 6 }}>
             <Status s={t.status} label={t.status_label} />
-            <span className="muted small">{t.customer_company} · raised {fmtMs(t.created_at)} by {t.created_by || '—'} · {ageDays(t.created_at)} days</span>
+            <span className="small" style={{ fontWeight: 700 }}>{t.customer_company}</span>
+            <span className="muted small">{[t.category, t.printer_model, t.faulty_part].filter(Boolean).join(' · ')} · raised {fmtMs(t.created_at)} by {t.created_by || '—'} · {ageDays(t.created_at)} days</span>
             {t.is_imported ? <span className="pill">Imported</span> : null}
           </p>
         </div>
         <div className="row noprint">
-          {editable && <Link to={`/rma/new?from=${t.id}`} className="btn ghost small" title="Same printer, another faulty part"><Icon name="plus" size={16} /> Another part, same printer</Link>}
+          {t.printer_sn && <Link to={`/devices/${encodeURIComponent(t.printer_sn)}`} className="btn ghost small"><Icon name="history" size={16} /> Device history</Link>}
+          {editable && <Link to={`/rma/new?from=${t.id}`} className="btn ghost small" title="Same device, another faulty part"><Icon name="plus" size={16} /> Another part, same device</Link>}
           {editable && <Link to={`/rma/${t.id}/edit`} className="btn ghost small"><Icon name="edit" size={16} /> Edit</Link>}
           {data.canDelete && <button className="btn danger small" onClick={() => setDlg('delete')}><Icon name="trash" size={16} /> Delete</button>}
         </div>
@@ -90,13 +108,18 @@ export default function RmaDetail({ user, boot, id, onChange }) {
 
       <section className="panel">
         <Stepper status={t.status} />
-        {editable && data.nextActions.length > 0 && (
-          <div className="actionbar" style={{ marginTop: 16 }}>
-            {data.nextActions.map((a) => (
-              <button key={a} className={`btn ${ACTIONS[a].cls}`} onClick={() => setDlg(a)} title={ACTIONS[a].help}>
-                <Icon name={ACTIONS[a].icon} size={18} /> {ACTIONS[a].label}</button>
-            ))}
-            {t.status === 'OEM_RMA_RECEIVED' && <Link to="/batches" className="btn ghost"><Icon name="truck" size={18} /> Add to OEM batch</Link>}
+        {nextStep(t) && (
+          <div className="nextstep" style={{ marginTop: 16 }}>
+            <div><h2>{nextStep(t)[0]}</h2><p>{nextStep(t)[1]}</p></div>
+            {editable && data.nextActions.length > 0 && (
+              <div className="row">
+                {t.status === 'OEM_RMA_RECEIVED' && <Link to="/batches" className="btn ghost"><Icon name="truck" size={18} /> Add to OEM batch</Link>}
+                {[...data.nextActions].reverse().map((a) => (
+                  <button key={a} className={`btn ${ACTIONS[a].cls}`} onClick={() => setDlg(a)} title={ACTIONS[a].help}>
+                    <Icon name={ACTIONS[a].icon} size={18} /> {ACTIONS[a].label}</button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <div className="actionbar" style={{ marginTop: 10 }}>
@@ -119,6 +142,9 @@ export default function RmaDetail({ user, boot, id, onChange }) {
           Other open RMAs on this printer: {sameMachine.map((s, i) => <span key={s.id}>{i ? ', ' : ''}<Link to={`/rma/${s.id}`}>{s.ticket_no}</Link> ({s.faulty_part || '—'}, {s.status_label})</span>)}
         </div>
       )}
+      {t.head_override_reason && (
+        <div className="warnbox" style={{ marginTop: 14 }}>Print-head limit overridden by {t.head_override_by} on {fmtMs(t.head_override_at, true)}: {t.head_override_reason}</div>
+      )}
       {t.dup_reason && (
         <div className="warnbox" style={{ marginTop: 14 }}>Raised with a duplicate override by {t.dup_by} on {fmtMs(t.dup_at, true)}: {t.dup_reason}</div>
       )}
@@ -132,17 +158,18 @@ export default function RmaDetail({ user, boot, id, onChange }) {
       {tab === 'details' && (
         <div className="grid2">
           <section className="panel">
-            <h2>Product and fault</h2>
+            <h2>Device and fault</h2>
             <dl className="kv">
+              <dt>Device</dt><dd>{t.category || 'Printer'}</dd>
               <dt>Model</dt><dd>{t.printer_model || '—'}</dd>
-              <dt>Serial number</dt><dd className="mono">{t.printer_sn || '—'}{data.otherTicketsOnPrinter ? <Link to={`/rma?q=${encodeURIComponent(t.printer_sn)}&open=`} className="small" style={{ marginLeft: 8 }}>{data.otherTicketsOnPrinter} other RMA{data.otherTicketsOnPrinter === 1 ? '' : 's'}</Link> : null}</dd>
+              <dt>Serial number</dt><dd className="mono">{t.printer_sn || '—'}{data.otherTicketsOnPrinter ? <Link to={`/devices/${encodeURIComponent(t.printer_sn)}`} className="small" style={{ marginLeft: 8 }}>{data.otherTicketsOnPrinter} other RMA{data.otherTicketsOnPrinter === 1 ? '' : 's'}</Link> : null}</dd>
               <dt>Faulty part</dt><dd>{t.faulty_part || '—'}</dd>
               <dt>Part serial</dt><dd className="mono">{t.faulty_part_sn || '—'}</dd>
               <dt>Part number</dt><dd>{t.faulty_part_no || '—'}</dd>
-              <dt>TPH mileage</dt><dd>{t.tph_mileage ?? '—'}</dd>
-              <dt>Printer mileage</dt><dd>{t.printer_mileage ?? '—'}</dd>
+              {(isPrinter || t.tph_mileage != null) && <><dt>TPH mileage</dt><dd>{t.tph_mileage ?? '—'}</dd></>}
+              {(isPrinter || t.printer_mileage != null) && <><dt>Printer mileage</dt><dd>{t.printer_mileage ?? '—'}</dd></>}
               <dt>Firmware</dt><dd>{t.fw_version || '—'}</dd>
-              <dt>Flash initialised</dt><dd>{t.flash_initialized || '—'}</dd>
+              {(isPrinter || t.flash_initialized) && <><dt>Flash initialised</dt><dd>{t.flash_initialized || '—'}</dd></>}
               <dt>Purchase date</dt><dd>{fmtDate(t.purchase_date)}</dd>
               <dt>Delivered to user</dt><dd>{fmtDate(t.delivery_to_user_date)}</dd>
               <dt>Failure</dt><dd>{t.failure_description || '—'}</dd>

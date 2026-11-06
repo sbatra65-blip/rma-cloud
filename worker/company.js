@@ -2,12 +2,13 @@
 // Nothing here can see any other company's data. Business rules are ported from the
 // original RMASystem.Web services (TicketService, BatchService, ImportService, OemEmailService).
 import { migrateMethods } from './migrate.js';
+import { deviceMethods, migrateV3 } from './devices.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
 import { CP_DEFAULTS, carePackMethods, migrateCarePack } from './carepack.js';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const CHUNK = 1_500_000; // bytes per stored file chunk (row limit is 2 MB)
 const TEMPLATE_ID = 'oem-template';
 
@@ -73,6 +74,7 @@ export const DEFAULT_SETTINGS = {
   reminder_emails: '1',
   reminder_extra_to: '',
   awaiting_days: '3',
+  head_claim_limit: '2',
 };
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
 
@@ -104,6 +106,12 @@ const TICKET_TEXT = [
   ['fw_version', 50, 'Firmware version'], ['flash_initialized', 20, 'Flash initialised'],
 ];
 
+function addDaysIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 function httpError(status, message, extra = {}) {
   return Object.assign(new Error(message), { status, extra });
 }
@@ -120,7 +128,11 @@ export class Company extends DurableObject {
     const v = Number(this.one("SELECT value FROM meta WHERE key = 'schema'")?.value || 0);
     if (v >= SCHEMA_VERSION) return;
     if (v < 2) migrateCarePack(this.sql);
-    if (v >= 1) { this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION)); return; }
+    if (v >= 1) {
+      if (v < 3) migrateV3(this.sql);
+      this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
+      return;
+    }
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_no TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'OPEN',
@@ -176,6 +188,7 @@ export class Company extends DurableObject {
         action TEXT NOT NULL, entity TEXT NOT NULL, entity_id TEXT, detail TEXT);
       CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
     `);
+    migrateV3(this.sql);
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
   }
 
@@ -196,6 +209,7 @@ export class Company extends DurableObject {
     const PERMS = {
       // read: everyone in the company
       bootstrap: 'read', dashboard: 'read', listTickets: 'read', getTicket: 'read', checkDuplicates: 'read', emailContext: 'read',
+      deviceHistory: 'read', searchDevices: 'read',
       getPhoto: 'read', listBatches: 'read', getBatch: 'read', batchCandidates: 'read', reminders: 'read', getTemplate: 'read',
       listMasters: 'read', importLog: 'read',
       // edit: everyone except Viewer
@@ -259,7 +273,8 @@ export class Company extends DurableObject {
       .text('oem_rma_email_to', { max: 1000, label: 'OEM email To' }).text('oem_rma_email_cc', { max: 1000, label: 'OEM email Cc' })
       .text('oem_rma_email_subject', { max: 300, label: 'Subject template' }).text('oem_rma_email_body', { max: 8000, label: 'Body template' })
       .bool('reminder_emails').text('reminder_extra_to', { max: 1000, label: 'Extra reminder recipients' })
-      .number('awaiting_days', { min: 1, max: 60, int: true, label: 'Days before chasing OEM' });
+      .number('awaiting_days', { min: 1, max: 60, int: true, label: 'Days before chasing OEM' })
+      .number('head_claim_limit', { min: 0, max: 20, int: true, label: 'Print-head RMAs per printer before a reason is needed' });
     const v = c.out;
     for (const k of ['oem_rma_email_to', 'oem_rma_email_cc', 'reminder_extra_to']) {
       const bad = splitEmails(v[k], true).filter((e) => !/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(e));
@@ -293,6 +308,7 @@ export class Company extends DurableObject {
       models: this.all('SELECT * FROM models ORDER BY active DESC, code COLLATE NOCASE'),
       customers: this.all('SELECT * FROM customers ORDER BY active DESC, name COLLATE NOCASE'),
       cp_types: this.all('SELECT * FROM cp_types ORDER BY active DESC, duration_years, name COLLATE NOCASE'),
+      categories: this.all('SELECT * FROM categories ORDER BY active DESC, id'),
     };
   }
 
@@ -319,13 +335,24 @@ export class Company extends DurableObject {
       else this.sql.exec('INSERT INTO products (oem_id, code, name, active, created_at) VALUES (?,?,?,1,?)', v.oem_id, v.code, v.name, now);
     } else if (kind === 'models') {
       const v = new Checker(r).int('product_id', { required: true, label: 'Product' }).text('code', { required: true, max: 40, label: 'Model code' })
-        .text('name', { required: true, max: 200, label: 'Name' }).bool('active').done();
+        .text('name', { required: true, max: 200, label: 'Name' }).int('category_id', { label: 'Category' }).bool('active').done();
       if (!this.one('SELECT 1 AS x FROM products WHERE id = ?', v.product_id)) throw new ValidationError({ product_id: 'Choose a product' });
+      if (v.category_id && !this.one('SELECT 1 AS x FROM categories WHERE id = ?', v.category_id)) throw new ValidationError({ category_id: 'Choose a category' });
       if (this.one('SELECT id FROM models WHERE product_id = ? AND code = ? AND id != ?', v.product_id, v.code, id || 0)) {
         throw new ValidationError({ code: 'This product already has a model with this code' });
       }
-      if (id) this.sql.exec('UPDATE models SET product_id = ?, code = ?, name = ?, active = ? WHERE id = ?', v.product_id, v.code, v.name, v.active, id);
-      else this.sql.exec('INSERT INTO models (product_id, code, name, active, created_at) VALUES (?,?,?,1,?)', v.product_id, v.code, v.name, now);
+      if (id) this.sql.exec('UPDATE models SET product_id = ?, code = ?, name = ?, category_id = ?, active = ? WHERE id = ?', v.product_id, v.code, v.name, v.category_id || null, v.active, id);
+      else this.sql.exec('INSERT INTO models (product_id, code, name, category_id, active, created_at) VALUES (?,?,?,?,1,?)', v.product_id, v.code, v.name, v.category_id || null, now);
+    } else if (kind === 'categories') {
+      const v = new Checker(r).text('code', { required: true, max: 20, label: 'Code' }).text('name', { required: true, max: 80, label: 'Name' })
+        .bool('has_head').bool('active').done();
+      v.code = v.code.toUpperCase();
+      if (this.one('SELECT id FROM categories WHERE code = ? AND id != ?', v.code, id || 0)) throw new ValidationError({ code: 'Another category already uses this code' });
+      if (this.one('SELECT id FROM categories WHERE name = ? AND id != ?', v.name, id || 0)) throw new ValidationError({ name: 'This category already exists' });
+      if (id) {
+        this.sql.exec('UPDATE categories SET code = ?, name = ?, has_head = ?, active = ? WHERE id = ?', v.code, v.name, v.has_head ? 1 : 0, v.active, id);
+        this.sql.exec('UPDATE tickets SET category = ? WHERE category_id = ?', v.name, id);
+      } else this.sql.exec('INSERT INTO categories (code, name, has_head, active, created_at) VALUES (?,?,?,1,?)', v.code, v.name, v.has_head ? 1 : 0, now);
     } else if (kind === 'customers') {
       const v = this.checkCustomer(r);
       if (!v.code) v.code = this.nextCustomerCode();
@@ -376,6 +403,7 @@ export class Company extends DurableObject {
       customers: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE customer_id = ?', id).n
         + this.one('SELECT COUNT(*) AS n FROM cp_batches WHERE customer_id = ?', id).n,
       cp_types: () => this.one('SELECT COUNT(*) AS n FROM cp_batches WHERE cp_type_id = ?', id).n,
+      categories: () => this.one('SELECT COUNT(*) AS n FROM tickets WHERE category_id = ?', id).n + this.one('SELECT COUNT(*) AS n FROM models WHERE category_id = ?', id).n,
     }[kind];
     if (!uses) throw httpError(400, 'Unknown list');
     const n = uses();
@@ -424,10 +452,11 @@ export class Company extends DurableObject {
   }
 
   // ---------- Duplicate check (TicketService.CheckOpenDuplicatesAsync) ----------
-  checkDuplicates(user, { printer_sn, faulty_part, faulty_part_no, faulty_part_sn, excludeId }) {
+  checkDuplicates(user, { printer_sn, faulty_part, faulty_part_no, faulty_part_sn, excludeId, category_id, model_id }) {
     const productSn = normSn(printer_sn);
     const partSn = normSn(faulty_part_sn);
-    if (!productSn && !partSn) return { blocks: [], sameMachine: [] };
+    if (!productSn && !partSn) return { blocks: [], sameMachine: [], heads: null };
+    const heads = this.headCheck({ printer_sn_norm: productSn, faulty_part, category_id: Number(category_id) || null, model_id: Number(model_id) || null }, excludeId);
     const open = this.all(
       `SELECT id, ticket_no, status, printer_sn, printer_sn_norm, faulty_part, faulty_part_no, faulty_part_sn, faulty_part_sn_norm, created_at
        FROM tickets WHERE closed_at IS NULL AND status NOT IN ('CLOSED','CLOSED_RETURNED') AND id != ?
@@ -454,7 +483,7 @@ export class Company extends DurableObject {
         sameMachine.push(brief(t));
       }
     }
-    return { blocks: blocks.slice(0, 20), sameMachine: sameMachine.slice(0, 20) };
+    return { blocks: blocks.slice(0, 20), sameMachine: sameMachine.slice(0, 20), heads };
   }
 
   // ---------- Tickets ----------
@@ -464,7 +493,7 @@ export class Company extends DurableObject {
     c.email('customer_email', { label: 'Email' }).email('ship_to_email', { label: 'Ship-to email' })
       .number('tph_mileage', { min: 0, max: 1e7, label: 'TPH mileage' }).number('printer_mileage', { min: 0, max: 1e8, label: 'Printer mileage' })
       .date('purchase_date', { label: 'Purchase date', notFuture: true }).date('delivery_to_user_date', { label: 'Delivery to user date', notFuture: true })
-      .int('customer_id', { label: 'Customer' }).int('model_id', { label: 'Model' });
+      .int('customer_id', { label: 'Customer' }).int('model_id', { label: 'Model' }).int('category_id', { label: 'Device category' });
     if (requireCore) {
       if (!c.out.customer_company) c.fail('customer_company', 'Company name is required');
       if (!c.out.printer_model) c.fail('printer_model', 'Product model is required');
@@ -475,6 +504,7 @@ export class Company extends DurableObject {
     const v = c.done();
     if (v.customer_id && !this.one('SELECT 1 AS x FROM customers WHERE id = ?', v.customer_id)) v.customer_id = null;
     if (v.model_id && !this.one('SELECT 1 AS x FROM models WHERE id = ?', v.model_id)) v.model_id = null;
+    this.resolveCategory(v);
     if (!v.customer_country) v.customer_country = 'India';
     if (v.printer_sn) v.printer_sn = normSn(v.printer_sn);
     if (v.faulty_part_sn) v.faulty_part_sn = normSn(v.faulty_part_sn);
@@ -503,7 +533,7 @@ export class Company extends DurableObject {
     };
   }
 
-  createTicket(user, { ticket, overrideReason, addToCarePack }) {
+  createTicket(user, { ticket, overrideReason, addToCarePack, headReason }) {
     const v = this.checkTicket(ticket);
     // New RMAs: the customer is chosen from the customer list (dropdown), so names stay consistent for reports.
     const cust = v.customer_id ? this.one('SELECT id, name, active FROM customers WHERE id = ?', v.customer_id) : null;
@@ -511,17 +541,19 @@ export class Company extends DurableObject {
     v.customer_company = cust.name;
     const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
+    const head = this.applyHeadGate(user, v, headReason);
     if (!device && addToCarePack) {
       this.cpAddOverrideSerial(user, { serial: v.printer_sn, reason: addToCarePack.reason, batchId: addToCarePack.batchId, customer: v.customer_company, model: v.printer_model });
     }
     const now = Date.now();
     const ticketNo = this.nextTicketNo(user.ticketPrefix || 'INF', istParts(now).ym);
-    const row = { ...v, ...dup, ticket_no: ticketNo, status: STATUS.OPEN, created_at: now, updated_at: now, created_by: user.name, updated_by: user.name };
+    const row = { ...v, ...dup, ...head, ticket_no: ticketNo, status: STATUS.OPEN, created_at: now, updated_at: now, created_by: user.name, updated_by: user.name };
     const cols = Object.keys(row);
     this.sql.exec(`INSERT INTO tickets (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((k) => row[k]));
     const id = this.one('SELECT last_insert_rowid() AS id').id;
-    this.event(id, user, 'created', dup.dup_reason ? `Duplicate override: ${overrideReason}` : null);
-    this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason });
+    this.event(id, user, 'created', [dup.dup_reason ? `Duplicate override: ${overrideReason}` : null,
+      head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null].filter(Boolean).join(' · ') || null);
+    this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason, headOverride: !!head.head_override_reason });
     return this.getTicket(user, { id });
   }
 
@@ -663,9 +695,15 @@ export class Company extends DurableObject {
     return { ok: true, r2Photos: photos.filter((p) => p.store === 'r2').map((p) => p.id) };
   }
 
-  listTickets(user, { status = '', q = '', from = '', to = '', customer = '', open = '', limit = 500, batch = '' } = {}) {
+  listTickets(user, { status = '', q = '', from = '', to = '', customer = '', open = '', limit = 500, batch = '', view = '', category = '' } = {}) {
     const where = [];
     const args = [];
+    // Saved views on the RMA list.
+    if (view === 'mine') { where.push('created_by = ?'); args.push(user.name); }
+    if (view === 'late') { where.push("status = 'DISPATCHED_TO_OEM' AND oem_dispatch_date IS NOT NULL AND oem_dispatch_date <= ?"); args.push(addDaysIso(today(), -30)); }
+    if (view === 'closedmonth') { where.push('closed_at >= ?'); args.push(Date.parse(today().slice(0, 8) + '01T00:00:00+05:30')); }
+    if (view === 'heads') { where.push("head_override_reason IS NOT NULL"); }
+    if (category && /^\d+$/.test(String(category))) { where.push('category_id = ?'); args.push(Number(category)); }
     if (status && ALL_STATUS.includes(status)) { where.push('status = ?'); args.push(status); }
     if (open === '1') where.push("status NOT IN ('CLOSED','CLOSED_RETURNED')");
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) { where.push('created_at >= ?'); args.push(Date.parse(from + 'T00:00:00+05:30')); }
@@ -721,11 +759,30 @@ export class Company extends DurableObject {
       avgCloseDays: avgClose ? Math.round(avgClose / 86400000) : null,
       recent, topParts,
       reminders: this.reminders(user).items.length + this.cpReminders().length,
+      ...this.workQueue(user),
       carePack: this.cpDashboard(),
       batchReady: counts.OEM_RMA_RECEIVED,
       lastWeekOfMonth: Number(today().slice(8, 10)) >= lastDay - 6,
       total: Object.values(counts).reduce((a, b) => a + b, 0),
     };
+  }
+
+  // Dashboard "Needs your next step": reminders plus RMAs waiting at the OEM for a long time, oldest first, each with its action.
+  workQueue(user) {
+    const now = Date.now();
+    const items = this.reminders(user).items.map((i) => ({ ...i }));
+    for (const t of this.all(`SELECT id, ticket_no, customer_company, printer_model, printer_sn, faulty_part, created_at, oem_dispatch_date
+      FROM tickets WHERE status = 'DISPATCHED_TO_OEM' AND oem_dispatch_date IS NOT NULL`)) {
+      const d = daysBetween(t.oem_dispatch_date, today());
+      if (d >= 30) {
+        items.push({ id: t.id, ticket_no: t.ticket_no, customer: t.customer_company || '—', serial: t.printer_sn || '—', model: t.printer_model,
+          part: t.faulty_part, age: Math.floor((now - t.created_at) / 86400000), kind: `At OEM ${d} days — chase`, tone: 'late' });
+      }
+    }
+    const action = (k) => (/Excel/.test(k) ? 'Make OEM Excel' : /email/i.test(k) ? 'Email OEM' : /Awaiting OEM RMA/.test(k) ? 'Add OEM RMA'
+      : /dispatch to OEM/.test(k) ? 'Dispatch to OEM' : /send to customer/.test(k) ? 'Send to customer' : /chase/.test(k) ? 'Chase OEM' : 'Open');
+    items.sort((a, b) => (b.tone === 'late') - (a.tone === 'late') || b.age - a.age);
+    return { queue: items.slice(0, 10).map((i) => ({ ...i, action: action(i.kind) })), queueTotal: items.length };
   }
 
   // ---------- Reminders (Reminders.razor) ----------
@@ -1003,6 +1060,7 @@ export class Company extends DurableObject {
         JSON.stringify({ duplicates: result.duplicateList.slice(0, 20), errors: result.errorList.slice(0, 20) }));
       this.audit(user, 'import', 'tickets', null, { file: fileName, imported: result.imported, duplicates: result.duplicates, errors: result.errors });
     }
+    this.fillMissingCategories();
     return result;
   }
   nextImportNo(prefix) {
@@ -1106,4 +1164,4 @@ export function parseLooseDate(v) {
   return { date, ms };
 }
 
-Object.assign(Company.prototype, carePackMethods, migrateMethods);
+Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods);

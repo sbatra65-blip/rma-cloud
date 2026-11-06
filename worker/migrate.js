@@ -138,6 +138,7 @@ export const migrateMethods = {
       }
     }
     // Keep the next new RMA number after the migrated ones.
+    this.fillMissingCategories();
     res.customersAdded = customersAdded;
     this.audit(user, 'migrate_tickets', 'migration', null, { created: res.created, skipped: res.skipped, customersAdded, errors: res.errors.length });
     return res;

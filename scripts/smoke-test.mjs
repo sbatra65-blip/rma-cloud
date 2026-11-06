@@ -214,6 +214,45 @@ ok(r.status === 409, 'same part type again with no serial blocked');
 r = await owner('GET', `/api/rma/${mp1.id}/email`);
 ok(r.data.fileName === 'TE310_TEBT7770001_Head.xlsx', 'each part gets its own Excel name');
 
+console.log('Device categories, print-head limit, device history');
+r = await owner('GET', '/api/bootstrap');
+const cats = r.data.masters.categories || [];
+const prn = cats.find((c) => c.code === 'PRN');
+const mt = cats.find((c) => c.code === 'MT');
+ok(prn?.has_head === 1 && mt && !mt.has_head, 'Printer and Mobile terminal categories seeded');
+ok(t1.category === 'Printer' && t1.category_id === prn.id, 'RMA defaults to Printer category');
+r = await owner('POST', '/api/masters/categories', { code: 'scn', name: 'Scanner', has_head: false, active: true });
+ok(r.status === 200 && r.data.categories.some((c) => c.code === 'SCN'), 'add a new device category');
+r = await owner('POST', '/api/rma/check-duplicates', { printer_sn: 'TEBT25370458', faulty_part: 'Print head', faulty_part_sn: 'H-3' });
+ok(r.data.heads && r.data.heads.count === 2 && r.data.heads.limit === 2, 'check shows print-head limit reached (2 earlier heads)');
+r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Thermal print head', faulty_part_sn: 'H-3' } });
+ok(r.status === 409 && r.data.code === 'head_limit' && r.data.heads?.tickets?.length === 2, 'third head RMA needs a reason');
+r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Head cable', faulty_part_sn: 'HC-1' } });
+ok(r.status === 200, 'head cable is not a print head');
+r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part: 'Thermal print head', faulty_part_sn: 'H-3' }, headReason: 'OEM approved third head' });
+ok(r.status === 200 && r.data.ticket.head_override_reason?.startsWith('OEM approved third head') && r.data.ticket.head_override_by?.includes('(Admin)'), 'head override with reason stamped on RMA', r.data?.ticket?.head_override_by);
+const tHead = r.data.ticket;
+r = await owner('POST', '/api/rma', { ticket: { ...base, category_id: mt.id, printer_sn: 'TEBT25370458', faulty_part: 'Head', faulty_part_sn: 'H-4' } });
+ok(r.status === 200 && r.data.ticket.category === 'Mobile terminal', 'mobile terminal: no print-head limit');
+r = await owner('GET', '/api/rma?view=heads');
+ok(r.data.rows.length === 1 && r.data.rows[0].id === tHead.id, 'list view: head limit overridden');
+r = await owner('GET', `/api/rma?category=${mt.id}`);
+ok(r.data.rows.length === 1, 'list filter by device category');
+r = await owner('GET', '/api/rma?open=1&view=mine');
+ok(r.data.rows.length > 0, 'list view: raised by me');
+r = await owner('GET', '/api/devices?q=37045');
+ok(r.data.some((d) => d.serial === 'TEBT25370458'), 'device search by part of serial');
+r = await owner('GET', '/api/devices/history?sn=tebt 25370458');
+ok(r.status === 200 && r.data.summary.total >= 6 && r.data.summary.heads === 4 && r.data.tickets.some((t) => t.head_override_reason), 'device history with summary and head count', r.data?.summary);
+r = await owner('GET', '/api/devices/history?sn=H1001');
+ok(r.data.asPart.length >= 1, 'device history finds a serial used as faulty part');
+r = await owner('GET', '/api/devices/history?sn=a');
+ok(r.status === 422, 'device history needs 3+ characters');
+{ const sg = (await owner('GET', '/api/settings')).data; r = await owner('POST', '/api/settings', { ...(sg.settings || sg), head_claim_limit: 25 }); }
+ok(r.status === 422, 'head limit setting validated');
+r = await owner('GET', '/api/dashboard');
+ok(Array.isArray(r.data.queue) && typeof r.data.queueTotal === 'number', 'dashboard has next-step queue');
+
 console.log('Care Pack');
 const cp = (o = {}) => ({ invoice_number: 'IS-GST-2627-0300', invoice_date: '2026-10-01', customer_name: 'Acme Logistics', source: 'manual',
   products: [{ printer_model: 'TE310', oem_brand: 'TSC Auto ID', care_pack_type: '3 Year', serial_text: 'S/N: CPX0001, CPX0002', qty: 2 }], ...o });

@@ -15,6 +15,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
     oem_rma_email_to: s0.oem_rma_email_to, oem_rma_email_cc: s0.oem_rma_email_cc,
     oem_rma_email_subject: s0.oem_rma_email_subject, oem_rma_email_body: s0.oem_rma_email_body,
     reminder_emails: s0.reminder_emails !== '0', reminder_extra_to: s0.reminder_extra_to, awaiting_days: s0.awaiting_days,
+    head_claim_limit: s0.head_claim_limit ?? '2',
   });
   const [tpl, setTpl] = useState(s0.template);
   const [errors, setErrors] = useState({});
@@ -118,6 +119,16 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
             {tpl && <button type="button" className="btn danger small" onClick={revert}>Use built-in</button>}
             <input ref={fileRef} type="file" accept=".xlsx" hidden onChange={(e) => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ''; }} />
           </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Print-head claims</h2>
+        <div className="fields">
+          <Field label="Print-head RMAs per printer before a reason is needed" error={errors.head_claim_limit}
+            hint="From the next one, the person raising the RMA sees a warning and must give a reason. 0 turns it off. Only for device categories with a print head.">
+            <input type="number" min="0" max="20" value={f.head_claim_limit} onChange={set('head_claim_limit')} />
+          </Field>
         </div>
       </section>
 

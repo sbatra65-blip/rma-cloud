@@ -142,11 +142,10 @@ export function Icon({ name, size = 22, ...rest }) {
 }
 export function Logo({ size = 30 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="14" fill="#22395a" />
-      <path d="M46 20a17 17 0 1 0 4 15" fill="none" stroke="#e4572e" strokeWidth="5" strokeLinecap="round" />
-      <path d="M41 13l6 7-8 3" fill="none" stroke="#e4572e" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M24 29l8-4 8 4v9l-8 4-8-4z" fill="#fff" />
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="9" fill="#16263d" />
+      <path d="M21 11.5a7 7 0 1 0 0 9" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="22.5" cy="16" r="2.4" fill="#ff8a5c" />
     </svg>
   );
 }

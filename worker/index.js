@@ -302,8 +302,10 @@ async function handle(request, env, ctx) {
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
-    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack }));
+    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason }));
   }
+  if (path === '/api/devices' && method === 'GET') return respond(await ccall(env, user, 'searchDevices', { q: url.searchParams.get('q') }));
+  if (path === '/api/devices/history' && method === 'GET') return respond(await ccall(env, user, 'deviceHistory', { sn: url.searchParams.get('sn') }));
   if (path === '/api/rma/check-duplicates' && method === 'POST') {
     const b = await body(request);
     return respond(await ccall(env, user, 'checkDuplicates', b));
@@ -480,9 +482,9 @@ async function handle(request, env, ctx) {
   if (path === '/api/import/customers' && method === 'POST') return respond(await ccall(env, user, 'importCustomers', await body(request, 4 * 1024 * 1024)));
 
   // Masters
-  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types)$/);
+  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types|categories)$/);
   if (m && method === 'POST') return respond(await ccall(env, user, 'saveMaster', { kind: m[1], record: await body(request) }));
-  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types)\/(\d{1,12})$/);
+  m = path.match(/^\/api\/masters\/(oems|products|models|customers|cp_types|categories)\/(\d{1,12})$/);
   if (m && method === 'DELETE') return respond(await ccall(env, user, 'deleteMaster', { kind: m[1], id: m[2] }));
 
   // Settings

@@ -19,6 +19,7 @@ import CarePacks, { CarePackPending, OverrideLog } from './pages/CarePacks.jsx';
 import CarePackRegister from './pages/CarePackRegister.jsx';
 import CarePackDetail from './pages/CarePackDetail.jsx';
 import CarePackPo from './pages/CarePackPo.jsx';
+import DeviceHistory from './pages/DeviceHistory.jsx';
 
 export default function App() {
   return (
@@ -117,6 +118,8 @@ function Shell() {
   else if (route === '/reminders') page = <Reminders {...common} />;
   else if (route === '/reports' && has('reports')) page = <Reports {...common} />;
   else if (route === '/import' && can.manage(user) && has('import')) page = <Import {...common} />;
+  else if (route === '/devices') page = <DeviceHistory {...common} key="devices" />;
+  else if ((m = route.match(/^\/devices\/([^/]+)$/))) page = <DeviceHistory {...common} sn={decodeURIComponent(m[1])} key={`dev${m[1]}`} />;
   else if (route === '/masters') page = <Masters {...common} />;
   else if (route === '/settings' && can.admin(user)) page = <Settings {...common} onUserChange={(u) => setState((s) => ({ ...s, user: u }))} />;
   else if (route === '/users' && can.admin(user)) page = <Users {...common} />;
@@ -130,6 +133,7 @@ function Shell() {
     has('batches') && { to: '/batches', icon: 'truck', label: 'OEM batches' },
     has('carepack') && { to: '/care-packs', icon: 'shield', label: 'Care packs' },
     { to: '/reminders', icon: 'bell', label: 'Reminders', count: reminderCount },
+    { to: '/devices', icon: 'history', label: 'Device history' },
     has('reports') && { to: '/reports', icon: 'chart', label: 'Reports' },
     { group: 'Data' },
     { to: '/masters', icon: 'list', label: 'Masters' },
@@ -145,6 +149,9 @@ function Shell() {
       <aside className="sidenav" aria-label="Main">
         <Link to="/" className="brand"><Logo size={34} />
           <span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
+        <form role="search" className="navsearch" onSubmit={(e) => { e.preventDefault(); const q = new FormData(e.currentTarget).get('q').trim(); if (q) navigate(`/rma?q=${encodeURIComponent(q)}`); }}>
+          <Icon name="search" size={16} /><input name="q" type="search" placeholder="RMA, serial, customer" aria-label="Search RMAs" />
+        </form>
         {can.edit(user) && <Link to="/rma/new" className="btn primary block addbtn"><Icon name="plus" size={18} /> New RMA</Link>}
         {nav.map((n, i) => n.group
           ? <div key={`g${i}`} className="group">{n.group}</div>
@@ -195,7 +202,8 @@ function More({ user, onLogout }) {
     has('batches') && ['/batches', 'truck', 'OEM batches', 'Dispatch RMAs to the OEM together, packing list'],
     has('carepack') && ['/care-packs', 'shield', 'Care packs', 'Printers sold with care packs, OEM PO, OEM invoice, payment'],
     has('reports') && ['/reports', 'chart', 'Reports', 'Filter RMAs and export to Excel'],
-    ['/masters', 'list', 'Masters', 'Customers, OEMs, products, models, care pack types'],
+    ['/devices', 'history', 'Device history', 'Every RMA for one printer or terminal, with Excel / print'],
+    ['/masters', 'list', 'Masters', 'Customers, device categories, OEMs, products, models, care pack types'],
     can.manage(user) && has('import') && ['/import', 'upload', 'Import', 'Bring in RMAs and customers from Excel'],
     can.admin(user) && ['/users', 'users', 'Users & security', 'Logins, roles, sessions, login history'],
     can.admin(user) && ['/settings', 'gear', 'Company settings', 'Company details, OEM email, Excel template, care packs, Zoho Books'],

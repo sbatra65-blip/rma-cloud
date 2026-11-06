@@ -8,7 +8,7 @@ const SHARED = {
   customer_id: '', customer_company: '', customer_contact_name: '', customer_email: '', customer_phone: '', po_number: '',
   customer_address: '', customer_city: '', customer_state: '', customer_postal: '', customer_country: 'India',
   ship_to_company: '', ship_to_address: '', ship_to_contact_name: '', ship_to_email: '', ship_to_phone: '',
-  model_id: '', printer_model: '', printer_sn: '', printer_mileage: '', fw_version: '', flash_initialized: '',
+  category_id: '', model_id: '', printer_model: '', printer_sn: '', printer_mileage: '', fw_version: '', flash_initialized: '',
   purchase_date: '', delivery_to_user_date: '',
 };
 // Fields that belong to one faulty part (one RMA each).
@@ -35,6 +35,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const [showShip, setShowShip] = useState(false);
   const [cover, setCover] = useState(null);
   const [cpAdd, setCpAdd] = useState({ reason: '', batchId: '' });
+  const [headReason, setHeadReason] = useState({});
 
   // Load the ticket (edit) or copy customer + printer from another RMA (?from=ID, "raise another part").
   useEffect(() => {
@@ -44,6 +45,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
       const t = r.ticket;
       const next = {};
       for (const k of Object.keys(SHARED)) next[k] = t[k] === null || t[k] === undefined ? '' : String(t[k]);
+      if (!next.category_id) next.category_id = '';
       setF(next);
       setShowShip(!!(t.ship_to_company || t.ship_to_address));
       if (editing) {
@@ -68,14 +70,15 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   }, [f.printer_sn]);
 
   // Live duplicate check per part while typing (new RMAs only).
-  const dupKey = parts.map((p) => `${p.key}|${p.faulty_part}|${p.faulty_part_no}|${p.faulty_part_sn}`).join('§');
+  const dupKey = `${f.category_id}|${f.model_id}|${parts.map((p) => `${p.key}|${p.faulty_part}|${p.faulty_part_no}|${p.faulty_part_sn}`).join('§')}`;
   useEffect(() => {
     if (editing || !f.printer_sn.trim()) { setDups({}); return undefined; }
     const t = setTimeout(async () => {
       const out = {};
       for (const p of parts) {
         try {
-          out[p.key] = await post('/api/rma/check-duplicates', { printer_sn: f.printer_sn, faulty_part: p.faulty_part, faulty_part_no: p.faulty_part_no, faulty_part_sn: p.faulty_part_sn });
+          out[p.key] = await post('/api/rma/check-duplicates', { printer_sn: f.printer_sn, faulty_part: p.faulty_part, faulty_part_no: p.faulty_part_no, faulty_part_sn: p.faulty_part_sn,
+            category_id: f.category_id || defaultCat?.id || null, model_id: f.model_id || null });
         } catch { /* ignore while typing */ }
       }
       setDups(out);
@@ -84,14 +87,19 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   }, [f.printer_sn, dupKey, editing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const masters = boot.masters;
+  const cats = (masters.categories || []).filter((c) => c.active || String(c.id) === String(f.category_id));
+  const defaultCat = cats.find((c) => c.code === 'PRN') || cats[0];
+  const cat = cats.find((c) => String(c.id) === String(f.category_id)) || defaultCat;
+  const hasHead = cat ? !!cat.has_head : true;
+  const devWord = cat && !cat.has_head ? (cat.name || 'Device') : 'Printer';
   const modelOptions = useMemo(() => {
     const prod = new Map(masters.products.map((p) => [p.id, p]));
     const oem = new Map(masters.oems.map((o) => [o.id, o]));
-    return masters.models.filter((m) => m.active).map((m) => {
+    return masters.models.filter((m) => m.active && (!m.category_id || !cat || m.category_id === cat.id)).map((m) => {
       const p = prod.get(m.product_id);
       return { ...m, label: m.code, sub: [oem.get(p?.oem_id)?.name, p?.name, m.name].filter(Boolean).join(' · ') };
     });
-  }, [masters]);
+  }, [masters, cat?.id]);
 
   if (loadError) return <ErrorPanel error={loadError} />;
   if (!loaded) return <Skeleton rows={6} />;
@@ -152,6 +160,9 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         if (k > 0) errs[`p${k}_faulty_part_sn`] = `Part serial already used on part ${i + 1}`;
       }
     }
+    parts.forEach((p, i) => {
+      if (dups[p.key]?.heads && !String(headReason[p.key] || '').trim()) errs[`p${i}_head`] = 'Give a reason to raise another print-head RMA for this printer';
+    });
     if (expired) errs.printer_sn = `Care pack / warranty for this serial ended on ${fmtDate(cover.warranty_end)}. Expired cover cannot start a new RMA.`;
     if (Object.keys(errs).length) errs.form = 'Please fix the highlighted fields.';
     if (!errs.form && !editing && blocked.length && !(override.on && override.reason.trim())) {
@@ -165,7 +176,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     if (editing) {
       setBusy('save');
       try {
-        const r = await post(`/api/rma/${id}`, { ticket: { ...f, ...strip(parts[0]) } });
+        const r = await post(`/api/rma/${id}`, { ticket: { ...f, category_id: f.category_id || defaultCat?.id || '', ...strip(parts[0]) } });
         onChange?.();
         toast('RMA saved');
         navigate(`/rma/${r.ticket.id}`, { replace: true });
@@ -185,7 +196,8 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         setBusy(`Raising ${i + 1} of ${parts.length}…`);
         const p = parts[i];
         const body = {
-          ticket: { ...f, ...strip(p) },
+          ticket: { ...f, category_id: f.category_id || defaultCat?.id || '', ...strip(p) },
+          headReason: headReason[p.key] || undefined,
           overrideReason: override.on && dups[p.key]?.blocks?.length ? override.reason : undefined,
           addToCarePack: i === 0 && notInCarePack && cpAdd.on ? { reason: cpAdd.reason, batchId: cpAdd.batchId || null } : undefined,
         };
@@ -197,6 +209,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
       }
     } catch (err) {
       const i = created.length;
+      if (err.data?.code === 'head_limit') setDups((d) => ({ ...d, [parts[i].key]: { ...(d[parts[i].key] || { blocks: [], sameMachine: [] }), heads: err.data.heads } }));
       setErrors({ form: `${created.length ? `Raised ${created.map((t) => t.ticket_no).join(', ')}. ` : ''}Part ${i + 1} (${parts[i].faulty_part}) was not raised: ${err.message}`, ...prefixFields(err.fields, i) });
       if (created.length) { setParts((ps) => ps.slice(created.length)); onChange?.(); }
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -222,7 +235,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         <div>
           <Link to={editing ? `/rma/${id}` : '/rma'} className="small muted" style={{ textDecoration: 'none' }}>← {editing ? ticketNo : 'RMAs'}</Link>
           <h1>{editing ? 'Edit RMA' : 'New RMA'}</h1>
-          {!editing && <p className="muted">Several faulty parts from one printer? Add each part below — each gets its own RMA number and OEM form.</p>}
+          {!editing && <p className="muted">Several faulty parts from one device? Add each part below — each gets its own RMA number and OEM form.</p>}
           {editing && status && <p style={{ marginTop: 6 }}><Status s={status} /></p>}
         </div>
       </div>
@@ -294,22 +307,31 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
       </section>
 
       <section className="panel">
-        <div className="section-title"><i>2</i><h2>Printer</h2></div>
-        {!editing && cpOn && <div style={{ marginBottom: 12 }}><CarePackPicker onPick={pickDevice} /></div>}
+        <div className="section-title"><i>2</i><h2>Device</h2></div>
+        {cats.length > 1 && (
+          <div className="views" role="radiogroup" aria-label="Device category" style={{ marginBottom: 14 }}>
+            {cats.map((c) => (
+              <button key={c.id} type="button" role="radio" aria-checked={cat?.id === c.id} aria-pressed={cat?.id === c.id}
+                onClick={() => setF({ ...f, category_id: String(c.id), ...(f.model_id && masters.models.find((m) => String(m.id) === f.model_id)?.category_id !== c.id ? { model_id: '', printer_model: '' } : {}) })}>
+                <Icon name={c.has_head ? 'printer' : 'box'} size={16} /> {c.name}</button>
+            ))}
+          </div>
+        )}
+        {!editing && cpOn && hasHead && <div style={{ marginBottom: 12 }}><CarePackPicker onPick={pickDevice} /></div>}
         <div className="fields three">
           <Field label="Product model" required error={errors.printer_model}>
             <Suggest value={f.printer_model} onChange={(v) => setF({ ...f, printer_model: v, model_id: '' })} options={modelOptions}
               onPick={(m) => setF({ ...f, printer_model: m.code, model_id: String(m.id) })} placeholder="e.g. TE310" />
           </Field>
-          <Field label="Product serial number" required error={errors.printer_sn} hint="Spaces are removed; letters made capital">
+          <Field label={`${devWord} serial number`} required error={errors.printer_sn} hint="Spaces are removed; letters made capital">
             <input type="text" className="upper" autoCapitalize="characters" value={f.printer_sn} onChange={set('printer_sn')} />
           </Field>
           <Field label="Purchase date" error={errors.purchase_date}><input type="date" max={todayISO()} value={f.purchase_date} onChange={set('purchase_date')} /></Field>
-          <Field label="Printer mileage (m)" error={errors.printer_mileage}><input type="number" inputMode="decimal" min="0" step="0.01" value={f.printer_mileage} onChange={set('printer_mileage')} /></Field>
+          {hasHead && <Field label="Printer mileage (m)" error={errors.printer_mileage}><input type="number" inputMode="decimal" min="0" step="0.01" value={f.printer_mileage} onChange={set('printer_mileage')} /></Field>}
           <Field label="Firmware version"><input type="text" value={f.fw_version} onChange={set('fw_version')} /></Field>
-          <Field label="Flash initialised">
+          {hasHead && <Field label="Flash initialised">
             <select value={f.flash_initialized} onChange={set('flash_initialized')}><option value="">—</option><option>Yes</option><option>No</option></select>
-          </Field>
+          </Field>}
           <Field label="Delivery to user date" error={errors.delivery_to_user_date}><input type="date" max={todayISO()} value={f.delivery_to_user_date} onChange={set('delivery_to_user_date')} /></Field>
         </div>
         <CoverNote cover={cover} />
@@ -337,17 +359,19 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
             </Field>
             <Field label="Faulty part serial number" error={errors[`p${i}_faulty_part_sn`]}><input type="text" className="upper" autoCapitalize="characters" value={p.faulty_part_sn} onChange={(e) => setPart(p.key, 'faulty_part_sn', e.target.value)} /></Field>
             <Field label="Faulty part number" error={errors[`p${i}_faulty_part_no`]}><input type="text" value={p.faulty_part_no} onChange={(e) => setPart(p.key, 'faulty_part_no', e.target.value)} /></Field>
-            <Field label="TPH mileage (m)" error={errors[`p${i}_tph_mileage`]}><input type="number" inputMode="decimal" min="0" step="0.01" value={p.tph_mileage} onChange={(e) => setPart(p.key, 'tph_mileage', e.target.value)} /></Field>
+            {hasHead && <Field label="TPH mileage (m)" error={errors[`p${i}_tph_mileage`]}><input type="number" inputMode="decimal" min="0" step="0.01" value={p.tph_mileage} onChange={(e) => setPart(p.key, 'tph_mileage', e.target.value)} /></Field>}
             <Field label="Failure description" required error={errors[`p${i}_failure_description`]} className="wide" hint="Goes into this part's OEM Excel form and email">
               <textarea value={p.failure_description} onChange={(e) => setPart(p.key, 'failure_description', e.target.value)} />
             </Field>
           </div>
+          {!editing && dups[p.key]?.heads && <HeadBox h={dups[p.key].heads} serial={f.printer_sn} error={errors[`p${i}_head`]}
+            value={headReason[p.key] || ''} onChange={(v) => setHeadReason((x) => ({ ...x, [p.key]: v }))} />}
           {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
         </section>
       ))}
       {!editing && (
         <button type="button" className="btn ghost block" style={{ marginTop: 14 }} onClick={() => setParts([...parts, newPart()])}>
-          <Icon name="plus" size={18} /> Add another faulty part from this printer</button>
+          <Icon name="plus" size={18} /> Add another faulty part from this {devWord.toLowerCase()}</button>
       )}
 
       <div className="savebar">
@@ -363,6 +387,21 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         toast(`${rec.name} added to the customer list`);
       }} />}
     </>
+  );
+}
+
+// Print-head claim limit reached on this printer: warn, and ask for a reason (saved on the RMA).
+function HeadBox({ h, serial, value, onChange, error }) {
+  return (
+    <div className="headbox" role="alert" style={{ marginTop: 14 }}>
+      <b className="t"><Icon name="alert" size={18} style={{ verticalAlign: '-3px' }} /> Print-head limit reached</b>
+      <span className="small">Printer <span className="mono">{normSn(serial)}</span> already has {h.count} print-head RMA{h.count === 1 ? '' : 's'} (the limit is {h.limit}):{' '}
+        {h.tickets.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/rma/${t.id}`}>{t.ticket_no}</Link> ({fmtDate(new Date(t.created_at).toISOString().slice(0, 10))})</span>)}.{' '}
+        <Link to={`/devices/${encodeURIComponent(normSn(serial))}`}>See device history</Link></span>
+      <Field label="Reason to raise another head RMA" required error={error} hint="Saved on the RMA with your name, and shown to Admins">
+        <input type="text" maxLength={500} value={value} onChange={(e) => onChange(e.target.value)} placeholder="e.g. OEM confirmed head failure under warranty; customer approved" />
+      </Field>
+    </div>
   );
 }
 
