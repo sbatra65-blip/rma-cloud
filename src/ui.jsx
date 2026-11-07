@@ -142,11 +142,22 @@ export function Icon({ name, size = 22, ...rest }) {
   );
 }
 export function Logo({ size = 30 }) {
+  // Return loop around a barcode label: a part goes to the OEM and comes back. Same mark as the app icon.
+  const id = useId().replace(/:/g, '');
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="9" fill="#16263d" />
-      <path className="logo-arc" d="M21 11.5a7 7 0 1 0 0 9" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
-      <circle className="logo-dot" cx="22.5" cy="16" r="2.4" fill="#ff8a5c" />
+    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true">
+      <defs>
+        <linearGradient id={`lg${id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#24406a" /><stop offset="1" stopColor="#0e1928" /></linearGradient>
+        <linearGradient id={`lo${id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ff8a4c" /><stop offset="1" stopColor="#d6451b" /></linearGradient>
+      </defs>
+      <rect width="512" height="512" rx="120" fill={`url(#lg${id})`} />
+      <path className="logo-arc" pathLength="60" d="M331.1 114.7 A160 160 0 1 1 105.6 201.3" fill="none" stroke={`url(#lo${id})`} strokeWidth="70" strokeLinecap="round" />
+      <g className="logo-dot">
+        <path transform="translate(105.6 201.3) rotate(-70)" d="M0 -73.5 L119 0 L0 73.5 Z" fill="#ff7d43" stroke="#ff7d43" strokeWidth="14" strokeLinejoin="round" />
+        <rect x="196" y="206" width="120" height="100" rx="16" fill="#fff" />
+        <rect x="214" y="226" width="14" height="60" fill="#16263d" /><rect x="240" y="226" width="8" height="60" fill="#16263d" />
+        <rect x="260" y="226" width="18" height="60" fill="#16263d" /><rect x="290" y="226" width="10" height="60" fill="#16263d" />
+      </g>
     </svg>
   );
 }
