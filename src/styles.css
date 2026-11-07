@@ -2,7 +2,7 @@
    Every text/background pair here passes WCAG AA (4.5:1). */
 :root {
   --ink: #1e1b4b;
-  --ink-2: #34307a;
+  --ink-2: #2c2a78;
   --paper: #f6f5fa;
   --surface: #ffffff;
   --line: #e7e5f0;
@@ -11,9 +11,9 @@
   --muted: #5f6278;
   --text: #1e1b4b;
   --text-2: #474a63;
-  --accent: #5b3fb0;
-  --accent-tint: #f1edfc;
-  --accent-ink: #432c8c;
+  --accent: #303090;
+  --accent-tint: #ececf9;
+  --accent-ink: #262680;
   --ok: #17704a;
   --ok-tint: #e3f4ea;
   --amber: #8a5200;
@@ -36,10 +36,11 @@
   --float: 0 10px 30px rgba(30, 27, 75, 0.14);
   --font: 'Manrope Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --brand: #5b3fb0;
+  --brand: #303090;
+  --brand-red: #d0141c;
   --brand-2: #d94f8c;
   --brand-3: #18a9d6;
-  --brand-grad: linear-gradient(110deg, #5b6fd0 0%, #7a4fb0 30%, #d94f8c 58%, #18a9d6 82%, #a9cf55 100%);
+  --brand-grad: linear-gradient(110deg, #5a80bc 0%, #6e68ae 22%, #c03a96 45%, #19aec6 70%, #7fc06c 88%, #cfc455 100%);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   color-scheme: light;
   font-family: 'Manrope Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -61,9 +62,9 @@
     --muted: #a9a7c8;
     --text: #ecebf7;
     --text-2: #cbc9e2;
-    --accent: #b9a4ff;
-    --accent-tint: #2c2350;
-    --accent-ink: #d5c8ff;
+    --accent: #a5a8ff;
+    --accent-tint: #252456;
+    --accent-ink: #cfd0ff;
     --ok: #5fd39e;
     --ok-tint: #173a2b;
     --amber: #f4c160;
@@ -123,11 +124,11 @@ main { width: 100%; max-width: 1180px; margin: 0 auto; padding: 16px 16px 112px;
 .bottomnav [aria-current='page'] { color: var(--accent); }
 .bottomnav .add {
   width: 56px; height: 56px; margin: -22px auto 0; border-radius: 18px; place-content: center;
-  background: var(--accent); color: #fff; box-shadow: 0 6px 18px rgba(91, 63, 176, 0.3);
+  background: var(--accent); color: #fff; box-shadow: 0 6px 18px rgba(48, 48, 144, 0.3);
 }
 .bottomnav .add span { display: none; }
 .badge-dot { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
-  background: var(--accent); color: #fff; font-size: 0.68rem; display: grid; place-items: center; font-weight: 700; }
+  background: var(--brand-red, #d0141c); color: #fff; font-size: 0.68rem; display: grid; place-items: center; font-weight: 700; }
 
 .sidenav { display: none; }
 @media (min-width: 960px) {
@@ -583,7 +584,7 @@ table.data.stagger-rows tbody tr:nth-child(-n+20) { animation-delay: calc(var(--
   table.data tbody tr { transition: background-color var(--d-fast); }
   .sidenav .navlink { transition: background-color var(--d-fast), color var(--d-fast), transform var(--d-fast) var(--ease-out); }
   .sidenav .navlink:hover { transform: translateX(2px); }
-  .btn.primary:hover { box-shadow: 0 6px 18px -6px rgba(91, 63, 176, 0.5); transform: translateY(-1px); }
+  .btn.primary:hover { box-shadow: 0 6px 18px -6px rgba(48, 48, 144, 0.45); transform: translateY(-1px); }
 }
 .btn:active { transform: scale(0.97) translateY(0); }
 .btn svg { transition: transform var(--d-fast) var(--ease-out); }
@@ -674,7 +675,12 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 /* Brand: the infinity gradient as a thin signature line and on the + button */
 .auth-art { background: radial-gradient(120% 90% at 0% 0%, #2c2775 0%, #1e1b4b 55%, #15133a 100%); }
 .topbar, .sidenav { background: var(--brand-grad) top / 100% 3px no-repeat, var(--surface); }
-.bottomnav .add { background: linear-gradient(135deg, #6a4fc4, #d94f8c); }
+.bottomnav .add { background: linear-gradient(135deg, #303090, #8a3fa6 60%, #c03a96); }
 .section-title i { background: var(--accent-tint); color: var(--accent-ink); }
-.formsec:focus-within .section-title i { background: linear-gradient(135deg, #6a4fc4, #d94f8c); color: #fff; }
+.formsec:focus-within .section-title i { background: linear-gradient(135deg, #303090, #c03a96); color: #fff; }
 .brandmark { display: inline-grid; place-items: center; background: #fff; border-radius: 28%; box-shadow: 0 0 0 1px var(--line); }
+
+.sidenav .navlink .count { background: #fde7e8; color: #a1101a; }
+.version .brandlogo { display: block; margin: 0 auto 6px; height: 56px; width: auto; }
+.brandmark-img { display: block; border-radius: 24%; box-shadow: 0 0 0 1px var(--line); animation: dot-in 0.5s var(--ease-spring) both; }
+.sidenav .version .brandlogo { height: 40px; }
