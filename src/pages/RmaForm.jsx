@@ -274,7 +274,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         </div>
       )}
 
-      <section className="panel">
+      <section className="panel formsec">
         <div className="section-title"><i>1</i><h2>Customer</h2></div>
         <div className="fields">
           <Field label="Customer" required error={errors.customer_company} className="wide"
@@ -310,7 +310,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel formsec">
         <div className="section-title"><i>2</i><h2>Device</h2></div>
         {cats.length > 1 && (
           <div className="views" role="radiogroup" aria-label="Device category" style={{ marginBottom: 14 }}>

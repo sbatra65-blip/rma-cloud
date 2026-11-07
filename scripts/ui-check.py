@@ -45,7 +45,7 @@ PW = 'Sturdy-Lamp-4821!'
 
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path=CHROME)
-    ctx = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, is_mobile=True, has_touch=True, accept_downloads=True)
+    ctx = browser.new_context(reduced_motion=('reduce' if os.environ.get('REDUCED') else 'no-preference'), viewport={'width': 390, 'height': 844}, device_scale_factor=2, is_mobile=True, has_touch=True, accept_downloads=True)
     page = ctx.new_page()
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
     page.on('pageerror', lambda e: errors.append(str(e)))
@@ -240,7 +240,7 @@ with sync_playwright() as p:
     page.screenshot(path=f'{OUT}/16-settings.png', full_page=True)
 
     # ---- invited user on another phone ----
-    ctx2 = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    ctx2 = browser.new_context(reduced_motion=('reduce' if os.environ.get('REDUCED') else 'no-preference'), viewport={'width': 390, 'height': 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
     p2 = ctx2.new_page()
     p2.on('pageerror', lambda e: errors.append(str(e)))
     p2.goto(invite)
@@ -273,7 +273,7 @@ with sync_playwright() as p:
     ok(True, 'technician logs in with company code + password + 2FA')
 
     # ---- desktop views ----
-    ctx3 = browser.new_context(viewport={'width': 1440, 'height': 900}, accept_downloads=True)
+    ctx3 = browser.new_context(reduced_motion=('reduce' if os.environ.get('REDUCED') else 'no-preference'), viewport={'width': 1440, 'height': 900}, accept_downloads=True)
     ctx3.add_cookies(ctx.cookies())
     d3 = ctx3.new_page()
     d3.on('pageerror', lambda e: errors.append(str(e)))

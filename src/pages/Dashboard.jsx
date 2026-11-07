@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { get, qs } from '../api.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { ErrorPanel, FLOW, Icon, Link, SHORT, ShowToggle, Skeleton, Status, ago, can, navigate, useLoad, useShow } from '../ui.jsx';
+import { CountUp, ErrorPanel, FLOW, Icon, Link, SHORT, ShowToggle, Skeleton, Status, ago, can, navigate, useLoad, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
@@ -32,16 +32,16 @@ export default function Dashboard({ user }) {
 
       <section className="pipe" aria-labelledby="pipe-h">
         <div className="head">
-          <h2 id="pipe-h">{d.open} open RMA{d.open === 1 ? '' : 's'}</h2>
+          <h2 id="pipe-h"><CountUp n={d.open} /> open RMA{d.open === 1 ? '' : 's'}</h2>
           <span className="muted small">{d.closedThisMonth} closed this month · {d.createdThisMonth} raised · {d.avgCloseDays ?? '—'} days average to close</span>
         </div>
         <div className="bar" aria-hidden="true">
           {openStages.map((s) => d.counts[s] ? <span key={s} style={{ flex: d.counts[s], background: STAGE_COLOR[s] }} /> : null)}
         </div>
-        <div className="segs">
+        <div className="segs stagger">
           {openStages.map((s) => (
             <Link key={s} to={`/rma?status=${s}`} className={d.counts[s] ? '' : 'zero'} style={{ '--c': STAGE_COLOR[s] }}>
-              <span>{SHORT[s]}</span><b>{d.counts[s]}</b>
+              <span>{SHORT[s]}</span><b><CountUp n={d.counts[s]} /></b>
             </Link>
           ))}
         </div>
@@ -53,30 +53,24 @@ export default function Dashboard({ user }) {
       )}
 
       <div className="dash-cols">
-        <section className="queue main" aria-labelledby="q-h">
+        <div className="main stagger" style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
+        <section className="queue" aria-labelledby="q-h">
           <div className="qhead">
             <div><h2 id="q-h">Needs your next step</h2><p className="muted small">Late ones first. The button opens the RMA at that step.</p></div>
             {d.queueTotal > 0 && <Link to="/reminders" className="small" style={{ fontWeight: 600 }}>All {d.queueTotal} reminders</Link>}
           </div>
-          {d.queue.length ? d.queue.map((q) => (
+          {d.queue.length ? <div className="stagger">{d.queue.map((q) => (
             <div key={`${q.id}${q.kind}`} className="qrow">
               <div><Link to={`/rma/${q.id}`} className="no">{q.ticket_no}</Link><div className="sub">{q.age === 0 ? 'Raised today' : `${q.age} day${q.age === 1 ? '' : 's'} open`}</div></div>
               <div><b>{q.customer}</b><div className="sub">{[q.model, q.serial, q.part].filter((x) => x && x !== '—').join(' · ')}</div></div>
               <div><span className={`qtag ${q.tone === 'late' ? 'late' : 'due'}`}>{q.kind}</span></div>
               <button type="button" className="btn ghost small" onClick={() => navigate(`/rma/${q.id}`)}>{q.action}</button>
             </div>
-          )) : (
+          ))}</div> : (
             <div className="empty" style={{ padding: '28px 20px' }}><Icon name="check" size={32} /><p className="muted">Nothing waiting on you. Nice.</p></div>
           )}
         </section>
 
-        <div className="side">
-          {cpOn && <CarePackBox cp={d.carePack} />}
-          <section className="panel">
-            <h2>Open RMAs by age</h2>
-            <AgeBars ages={d.ages} />
-            {d.topParts.length > 0 && <p className="muted small" style={{ marginTop: 14 }}>Most returned part (12 months): <b style={{ color: 'var(--text)' }}>{d.topParts[0].name} ({d.topParts[0].n})</b></p>}
-          </section>
           <section className="panel">
             <div className="spread" style={{ marginBottom: 8 }}><h2>Recently updated</h2><Link to="/rma" className="small">All RMAs</Link></div>
             <ShowToggle className="small" />
@@ -90,6 +84,15 @@ export default function Dashboard({ user }) {
               <div className="empty"><Icon name="ticket" size={32} /><p className="muted">No RMAs yet.</p>
                 {can.manage(user) && <Link to="/import" className="btn ghost small">Import your old RMA sheet</Link>}</div>
             )}
+          </section>
+        </div>
+
+        <div className="side stagger">
+          {cpOn && <CarePackBox cp={d.carePack} />}
+          <section className="panel">
+            <h2>Open RMAs by age</h2>
+            <AgeBars ages={d.ages} />
+            {d.topParts.length > 0 && <p className="muted small" style={{ marginTop: 14 }}>Most returned part (12 months): <b style={{ color: 'var(--text)' }}>{d.topParts[0].name} ({d.topParts[0].n})</b></p>}
           </section>
         </div>
       </div>
@@ -140,9 +143,9 @@ function AgeBars({ ages }) {
         <div key={label} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 32px', gap: 10, alignItems: 'center', fontSize: '0.88rem' }}>
           <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>{label}</span>
           <span style={{ height: 8, borderRadius: 999, background: 'var(--mist)', overflow: 'hidden' }}>
-            <i style={{ display: 'block', height: '100%', width: `${(n / max) * 100}%`, background: c, borderRadius: 999 }} />
+            <i className="growbar" style={{ display: 'block', height: '100%', width: `${(n / max) * 100}%`, background: c, borderRadius: 999 }} />
           </span>
-          <b className="num" style={{ textAlign: 'right' }}>{n}</b>
+          <b className="num" style={{ textAlign: 'right' }}><CountUp n={n} /></b>
         </div>
       ))}
     </div>

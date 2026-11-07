@@ -93,7 +93,7 @@ export default function RmaList({ user, boot }) {
         </Empty>
       ) : (
         <>
-          <div className="tlist mobile-only">
+          <div className="tlist mobile-only stagger">
             {data.rows.map((t) => (
               <div key={t.id} className={`tcard-wrap ${bulk ? 'has-check' : ''}`}>
                 {bulk && !t.closed_at && <input type="checkbox" className="tcheck" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}
@@ -108,16 +108,16 @@ export default function RmaList({ user, boot }) {
             ))}
           </div>
           <div className="tablewrap desktop-only">
-            <table className="data">
+            <table className="data stagger-rows">
               <thead><tr>
                 {bulk && <th style={{ width: 36 }}><input type="checkbox" checked={allOn} disabled={!closable.length} aria-label="Select all shown that are not closed"
                   onChange={() => setSel(allOn ? new Set() : new Set(closable.map((t) => t.id)))} /></th>}
                 <th>RMA</th><th>Customer</th><th>Device</th><th>Part · serial sent → received</th><th>Stage</th><th>OEM RMA</th><th>Photos</th><th style={{ textAlign: 'right' }}>Age</th></tr></thead>
               <tbody>
-                {data.rows.map((t) => {
+                {data.rows.map((t, ri) => {
                   const age = ageDays(t.created_at);
                   return (
-                    <tr key={t.id} onClick={(e) => { if (!['A', 'INPUT'].includes(e.target.tagName)) navigate(`/rma/${t.id}`); }} style={{ cursor: 'pointer' }} className={sel.has(t.id) ? 'selected' : ''}>
+                    <tr key={t.id} onClick={(e) => { if (!['A', 'INPUT'].includes(e.target.tagName)) navigate(`/rma/${t.id}`); }} style={{ cursor: 'pointer', '--row': ri }} className={sel.has(t.id) ? 'selected' : ''}>
                       {bulk && <td>{!t.closed_at && <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}</td>}
                       <td className="nowrap"><Link to={`/rma/${t.id}`} className="mono">{t.ticket_no}</Link>{t.is_imported ? <div className="tiny muted">Imported</div> : null}</td>
                       <td style={{ fontWeight: 600 }}>{t.customer_company || '—'}<div className="tiny muted" style={{ fontWeight: 500 }}>{t.customer_city}</div></td>

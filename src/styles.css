@@ -443,11 +443,12 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
 .pipe .bar { display: flex; gap: 3px; height: 10px; margin: 0 20px; border-radius: 999px; overflow: hidden; background: var(--mist); }
 .pipe .bar span { display: block; min-width: 4px; }
 .pipe .segs { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); margin-top: 12px; border-top: 1px solid var(--line); }
-.pipe .segs a { display: grid; gap: 2px; padding: 12px 16px; text-decoration: none; border-right: 1px solid var(--line); }
+.pipe .segs a { display: grid; gap: 2px; padding: 12px 16px; text-decoration: none; border-right: 1px solid var(--line); box-shadow: inset 0 2px 0 transparent; }
+.pipe .segs a:not(.zero) { box-shadow: inset 0 2px 0 var(--c); }
 .pipe .segs a:hover { background: var(--mist); }
 .pipe .segs a span { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 650; color: var(--text-2); }
 .pipe .segs a span::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
-.pipe .segs a b { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.pipe .segs a b { font-size: 1.85rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
 .pipe .segs a.zero b { color: var(--muted); }
 .queue { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
 .queue .qhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 20px; }
@@ -541,3 +542,127 @@ h1.mono { font-weight: 550; letter-spacing: -0.01em; }
 .partkv dt { color: var(--text-2); }
 .partkv dd { margin: 0; }
 @media (max-width: 519px) { .partkv { grid-template-columns: 1fr; gap: 0 0; } .partkv dd { margin-bottom: 6px; } }
+
+/* ================= Motion =================
+   Purpose: show where things come from, confirm actions, and show progress.
+   Durations: 160 ms feedback, 260-420 ms entrances, stagger 35 ms. All off under prefers-reduced-motion. */
+:root { --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); --d-fast: 160ms; --d-mid: 280ms; --d-slow: 420ms; }
+
+/* Lists and grids come in one after another */
+.stagger > * { animation: rise var(--d-slow) var(--ease-out) both; }
+.stagger > :nth-child(1) { animation-delay: 30ms; } .stagger > :nth-child(2) { animation-delay: 65ms; }
+.stagger > :nth-child(3) { animation-delay: 100ms; } .stagger > :nth-child(4) { animation-delay: 135ms; }
+.stagger > :nth-child(5) { animation-delay: 170ms; } .stagger > :nth-child(6) { animation-delay: 205ms; }
+.stagger > :nth-child(7) { animation-delay: 240ms; } .stagger > :nth-child(8) { animation-delay: 275ms; }
+.stagger > :nth-child(9) { animation-delay: 310ms; } .stagger > :nth-child(10) { animation-delay: 345ms; }
+.stagger > :nth-child(n+11) { animation-delay: 380ms; }
+table.data.stagger-rows tbody tr { animation: fade-in var(--d-mid) var(--ease-out) both; }
+table.data.stagger-rows tbody tr:nth-child(-n+20) { animation-delay: calc(var(--row, 0) * 22ms); }
+@keyframes fade-in { from { opacity: 0; } }
+
+/* Pipeline and bars grow from the left */
+.pipe .bar span { transform-origin: left; animation: grow-x 0.7s var(--ease-out) both; }
+.pipe .bar span:nth-child(2) { animation-delay: 80ms; } .pipe .bar span:nth-child(3) { animation-delay: 160ms; }
+.pipe .bar span:nth-child(4) { animation-delay: 240ms; } .pipe .bar span:nth-child(5) { animation-delay: 320ms; }
+.pipe .bar span:nth-child(6) { animation-delay: 400ms; }
+.growbar { transform-origin: left; animation: grow-x 0.8s var(--ease-out) both; animation-delay: 200ms; }
+@keyframes grow-x { from { transform: scaleX(0); } }
+.pipe .segs a { transition: background-color var(--d-fast), transform var(--d-fast) var(--ease-out); }
+@media (hover: hover) and (pointer: fine) { .pipe .segs a:hover { background: var(--mist); } .pipe .segs a:hover b { transform: translateY(-2px); } }
+.pipe .segs b { display: inline-block; transition: transform var(--d-fast) var(--ease-out); }
+
+/* Cards and rows answer the pointer */
+.panel, .qrow, .linkrow, .kpis > div, .pipe { transition: border-color var(--d-mid), box-shadow var(--d-mid), transform var(--d-mid) var(--ease-out), background-color var(--d-fast); }
+@media (hover: hover) and (pointer: fine) {
+  .qrow:hover, .linkrow:hover { background: var(--paper); }
+  .kpis > div:hover, .tablewrap:hover { border-color: var(--field); }
+  table.data tbody tr { transition: background-color var(--d-fast); }
+  .sidenav .navlink { transition: background-color var(--d-fast), color var(--d-fast), transform var(--d-fast) var(--ease-out); }
+  .sidenav .navlink:hover { transform: translateX(2px); }
+  .btn.primary:hover { box-shadow: 0 6px 18px -6px rgba(200, 69, 31, 0.55); transform: translateY(-1px); }
+}
+.btn:active { transform: scale(0.97) translateY(0); }
+.btn svg { transition: transform var(--d-fast) var(--ease-out); }
+@media (hover: hover) and (pointer: fine) { .btn:hover svg { transform: scale(1.08); } }
+.btn.primary .icon-plus, .btn.primary:hover svg[data-i='plus'] { transform: rotate(90deg); }
+
+/* Fields: a soft ring grows on focus */
+input, select, textarea { transition: border-color var(--d-fast), box-shadow var(--d-mid) var(--ease-out), background-color var(--d-fast); }
+.section-title i { transition: background-color var(--d-mid), color var(--d-mid), transform var(--d-mid) var(--ease-spring); }
+.formsec:focus-within .section-title i { background: var(--accent); color: #fff; transform: scale(1.12); }
+.formsec { animation: rise var(--d-slow) var(--ease-out) both; }
+.formsec:nth-of-type(2) { animation-delay: 70ms; } .formsec:nth-of-type(3) { animation-delay: 140ms; } .formsec:nth-of-type(4) { animation-delay: 210ms; }
+
+/* Toggles and chips: the active state slides in */
+.views button, .seg button, .tabs button { transition: background-color var(--d-mid) var(--ease-out), color var(--d-mid), box-shadow var(--d-mid), transform var(--d-fast); }
+.views button:active, .seg button:active, .tabs button:active { transform: scale(0.96); }
+.seg button[aria-checked='true'] { animation: pop var(--d-mid) var(--ease-spring); }
+@keyframes pop { from { transform: scale(0.9); } }
+
+/* Warnings get attention once, then sit still */
+.headbox { animation: nudge 0.5s var(--ease-out) both; }
+@keyframes nudge { 0% { opacity: 0; transform: translateY(6px); } 40% { opacity: 1; transform: translateX(-4px); } 60% { transform: translateX(4px); } 80% { transform: translateX(-2px); } 100% { transform: none; } }
+.field .error { animation: nudge 0.4s var(--ease-out) both; }
+
+/* Status pills and counters */
+.st { transition: background-color var(--d-mid), color var(--d-mid); }
+.st::before { animation: dot-in var(--d-mid) var(--ease-spring) both; }
+@keyframes dot-in { from { transform: scale(0); } }
+.stepper i.now::after { animation: pulse 2s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
+.stepper i { transform-origin: left; animation: grow-x 0.6s var(--ease-out) both; }
+.stepper i:nth-child(2) { animation-delay: 60ms; } .stepper i:nth-child(3) { animation-delay: 120ms; } .stepper i:nth-child(4) { animation-delay: 180ms; }
+.stepper i:nth-child(5) { animation-delay: 240ms; } .stepper i:nth-child(6) { animation-delay: 300ms; } .stepper i:nth-child(7) { animation-delay: 360ms; }
+.sidenav .count, .bottomnav .badge { animation: dot-in 0.4s var(--ease-spring) both; animation-delay: 300ms; }
+
+/* Next-step card: a slow sheen draws the eye to the one action */
+.nextstep { position: relative; overflow: hidden; animation: rise var(--d-slow) var(--ease-out) both; animation-delay: 120ms; }
+.nextstep::after { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%); transform: translateX(-120%); animation: sheen 1.4s var(--ease-out) 0.6s 1 both; }
+@keyframes sheen { to { transform: translateX(120%); } }
+
+/* Timeline: dots pop as items arrive */
+.timeline > li { animation: rise var(--d-slow) var(--ease-out) both; }
+.timeline > li:nth-child(2) { animation-delay: 60ms; } .timeline > li:nth-child(3) { animation-delay: 120ms; } .timeline > li:nth-child(4) { animation-delay: 180ms; }
+.timeline > li:nth-child(n+5) { animation-delay: 240ms; }
+.timeline > li::before { animation: dot-in 0.45s var(--ease-spring) both; animation-delay: inherit; }
+
+/* Selection bar and bottom bar */
+.selbar { animation: slide-up var(--d-mid) var(--ease-out) both; }
+@keyframes slide-up { from { opacity: 0; transform: translateY(12px); } }
+.bottomnav .add { transition: transform var(--d-fast) var(--ease-spring), box-shadow var(--d-mid); }
+.bottomnav .add:active { transform: scale(0.9) rotate(90deg); }
+.bottomnav a svg { transition: transform var(--d-mid) var(--ease-spring); }
+.bottomnav [aria-current='page'] svg { transform: translateY(-2px) scale(1.08); }
+
+/* Success: check mark draws itself in the toast */
+.toast { animation: toast-in 0.42s var(--ease-spring); }
+.toast svg { animation: dot-in 0.45s var(--ease-spring) 0.1s both; }
+.toast svg path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw 0.4s var(--ease-out) 0.2s forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* Photos appear with a gentle zoom */
+.photo, .thumbs > * { animation: zoom-in var(--d-mid) var(--ease-out) both; }
+@keyframes zoom-in { from { opacity: 0; transform: scale(0.92); } }
+
+/* Login and setup screens */
+.auth-art > * { animation: rise 0.6s var(--ease-out) both; }
+.auth-art > :nth-child(2) { animation-delay: 90ms; } .auth-art > :nth-child(3) { animation-delay: 180ms; } .auth-art > :nth-child(4) { animation-delay: 270ms; }
+.auth-art::before, .auth-art::after { content: ''; position: absolute; border-radius: 50%; filter: blur(60px); opacity: 0.35; pointer-events: none; z-index: 0; }
+.auth-art::before { width: 380px; height: 380px; background: #c8451f; top: -160px; right: 18%; animation: drift 18s ease-in-out infinite alternate; }
+.auth-art::after { width: 300px; height: 300px; background: #2f6fd6; bottom: -140px; left: -80px; animation: drift 22s ease-in-out infinite alternate-reverse; }
+.auth-art > * { position: relative; z-index: 1; }
+@keyframes drift { to { transform: translate(-60px, 50px) scale(1.15); } }
+.auth-card { animation: card-up 0.6s var(--ease-out) 0.15s both; }
+@keyframes card-up { from { opacity: 0; transform: translateY(24px); } }
+.logo-arc { stroke-dasharray: 60; stroke-dashoffset: 60; animation: draw 0.9s var(--ease-out) 0.2s forwards; }
+.logo-dot { transform-box: fill-box; transform-origin: center; animation: dot-in 0.5s var(--ease-spring) 0.8s both; }
+
+/* Numbers that count up get steady widths */
+.countup { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-art::before, .auth-art::after { display: none; }
+  .logo-arc { stroke-dashoffset: 0; }
+  .toast svg path { stroke-dashoffset: 0; }
+}

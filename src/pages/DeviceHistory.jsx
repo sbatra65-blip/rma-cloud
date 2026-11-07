@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { downloadBlob, get, qs } from '../api.js';
 import { writeTable } from '../excel.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { COMPLETED, Empty, ErrorPanel, Icon, Link, ReceivedPartSn, SHORT, ShowToggle, Skeleton, Status, can, fmtDate, fmtMs, navigate, todayISO, useShow } from '../ui.jsx';
+import { COMPLETED, CountUp, Empty, ErrorPanel, Icon, Link, ReceivedPartSn, SHORT, ShowToggle, Skeleton, Status, can, fmtDate, fmtMs, navigate, todayISO, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
@@ -36,7 +36,7 @@ function Search() {
       {rows === null ? <p className="muted small">Type at least 3 letters or digits of the serial.</p> : !rows.length ? (
         <Empty icon="search" title="No device found">No RMA or care pack has this serial. <button type="button" className="linkbtn" onClick={go}>Open the history anyway</button></Empty>
       ) : (
-        <div className="panel" style={{ padding: 6 }}>
+        <div className="panel stagger" style={{ padding: 6 }}>
           {rows.map((r) => (
             <Link key={r.serial} to={`/devices/${encodeURIComponent(r.serial)}`} className="linkrow" style={{ padding: '10px 12px' }}>
               <span style={{ display: 'grid', minWidth: 0 }}>
@@ -98,9 +98,9 @@ function History({ sn, user }) {
         </div>
       </div>
 
-      <div className="kpis" style={{ marginBottom: 14 }}>
-        <div><b>{s.total}</b><span>RMAs</span></div>
-        <div><b>{s.open}</b><span>Open now</span></div>
+      <div className="kpis stagger" style={{ marginBottom: 14 }}>
+        <div><b><CountUp n={s.total} /></b><span>RMAs</span></div>
+        <div><b><CountUp n={s.open} /></b><span>Open now</span></div>
         <div style={overHeads ? { borderColor: 'var(--amber)', background: 'var(--amber-tint)' } : undefined}><b style={overHeads ? { color: 'var(--amber)' } : undefined}>{s.heads}{s.headLimit ? <small className="muted" style={{ fontSize: '0.85rem' }}> / {s.headLimit}</small> : null}</b><span>Print-head claims</span></div>
         {s.currentHead && <div><b className="mono" style={{ fontSize: '1rem', fontWeight: 550 }}>{s.currentHead.received_part_sn}</b><span>Head fitted now (from {s.currentHead.ticket_no})</span></div>}
         <div><b>{s.avgDays ?? '—'}</b><span>Average days to close</span></div>

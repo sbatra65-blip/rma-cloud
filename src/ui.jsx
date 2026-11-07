@@ -145,8 +145,8 @@ export function Logo({ size = 30 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
       <rect width="32" height="32" rx="9" fill="#16263d" />
-      <path d="M21 11.5a7 7 0 1 0 0 9" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
-      <circle cx="22.5" cy="16" r="2.4" fill="#ff8a5c" />
+      <path className="logo-arc" d="M21 11.5a7 7 0 1 0 0 9" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      <circle className="logo-dot" cx="22.5" cy="16" r="2.4" fill="#ff8a5c" />
     </svg>
   );
 }
@@ -361,4 +361,26 @@ export function ReceivedPartSn({ ticket, canEdit, onSaved, compact = false }) {
       {err && <span className="small" style={{ color: 'var(--rust)', flexBasis: '100%' }}>{err}</span>}
     </form>
   );
+}
+
+// Counts up from 0 (or the previous value) to n. Instant when the user prefers less motion.
+export function CountUp({ n, ms = 700 }) {
+  const target = Number(n) || 0;
+  const [v, setV] = useState(target);
+  const from = useRef(0);
+  useEffect(() => {
+    const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !target) { setV(target); from.current = target; return undefined; }
+    const start = performance.now(); const a = from.current;
+    let raf = 0;
+    const step = (t) => {
+      const k = Math.min(1, (t - start) / ms);
+      const e = 1 - Math.pow(1 - k, 3);
+      setV(Math.round(a + (target - a) * e));
+      if (k < 1) raf = requestAnimationFrame(step); else from.current = target;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return <data className="countup" value={target}>{v}</data>;
 }
