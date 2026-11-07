@@ -22,14 +22,14 @@
   --rust-tint: #fde8e5;
   --focus: #1a7fb8;
   /* workflow stages */
-  --s-open: #64748b;
-  --s-await: #c98a00;
-  --s-oem: #7c4dce;
-  --s-toem: #2f6fd0;
-  --s-back: #0e8f8a;
-  --s-tocust: #3c55c9;
-  --s-closed: #1f8a5b;
-  --s-returned: #8a94a3;
+  --s-open: #6b6f8f;
+  --s-await: #b07800;
+  --s-oem: #6e68ae;
+  --s-toem: #5a80bc;
+  --s-back: #138da1;
+  --s-tocust: #c03a96;
+  --s-closed: #4a8f37;
+  --s-returned: #838284;
   --radius-lg: 14px;
   --radius: 10px;
   --shadow: none;
@@ -223,14 +223,14 @@ main { width: 100%; max-width: 1180px; margin: 0 auto; padding: 16px 16px 112px;
 .st { --c: var(--s-open); --t: #47546a; --b: #eef1f5; display: inline-flex; align-items: center; gap: 6px; font-size: 0.76rem; font-weight: 700; padding: 3px 10px 3px 8px;
   border-radius: 999px; background: var(--b); color: var(--t); white-space: nowrap; }
 .st::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
-[data-s='OPEN'] { --c: var(--s-open); --sc: var(--s-open); --t: #47546a; --b: #eef1f5; }
-[data-s='AWAITING_OEM_RMA'] { --c: var(--s-await); --sc: var(--s-await); --t: #8a5200; --b: #fdf1d6; }
-[data-s='OEM_RMA_RECEIVED'] { --c: var(--s-oem); --sc: var(--s-oem); --t: #5b3fb0; --b: #efeafb; }
-[data-s='DISPATCHED_TO_OEM'] { --c: var(--s-toem); --sc: var(--s-toem); --t: #2457b3; --b: #e6eefb; }
-[data-s='GOODS_RECEIVED_FROM_OEM'] { --c: var(--s-back); --sc: var(--s-back); --t: #0b6f6b; --b: #dff3f2; }
-[data-s='DISPATCHED_TO_CUSTOMER'] { --c: var(--s-tocust); --sc: var(--s-tocust); --t: #3c55c9; --b: #e9edfb; }
-[data-s='CLOSED'] { --c: var(--s-closed); --sc: var(--s-closed); --t: #17704a; --b: #e3f4ea; }
-[data-s='CLOSED_RETURNED'] { --c: var(--s-returned); --sc: var(--s-returned); --t: #47546a; --b: #eef1f5; }
+[data-s='OPEN'] { --c: var(--s-open); --sc: var(--s-open); --t: #4c5070; --b: #eeeef5; }
+[data-s='AWAITING_OEM_RMA'] { --c: var(--s-await); --sc: var(--s-await); --t: #6b5a00; --b: #fbf5d6; }
+[data-s='OEM_RMA_RECEIVED'] { --c: var(--s-oem); --sc: var(--s-oem); --t: #4e4892; --b: #efeef8; }
+[data-s='DISPATCHED_TO_OEM'] { --c: var(--s-toem); --sc: var(--s-toem); --t: #2c5290; --b: #e6eef9; }
+[data-s='GOODS_RECEIVED_FROM_OEM'] { --c: var(--s-back); --sc: var(--s-back); --t: #0a6878; --b: #ddf3f7; }
+[data-s='DISPATCHED_TO_CUSTOMER'] { --c: var(--s-tocust); --sc: var(--s-tocust); --t: #962070; --b: #fbe8f3; }
+[data-s='CLOSED'] { --c: var(--s-closed); --sc: var(--s-closed); --t: #2e6a22; --b: #e8f4e2; }
+[data-s='CLOSED_RETURNED'] { --c: var(--s-returned); --sc: var(--s-returned); --t: #55555a; --b: #efeff1; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .st { --b: color-mix(in srgb, var(--c) 22%, transparent); --t: #e7edf5; } }
 
 /* ---------- KPI tiles ---------- */

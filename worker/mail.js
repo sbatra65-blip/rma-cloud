@@ -22,19 +22,23 @@ export async function sendMail(env, { to, cc, replyTo, subject, html, text, atta
 }
 
 function shell(appName, title, bodyHtml, host) {
-  return `<!doctype html><html><body style="margin:0;background:#eef1f5;font-family:Segoe UI,Roboto,Arial,sans-serif">
+  return `<!doctype html><html><body style="margin:0;background:#f2f1f8;font-family:Segoe UI,Roboto,Arial,sans-serif">
     <div style="max-width:600px;margin:0 auto;padding:24px">
-      <div style="background:#16263d;color:#fff;border-radius:14px 14px 0 0;padding:18px 24px">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border-radius:14px 14px 0 0;overflow:hidden"><tr>
+        <td style="height:4px;background:#5a80bc"></td><td style="height:4px;background:#6e68ae"></td><td style="height:4px;background:#c03a96"></td>
+        <td style="height:4px;background:#19aec6"></td><td style="height:4px;background:#7fc06c"></td><td style="height:4px;background:#cfc455"></td></tr></table>
+      <div style="background:#303090;color:#fff;padding:18px 24px">
         <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.7">${esc(appName)}</div>
         <div style="font-size:18px;font-weight:700;margin-top:2px">${esc(title)}</div>
       </div>
-      <div style="background:#fff;border-radius:0 0 14px 14px;padding:8px 24px 24px;color:#16263d">${bodyHtml}
-        <p style="color:#5b6b7f;font-size:12px;margin-top:20px">We never ask for your password by email. Links only go to ${esc(host)}.</p>
+      <div style="background:#fff;border-radius:0 0 14px 14px;padding:8px 24px 24px;color:#1e1b4b">${bodyHtml}
+        <p style="color:#5f6278;font-size:12px;margin-top:20px">We never ask for your password by email. Links only go to ${esc(host)}.</p>
+        <p style="margin:18px 0 0;text-align:center"><img src="https://${esc(host)}/brand/infinite-solutions.png" width="64" height="59" alt="Infinite Solutions" style="display:inline-block;border:0"></p>
       </div>
     </div></body></html>`;
 }
 const button = (href, text) =>
-  `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#e4572e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700">${esc(text)}</a></p>`;
+  `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#303090;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:700">${esc(text)}</a></p>`;
 
 export function inviteLink(appUrl, token) {
   // The token goes after # so it never reaches server logs or other sites.
@@ -51,7 +55,7 @@ export function inviteEmail({ appName, appUrl, name, token, days, companies, inv
       ? `${esc(invitedBy)} has reset your login for <b>${esc(where)}</b>. Choose a new password and set up two-step login again with an authenticator app.`
       : `${esc(invitedBy)} has added you to <b>${esc(where)}</b> on ${esc(appName)}, the RMA ticket system. Choose a password, then set up two-step login with an authenticator app (Google Authenticator, Microsoft Authenticator or Authy).`}</p>
     ${button(link, reset ? 'Set up my login' : 'Accept invite')}
-    <p style="color:#5b6b7f;font-size:13px">This link works once and expires in ${days} days. After that, ask your admin for a new one.</p>`, host);
+    <p style="color:#5f6278;font-size:13px">This link works once and expires in ${days} days. After that, ask your admin for a new one.</p>`, host);
   const text = `Hello ${name},\n\n${reset ? 'Your login was reset.' : `You have been added to ${where} on ${appName}.`}\nSet up your login here (works once, expires in ${days} days):\n${link}`;
   return { subject: reset ? `${appName}: set up your login again` : `${appName}: you're invited to ${where}`, html, text };
 }
@@ -64,8 +68,8 @@ export function resetEmail({ appName, appUrl, name, token, minutes }) {
     <p>Someone asked to reset the password for your ${esc(appName)} account. If it was you, use the button below.
       You will also need your authenticator code (or a recovery code).</p>
     ${button(link, 'Choose a new password')}
-    <p style="color:#5b6b7f;font-size:13px">This link works once and expires in ${minutes} minutes.</p>
-    <p style="color:#5b6b7f;font-size:13px">If you didn't ask for this, ignore this email. Your password stays the same.</p>`, host);
+    <p style="color:#5f6278;font-size:13px">This link works once and expires in ${minutes} minutes.</p>
+    <p style="color:#5f6278;font-size:13px">If you didn't ask for this, ignore this email. Your password stays the same.</p>`, host);
   const text = `Hello ${name},\n\nReset your ${appName} password here (works once, expires in ${minutes} minutes):\n${link}\n\nYou will also need your authenticator code.\nIf you didn't ask for this, ignore this email.`;
   return { subject: `Reset your ${appName} password`, html, text };
 }
@@ -91,13 +95,13 @@ export function reminderEmail({ appName, appUrl, companyName, items, recipientNa
     groups.get(key).push(i);
   }
   const blocks = [...groups].map(([kind, list]) => `
-    <h3 style="margin:20px 0 6px;font-size:14px;color:#16263d">${esc(kind)} <span style="color:#5b6b7f;font-weight:400">(${list.length})</span></h3>
+    <h3 style="margin:20px 0 6px;font-size:14px;color:#1e1b4b">${esc(kind)} <span style="color:#5f6278;font-weight:400">(${list.length})</span></h3>
     <table style="width:100%;border-collapse:collapse;font-size:13px">${list.slice(0, 40).map((i) => `
       <tr><td style="padding:6px 0;border-bottom:1px solid #e3e8ee">
-        <a href="${esc(appUrl)}${esc(i.href || `/rma/${i.id}`)}" style="color:#16263d;font-weight:700;text-decoration:none">${esc(i.ticket_no)}</a>
-        <span style="color:#5b6b7f"> · ${esc(i.customer)} · ${esc([i.model, i.serial].filter(Boolean).join(' '))}${i.part ? ' · ' + esc(i.part) : ''}</span>
-      </td><td style="padding:6px 0;border-bottom:1px solid #e3e8ee;text-align:right;color:${i.tone === 'late' ? '#c0392b' : '#5b6b7f'};white-space:nowrap">${i.age === null || i.age === undefined ? '' : `${i.age} d old`}</td></tr>`).join('')}
-    </table>${list.length > 40 ? `<p style="color:#5b6b7f;font-size:12px">…and ${list.length - 40} more</p>` : ''}`).join('');
+        <a href="${esc(appUrl)}${esc(i.href || `/rma/${i.id}`)}" style="color:#1e1b4b;font-weight:700;text-decoration:none">${esc(i.ticket_no)}</a>
+        <span style="color:#5f6278"> · ${esc(i.customer)} · ${esc([i.model, i.serial].filter(Boolean).join(' '))}${i.part ? ' · ' + esc(i.part) : ''}</span>
+      </td><td style="padding:6px 0;border-bottom:1px solid #e3e8ee;text-align:right;color:${i.tone === 'late' ? '#c0392b' : '#5f6278'};white-space:nowrap">${i.age === null || i.age === undefined ? '' : `${i.age} d old`}</td></tr>`).join('')}
+    </table>${list.length > 40 ? `<p style="color:#5f6278;font-size:12px">…and ${list.length - 40} more</p>` : ''}`).join('');
   const html = shell(appName, `${items.length} RMA${items.length === 1 ? '' : 's'} need attention — ${companyName}`, `
     <p>Hello ${esc(recipientName || '')},</p>
     <p>These RMAs are waiting for the next step.</p>${blocks}
@@ -120,6 +124,6 @@ export function consoleInviteEmail({ appName, consoleUrl, name, token, days, inv
     <p>${esc(invitedBy)} has ${reset ? 'reset your login for' : 'added you as an operator of'} the <b>${esc(appName)} Console</b>, where companies, their limits and their logins are managed.
       Choose a password, then set up two-step login with an authenticator app.</p>
     ${button(link, reset ? 'Set up my login' : 'Accept invite')}
-    <p style="color:#5b6b7f;font-size:13px">This link works once and expires in ${days} days.</p>`, host);
+    <p style="color:#5f6278;font-size:13px">This link works once and expires in ${days} days.</p>`, host);
   return { subject: `${appName} Console: ${reset ? 'set up your login again' : 'you are invited'}`, html, text: `Hello ${name},\n\nSet up your ${appName} Console login (works once, expires in ${days} days):\n${link}` };
 }
