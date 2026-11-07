@@ -142,21 +142,18 @@ export function Icon({ name, size = 22, ...rest }) {
   );
 }
 export function Logo({ size = 30 }) {
-  // Return loop around a barcode label: a part goes to the OEM and comes back. Same mark as the app icon.
+  // Infinite Solutions infinity mark (brand gradient) on a white tile. Same mark as the app icon and favicon.
   const id = useId().replace(/:/g, '');
   return (
-    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true" className="brandmark-svg">
       <defs>
-        <linearGradient id={`lg${id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#24406a" /><stop offset="1" stopColor="#0e1928" /></linearGradient>
-        <linearGradient id={`lo${id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ff8a4c" /><stop offset="1" stopColor="#d6451b" /></linearGradient>
+        <linearGradient id={`la${id}`} x1="0" y1="0" x2="1" y2="0.3"><stop offset="0" stopColor="#5b6fd0" /><stop offset="0.55" stopColor="#7a4fb0" /><stop offset="1" stopColor="#cc4f8f" /></linearGradient>
+        <linearGradient id={`lb${id}`} x1="0" y1="0.2" x2="1" y2="0"><stop offset="0" stopColor="#e0558e" /><stop offset="0.45" stopColor="#18a9d6" /><stop offset="1" stopColor="#b9d65a" /></linearGradient>
       </defs>
-      <rect width="512" height="512" rx="120" fill={`url(#lg${id})`} />
-      <path className="logo-arc" pathLength="60" d="M331.1 114.7 A160 160 0 1 1 105.6 201.3" fill="none" stroke={`url(#lo${id})`} strokeWidth="70" strokeLinecap="round" />
-      <g className="logo-dot">
-        <path transform="translate(105.6 201.3) rotate(-70)" d="M0 -73.5 L119 0 L0 73.5 Z" fill="#ff7d43" stroke="#ff7d43" strokeWidth="14" strokeLinejoin="round" />
-        <rect x="196" y="206" width="120" height="100" rx="16" fill="#fff" />
-        <rect x="214" y="226" width="14" height="60" fill="#16263d" /><rect x="240" y="226" width="8" height="60" fill="#16263d" />
-        <rect x="260" y="226" width="18" height="60" fill="#16263d" /><rect x="290" y="226" width="10" height="60" fill="#16263d" />
+      <rect width="512" height="512" rx="120" fill="#fff" stroke="#e7e5f0" strokeWidth="8" />
+      <g transform="translate(256 256) scale(0.92) translate(-256 -256)">
+        <path className="logo-arc" pathLength="60" d="M256.0 256.0 L253.2 252.5 L250.4 249.0 L247.5 245.5 L244.7 242.0 L241.8 238.5 L239.0 235.0 L236.1 231.5 L233.2 228.1 L230.2 224.6 L227.2 221.2 L224.2 217.9 L221.1 214.5 L218.0 211.2 L214.8 208.0 L211.6 204.7 L208.3 201.6 L205.0 198.5 L201.6 195.4 L198.1 192.4 L194.6 189.5 L191.0 186.7 L187.3 183.9 L183.5 181.3 L179.6 178.8 L175.7 176.3 L171.6 174.1 L167.5 171.9 L163.3 169.9 L159.0 168.1 L154.6 166.4 L150.2 165.0 L145.6 163.7 L141.0 162.7 L136.3 161.8 L131.5 161.3 L126.7 161.0 L121.9 161.0 L116.9 161.3 L112.0 161.9 L107.0 162.9 L102.1 164.2 L97.2 165.9 L92.3 167.9 L87.5 170.3 L82.7 173.1 L78.1 176.3 L73.7 179.9 L69.3 183.9 L65.2 188.3 L61.4 193.0 L57.7 198.1 L54.4 203.6 L51.4 209.4 L48.7 215.5 L46.4 221.8 L44.5 228.4 L43.0 235.1 L41.9 242.0 L41.2 249.0 L41.0 256.0 L41.2 263.0 L41.9 270.0 L43.0 276.9 L44.5 283.6 L46.4 290.2 L48.7 296.5 L51.4 302.6 L54.4 308.4 L57.7 313.9 L61.4 319.0 L65.2 323.7 L69.3 328.1 L73.7 332.1 L78.1 335.7 L82.7 338.9 L87.5 341.7 L92.3 344.1 L97.2 346.1 L102.1 347.8 L107.0 349.1 L112.0 350.1 L116.9 350.7 L121.9 351.0 L126.7 351.0 L131.5 350.7 L136.3 350.2 L141.0 349.3 L145.6 348.3 L150.2 347.0 L154.6 345.6 L159.0 343.9 L163.3 342.1 L167.5 340.1 L171.6 337.9 L175.7 335.7 L179.6 333.2 L183.5 330.7 L187.3 328.1 L191.0 325.3 L194.6 322.5 L198.1 319.6 L201.6 316.6 L205.0 313.5 L208.3 310.4 L211.6 307.3 L214.8 304.0 L218.0 300.8 L221.1 297.5 L224.2 294.1 L227.2 290.8 L230.2 287.4 L233.2 283.9 L236.1 280.5 L239.0 277.0 L241.8 273.5 L244.7 270.0 L247.5 266.5 L250.4 263.0 L253.2 259.5 L256.0 256.0" fill="none" stroke={`url(#la${id})`} strokeWidth="70" strokeLinecap="round" strokeLinejoin="round" />
+        <path className="logo-arc" pathLength="60" d="M256.0 256.0 L258.8 252.5 L261.6 249.0 L264.5 245.5 L267.3 242.0 L270.2 238.5 L273.0 235.0 L275.9 231.5 L278.8 228.1 L281.8 224.6 L284.8 221.2 L287.8 217.9 L290.9 214.5 L294.0 211.2 L297.2 208.0 L300.4 204.7 L303.7 201.6 L307.0 198.5 L310.4 195.4 L313.9 192.4 L317.4 189.5 L321.0 186.7 L324.7 183.9 L328.5 181.3 L332.4 178.8 L336.3 176.3 L340.4 174.1 L344.5 171.9 L348.7 169.9 L353.0 168.1 L357.4 166.4 L361.8 165.0 L366.4 163.7 L371.0 162.7 L375.7 161.8 L380.5 161.3 L385.3 161.0 L390.1 161.0 L395.1 161.3 L400.0 161.9 L405.0 162.9 L409.9 164.2 L414.8 165.9 L419.7 167.9 L424.5 170.3 L429.3 173.1 L433.9 176.3 L438.3 179.9 L442.7 183.9 L446.8 188.3 L450.6 193.0 L454.3 198.1 L457.6 203.6 L460.6 209.4 L463.3 215.5 L465.6 221.8 L467.5 228.4 L469.0 235.1 L470.1 242.0 L470.8 249.0 L471.0 256.0 L470.8 263.0 L470.1 270.0 L469.0 276.9 L467.5 283.6 L465.6 290.2 L463.3 296.5 L460.6 302.6 L457.6 308.4 L454.3 313.9 L450.6 319.0 L446.8 323.7 L442.7 328.1 L438.3 332.1 L433.9 335.7 L429.3 338.9 L424.5 341.7 L419.7 344.1 L414.8 346.1 L409.9 347.8 L405.0 349.1 L400.0 350.1 L395.1 350.7 L390.1 351.0 L385.3 351.0 L380.5 350.7 L375.7 350.2 L371.0 349.3 L366.4 348.3 L361.8 347.0 L357.4 345.6 L353.0 343.9 L348.7 342.1 L344.5 340.1 L340.4 337.9 L336.3 335.7 L332.4 333.2 L328.5 330.7 L324.7 328.1 L321.0 325.3 L317.4 322.5 L313.9 319.6 L310.4 316.6 L307.0 313.5 L303.7 310.4 L300.4 307.3 L297.2 304.0 L294.0 300.8 L290.9 297.5 L287.8 294.1 L284.8 290.8 L281.8 287.4 L278.8 283.9 L275.9 280.5 L273.0 277.0 L270.2 273.5 L267.3 270.0 L264.5 266.5 L261.6 263.0 L258.8 259.5 L256.0 256.0" fill="none" stroke={`url(#lb${id})`} strokeWidth="70" strokeLinecap="round" strokeLinejoin="round" style={{ animationDelay: '0.45s' }} />
       </g>
     </svg>
   );

@@ -312,7 +312,7 @@ function Enroll({ enroll, onIn }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
   const [saved, setSaved] = useState(false);
-  useEffect(() => { QRCode.toDataURL(enroll.otpauth, { margin: 0, width: 400, color: { dark: '#16263d', light: '#ffffff' } }).then(setQr); }, [enroll.otpauth]);
+  useEffect(() => { QRCode.toDataURL(enroll.otpauth, { margin: 0, width: 400, color: { dark: '#1e1b4b', light: '#ffffff' } }).then(setQr); }, [enroll.otpauth]);
   async function submit(e) {
     e.preventDefault();
     if (!/^\d{6}$/.test(code)) return setError('Enter the 6-digit code shown in your app');

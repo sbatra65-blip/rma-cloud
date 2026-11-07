@@ -1,6 +1,6 @@
 // Caches only the app shell (HTML, JS, CSS, fonts, icons). API data and files are never cached,
 // so nothing private stays on the device after you sign out.
-const CACHE = 'rma-shell-v3';
+const CACHE = 'rma-shell-v4';
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png'])).then(() => self.skipWaiting()));
 });

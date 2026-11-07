@@ -201,7 +201,7 @@ function Enroll({ setup, onSignedIn, stepBase = 1, total = 3, welcome }) {
   const [done, setDone] = useState(null);
   const [saved, setSaved] = useState(false);
   useEffect(() => {
-    QRCode.toDataURL(setup.otpauth, { margin: 0, width: 400, color: { dark: '#16263d', light: '#ffffff' } }).then(setQr);
+    QRCode.toDataURL(setup.otpauth, { margin: 0, width: 400, color: { dark: '#1e1b4b', light: '#ffffff' } }).then(setQr);
   }, [setup.otpauth]);
   async function submit(e) {
     e.preventDefault();
