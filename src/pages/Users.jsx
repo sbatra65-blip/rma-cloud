@@ -12,7 +12,7 @@ const EVENT = {
   login: 'Logged in', login_failed: 'Failed login', logout: 'Logged out', login_locked: 'Locked after wrong attempts', setup: 'App set up',
   '2fa_enrolled': 'Set up two-step login', invite_accepted: 'Accepted invite', user_invited: 'Invited', invite_resent: 'Invite re-sent',
   login_reset: 'Login reset by admin', user_updated: 'User changed', user_removed: 'User removed', password_changed: 'Changed password',
-  password_reset: 'Reset password', reset_requested: 'Asked for password reset', recovery_code_used: 'Used a recovery code',
+  password_reset: 'Reset password', reset_requested: 'Asked for password reset', reset_email_sent: 'Reset email sent', reset_skipped: 'Reset email not sent', email_failed: 'Email failed', recovery_code_used: 'Used a recovery code',
   recovery_codes_renewed: 'Made new recovery codes', session_ended_by_admin: 'Session ended by admin', company_updated: 'Company details changed',
   company_created: 'Company created', company_disabled: 'Company switched off', company_enabled: 'Company switched on',
 };

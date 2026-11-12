@@ -138,7 +138,7 @@ export class Directory extends DurableObject {
     if (args && args.origin) this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('app_url', ?)", String(args.origin).slice(0, 200));
     const allowed = [
       'appUrl', 'needsSetup', 'setupStart', 'enrollFinish', 'inviteCheck', 'inviteStart',
-      'forgotStart', 'resetCheck', 'resetFinish', 'changePassword', 'newRecoveryCodes',
+      'forgotStart', 'mailResult', 'resetCheck', 'resetFinish', 'changePassword', 'newRecoveryCodes',
       'loginPassword', 'loginVerify', 'touch', 'logout', 'publicUser',
       'listUsers', 'inviteUser', 'updateUser', 'resendInvite', 'resetSignIn', 'removeUser',
       'listSessions', 'endSession', 'authLog',
@@ -406,14 +406,25 @@ export class Directory extends DurableObject {
     const company = this.companyByCode(companyCode);
     if (!company) return null;
     const user = this.one('SELECT id, email, name, totp_enabled, disabled, company_id FROM users WHERE company_id = ? AND email = ?', company.id, email);
-    if (!user || !user.totp_enabled || user.disabled) return null;
+    // Skips are logged for the company's Admins (Users & security), never told to the person asking.
+    const skip = (why) => { if (user) this.log('reset_skipped', { companyId: company.id, userId: user.id, email: user.email, detail: why, client: { ip } }); return null; };
+    if (!user) return null;
+    if (user.disabled) return skip('login is disabled');
+    if (!user.totp_enabled) return skip('login not finished: two-step setup was never completed (send a new invite instead)');
     const recent = this.all("SELECT expires FROM pending WHERE user_id = ? AND purpose = 'reset'", user.id);
-    if (recent.some((r) => r.expires - RESET_MINUTES * MIN > Date.now() - 2 * MIN) || recent.length >= 5) return null;
+    if (recent.some((r) => r.expires - RESET_MINUTES * MIN > Date.now() - 2 * MIN)) return skip('asked again within 2 minutes; the earlier email is still valid');
+    if (recent.length >= 5) return skip(`5 reset links already sent in the last ${RESET_MINUTES} minutes; wait, or use the newest email`);
     const token = newToken();
     this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)',
       await sha256(token), user.id, 'reset', Date.now() + RESET_MINUTES * MIN);
     this.log('reset_requested', { companyId: company.id, userId: user.id, email: user.email });
-    return { email: user.email, name: user.name, token, minutes: RESET_MINUTES, company: company.name };
+    return { email: user.email, name: user.name, token, minutes: RESET_MINUTES, company: company.name, companyId: company.id, userId: user.id };
+  }
+
+  // Outcome of an email the Worker tried to send for a login (reset, invite…), for the Admin's log.
+  mailResult({ companyId, userId, email, kind, ok, error }) {
+    this.log(ok ? `${kind}_email_sent` : 'email_failed', { companyId, userId, email, detail: ok ? null : `${kind}: ${String(error || '').slice(0, 400)}` });
+    return { ok: true };
   }
 
   async resetCheck({ token }) {

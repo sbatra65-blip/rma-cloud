@@ -585,6 +585,15 @@ r = await phone('POST', '/api/auth/login/verify', { loginToken: a.data.loginToke
 ok(r.status === 401, 'used recovery code rejected');
 r = await phone('POST', '/api/auth/forgot', { companyCode: 'INF', email: 'owner@example.com' });
 ok(r.status === 200, 'forgot password answers ok');
+a = await phone('POST', '/api/auth/login', { companyCode: 'INF', email: 'owner@example.com', password: PW });
+await phone('POST', '/api/auth/login/verify', { loginToken: a.data.loginToken, recoveryCode: ownerRecovery[1] });
+r = await phone('GET', '/api/admin/login-log');
+{ const rows = r.data.rows || r.data.log || r.data;
+  ok(Array.isArray(rows) && rows.some((e) => e.event === 'email_failed' && /reset: Email is not set up/.test(e.detail || '')), 'failed reset email is shown to Admins with the reason', JSON.stringify(r.data).slice(0, 200)); }
+r = await phone('POST', '/api/auth/forgot', { companyCode: 'INF', email: 'owner@example.com' });
+r = await phone('GET', '/api/admin/login-log');
+{ const rows = r.data.rows || r.data.log || r.data;
+  ok(rows.some((e) => e.event === 'reset_skipped' && /within 2 minutes/.test(e.detail || '')), 'skipped reset is shown to Admins with the reason'); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

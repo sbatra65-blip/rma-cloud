@@ -226,6 +226,7 @@ async function handle(request, env, ctx) {
     if (r) {
       const sent = await sendMail(env, { to: r.email, ...resetEmail({ appName, appUrl: url.origin, name: r.name, token: r.token, minutes: r.minutes }) });
       if (!sent.ok) console.error('reset email', sent.error);
+      await dcall(env, 'mailResult', { companyId: r.companyId, userId: r.userId, email: r.email, kind: 'reset', ok: sent.ok, error: sent.error }).catch(() => {});
       if (env.DEV_SHOW_RESET_LINK === '1' && url.hostname === 'localhost') return json({ ok: true, devToken: r.token });
     }
     return json({ ok: true });
