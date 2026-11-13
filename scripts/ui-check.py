@@ -293,6 +293,24 @@ with sync_playwright() as p:
     d3.wait_for_selector('h1.mono')
     d3.screenshot(path=f'{OUT}/22-desktop-detail.png', full_page=True)
     ok(d3.locator('.nextstep').count() == 1, 'RMA page shows the next-step card')
+    ok(d3.evaluate("document.documentElement.dataset.theme") == 'light', 'light mode by default')
+    d3.goto(BASE + '/profile')
+    d3.click('[role=radio]:has-text("Dark")')
+    ok(d3.evaluate("document.documentElement.dataset.theme") == 'dark', 'profile: switch to dark mode')
+    d3.screenshot(path=f'{OUT}/45-dark-profile.png', full_page=True)
+    d3.click('[role=radio]:has-text("Light")')
+    import base64, tempfile
+    logo = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+    logo.write(base64.b64decode(open('public/icons/icon-192.png','rb').read() and base64.b64encode(open('public/icons/icon-192.png','rb').read())))
+    logo.close()
+    d3.goto(BASE + '/settings')
+    d3.wait_for_selector('text=Company logo')
+    d3.set_input_files('input[type=file][accept^="image/png"]', logo.name)
+    d3.wait_for_selector('.logo-preview img.companylogo')
+    d3.goto(BASE + '/')
+    d3.wait_for_selector('.dash-hello img.companylogo')
+    ok(d3.locator('.sidenav .brand img.companylogo').count() == 1, 'company logo shows in sidebar and dashboard')
+    d3.screenshot(path=f'{OUT}/46-company-logo.png')
 
     # ---- print-head limit: 3rd head on one printer needs a reason ----
     def head_rma(psn, show_box=False):

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { post } from '../api.js';
-import { Field, Icon, Strength, VersionLabel, passwordScore, useToast } from '../ui.jsx';
+import { Field, Icon, Strength, ThemePicker, VersionLabel, passwordScore, useToast } from '../ui.jsx';
 
 export default function Profile({ user, idleMinutes, onLogout }) {
   return (
     <>
       <div className="page-head"><div><h1>{user.name}</h1><p className="muted">{user.email} · {user.role}{user.isOwner ? ' · Owner' : ''}</p></div></div>
       <div className="grid2">
+        <ThemePicker />
         <section className="panel">
           <h2>This login</h2>
           <dl className="kv">

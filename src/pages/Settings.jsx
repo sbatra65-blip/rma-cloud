@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, del, downloadBlob, get, post } from '../api.js';
-import { Field, Icon, copyText, fmtMs, useToast } from '../ui.jsx';
+import { CompanyLogo, Field, Icon, copyText, fmtMs, shrinkImage, useToast } from '../ui.jsx';
 
 const TOKENS = ['INTERNAL_TICKET', 'CUSTOMER', 'PRINTER_MODEL', 'PRINTER_SERIAL', 'FAULTY_PART', 'FAULTY_PART_SERIAL', 'PART_CODE', 'FAULT_DESCRIPTION',
   'TPH_MILAGE', 'PRINTER_MILAGE', 'FW_VERSION', 'OEM_RMA', 'PO_NUMBER', 'EXCEL_FILE_STEM', 'COMPANY_NAME', 'COMPANY_EMAIL', 'COMPANY_PHONE'];
@@ -80,6 +80,8 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
     <form onSubmit={save} noValidate>
       <div className="page-head"><div><h1>Company settings</h1><p className="muted">Only for {user.company.name}. Other companies have their own settings.</p></div></div>
       {errors.form && <div className="formerror" style={{ marginBottom: 14 }}>{errors.form}</div>}
+
+      <LogoPanel boot={boot} reloadBoot={reloadBoot} />
 
       <section className="panel">
         <h2>Company</h2>
@@ -296,6 +298,43 @@ function MigrationPanel() {
             <button className="btn ghost small" disabled={busy} onClick={revoke}>Cancel key</button></>}
         </div>
       )}
+    </section>
+  );
+}
+
+// Company logo: shown in the header, on the dashboard and on printouts.
+function LogoPanel({ boot, reloadBoot }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const input = useRef(null);
+  async function upload(file) {
+    if (!file) return;
+    setBusy(true); setError(null);
+    try {
+      const blob = await shrinkImage(file, 512);
+      if (blob.size > 1024 * 1024) throw new Error('Logo is still over 1 MB after shrinking; use a simpler image');
+      await api('POST', '/api/company/logo', blob, { headers: { 'Content-Type': blob.type } });
+      await reloadBoot();
+      toast('Logo saved');
+    } catch (e) { setError(e.fields?.logo || e.message); } finally { setBusy(false); if (input.current) input.current.value = ''; }
+  }
+  async function remove() {
+    setBusy(true);
+    try { await del('/api/company/logo'); await reloadBoot(); toast('Logo removed'); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+  const has = !!boot.settings?.logoAt;
+  return (
+    <section className="panel">
+      <h2>Company logo</h2>
+      <p className="muted small" style={{ margin: '4px 0 12px' }}>Shown at the top of the app, on the dashboard and on printouts. PNG with a transparent background works best; it is resized to 512 px.</p>
+      <div className="row" style={{ alignItems: 'center', gap: 16 }}>
+        <div className="logo-preview">{has ? <CompanyLogo boot={boot} height={64} /> : <span className="muted small">No logo yet</span>}</div>
+        <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => upload(e.target.files?.[0])} />
+        <button type="button" className="btn ghost" disabled={busy} onClick={() => input.current?.click()}><Icon name="upload" size={18} /> {busy ? 'Saving…' : has ? 'Change logo' : 'Upload logo'}</button>
+        {has && <button type="button" className="btn ghost danger-text" disabled={busy} onClick={remove}>Remove</button>}
+      </div>
+      {error && <p className="small" style={{ color: 'var(--rust)', marginTop: 8 }}>{error}</p>}
     </section>
   );
 }

@@ -228,6 +228,16 @@ ok(r.status === 409, 'same part type again with no serial blocked');
 r = await owner('GET', `/api/rma/${mp1.id}/email`);
 ok(r.data.fileName === 'TE310_TEBT7770001_Head.xlsx', 'each part gets its own Excel name');
 
+console.log('Company logo');
+{ const PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+  r = await owner('POST', '/api/company/logo', new TextEncoder().encode('<svg onload=alert(1)>'), { 'Content-Type': 'image/svg+xml' });
+  ok(r.status === 422, 'logo: SVG / non-image refused');
+  r = await owner('POST', '/api/company/logo', PNG, { 'Content-Type': 'image/png' });
+  ok(r.status === 200 && r.data.logoAt > 0, 'logo uploaded by Admin');
+  r = await owner('GET', '/api/company/logo');
+  ok(r.status === 200, 'logo served to the company');
+  r = await owner('GET', '/api/bootstrap');
+  ok(r.data.settings.logoAt > 0, 'bootstrap tells the app a logo exists'); }
 console.log('Device categories, print-head limit, device history');
 r = await owner('GET', '/api/bootstrap');
 const cats = r.data.masters.categories || [];

@@ -456,6 +456,21 @@ async function handle(request, env, ctx) {
     return respond({ ok: true });
   }
 
+  // Company logo
+  if (path === '/api/company/logo' && method === 'GET') {
+    const l = await ccall(env, user, 'getLogo');
+    if (!l) return err(404, 'No logo');
+    return raw(l.bytes, { 'Content-Type': l.mime, 'Cache-Control': 'private, max-age=604800', 'X-Content-Type-Options': 'nosniff' });
+  }
+  if (path === '/api/company/logo' && method === 'POST') {
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength > 1024 * 1024) throw new ValidationError({ logo: 'Logo must be under 1 MB' });
+    const mime = sniff(bytes);
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) throw new ValidationError({ logo: 'Upload a PNG, JPG or WebP image' });
+    return respond(await ccall(env, user, 'putLogo', { bytes, mime }));
+  }
+  if (path === '/api/company/logo' && method === 'DELETE') return respond(await ccall(env, user, 'deleteLogo'));
+
   // OEM Excel template: company's own upload, else the built-in TSC form.
   if (path === '/api/template' && method === 'GET') {
     const t = await ccall(env, user, 'getTemplate');
@@ -779,6 +794,24 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
       body = o.body;
     }
     return new Response(body, { headers: { 'Content-Type': f.mime, 'Cache-Control': 'no-store' } });
+  }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/logo$/);
+  if (m) {
+    const sys = { userId: null, name: `${op.name} (console)`, role: 'Admin', companyId: m[1] };
+    if (method === 'GET') {
+      const l = await ccall(env, sys, 'getLogo');
+      return l ? new Response(l.bytes, { headers: { 'Content-Type': l.mime, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } }) : err(404, 'No logo');
+    }
+    if (method === 'POST') {
+      const bytes = await request.arrayBuffer();
+      if (bytes.byteLength > 1024 * 1024) throw new ValidationError({ logo: 'Logo must be under 1 MB' });
+      const mime = sniff(bytes);
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) throw new ValidationError({ logo: 'Upload a PNG, JPG or WebP image' });
+      const r = await ccall(env, sys, 'putLogo', { bytes, mime });
+      await dcall(env, 'consoleExportLog', { op, id: m[1], detail: 'company logo uploaded', ip: client.ip }).catch(() => {});
+      return respond({ logoAt: r.logoAt });
+    }
+    if (method === 'DELETE') { const r = await ccall(env, sys, 'deleteLogo'); return respond({ logoAt: r.logoAt }); }
   }
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/delete$/);
   if (m && method === 'POST') {

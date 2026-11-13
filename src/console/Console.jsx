@@ -2,10 +2,10 @@
 // Operators create companies, set limits and modules, and manage each company's logins. No RMA data here.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { del, downloadBlob, get, post, setSessionEndedHandler } from '../api.js';
+import { api, del, downloadBlob, get, post, setSessionEndedHandler } from '../api.js';
 import {
   Dialog, Empty, ErrorPanel, Field, Icon, Link, BrandLogo, Logo, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
-  navigate, passwordScore, todayISO, useLoad, usePath, useToast,
+  navigate, passwordScore, shrinkImage, ThemePicker, todayISO, useLoad, usePath, useToast,
 } from '../ui.jsx';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
@@ -655,6 +655,7 @@ function CompanyPage({ id, appUrl }) {
         </section>
       )}
 
+      {tab === 'settings' && <ConsoleLogo id={id} />}
       {tab === 'settings' && (
         <form onSubmit={save} noValidate>
           {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
@@ -738,6 +739,40 @@ function AddUser({ id, roles, domains, onClose, onDone }) {
         <div className="row end"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Adding…' : 'Add and create invite'}</button></div>
       </form>
     </Dialog>
+  );
+}
+
+// Company logo from the console (the company's Admin can also set it in Company settings).
+function ConsoleLogo({ id }) {
+  const toast = useToast();
+  const [ver, setVer] = useState(Date.now());
+  const [has, setHas] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const input = useRef(null);
+  async function upload(file) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const blob = await shrinkImage(file, 512);
+      await api('POST', `/api/console/companies/${id}/logo`, blob, { headers: { 'Content-Type': blob.type } });
+      setHas(true); setVer(Date.now()); toast('Logo saved');
+    } catch (e) { toast(e.fields?.logo || e.message, true); } finally { setBusy(false); if (input.current) input.current.value = ''; }
+  }
+  async function remove() {
+    setBusy(true);
+    try { await del(`/api/console/companies/${id}/logo`); setHas(false); toast('Logo removed'); } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
+  return (
+    <section className="panel" style={{ marginBottom: 16 }}>
+      <h2>Company logo</h2>
+      <p className="muted small" style={{ margin: '4px 0 12px' }}>Shown at the top of the company's app, on its dashboard and on printouts.</p>
+      <div className="row" style={{ alignItems: 'center', gap: 16 }}>
+        <div className="logo-preview">{has ? <img src={`/api/console/companies/${id}/logo?v=${ver}`} alt="" style={{ height: 64, width: 'auto', maxWidth: 200 }} onError={() => setHas(false)} /> : <span className="muted small">No logo yet</span>}</div>
+        <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => upload(e.target.files?.[0])} />
+        <button type="button" className="btn ghost" disabled={busy} onClick={() => input.current?.click()}><Icon name="upload" size={18} /> {busy ? 'Saving…' : has ? 'Change logo' : 'Upload logo'}</button>
+        {has && <button type="button" className="btn ghost danger-text" disabled={busy} onClick={remove}>Remove</button>}
+      </div>
+    </section>
   );
 }
 
@@ -964,6 +999,7 @@ function ConsoleProfile({ op, onLogout }) {
       <div className="page-head"><div><h1>{op.name}</h1><p className="muted">{op.email} · {op.recoveryLeft} recovery codes left</p></div>
         <button className="btn ghost" onClick={onLogout}><Icon name="logout" size={18} /> Log out</button></div>
       <div className="grid2">
+        <ThemePicker />
         <form className="panel stack" onSubmit={change} noValidate>
           <h2>Change password</h2>
           {errors.form && <div className="formerror">{errors.form}</div>}

@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { get, qs } from '../api.js';
 import { CoverNote } from './CarePackLink.jsx';
-import { CountUp, ErrorPanel, FLOW, Icon, Link, SHORT, ShowToggle, Skeleton, Status, ago, can, navigate, useLoad, useShow } from '../ui.jsx';
+import { CompanyLogo, CountUp, ErrorPanel, FLOW, Icon, Link, SHORT, ShowToggle, Skeleton, Status, ago, can, navigate, useLoad, useShow } from '../ui.jsx';
 
 const STAGE_COLOR = {
   OPEN: 'var(--s-open)', AWAITING_OEM_RMA: 'var(--s-await)', OEM_RMA_RECEIVED: 'var(--s-oem)', DISPATCHED_TO_OEM: 'var(--s-toem)',
   GOODS_RECEIVED_FROM_OEM: 'var(--s-back)', DISPATCHED_TO_CUSTOMER: 'var(--s-tocust)',
 };
 
-export default function Dashboard({ user }) {
+export default function Dashboard({ user, boot }) {
   const [show] = useShow();
   const [d, reload, error] = useLoad(() => get(`/api/dashboard?show=${show}`), [show]);
   if (error && !d) return <ErrorPanel error={error} retry={reload} />;
@@ -20,9 +20,12 @@ export default function Dashboard({ user }) {
   return (
     <>
       <div className="page-head">
-        <div>
-          <p className="muted small" style={{ fontWeight: 600 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-          <h1 style={{ fontSize: '1.85rem', letterSpacing: '-0.02em' }}>{greet}, {user.name.split(' ')[0]}</h1>
+        <div className="dash-hello">
+          <CompanyLogo boot={boot} height={56} className="dash-logo" />
+          <div>
+            <p className="muted small" style={{ fontWeight: 600 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+            <h1 style={{ fontSize: '1.85rem', letterSpacing: '-0.02em' }}>{greet}, {user.name.split(' ')[0]}</h1>
+          </div>
         </div>
         <div className="row head-actions">
           <Link to="/devices" className="btn ghost" aria-label="Device history"><Icon name="history" size={18} /> <span>Device history</span></Link>

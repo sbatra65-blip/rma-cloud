@@ -50,8 +50,33 @@
   background: var(--paper);
   -webkit-text-size-adjust: 100%;
 }
+/* Theme: light unless the person picks Dark, or 'Match this device' (Profile > Appearance). */
+:root[data-theme='dark'] {
+  --ink: #0e0d24;
+  --ink-2: #3a3480;
+  --paper: #12122a;
+  --surface: #1b1a3a;
+  --line: #2d2b55;
+  --field: #3f3c70;
+  --mist: #23214a;
+  --muted: #a9a7c8;
+  --text: #ecebf7;
+  --text-2: #cbc9e2;
+  --accent: #a5a8ff;
+  --accent-tint: #252456;
+  --accent-ink: #cfd0ff;
+  --ok: #5fd39e;
+  --ok-tint: #173a2b;
+  --amber: #f4c160;
+  --amber-tint: #3d3013;
+  --rust: #ff9a8a;
+  --rust-tint: #46231f;
+  --shadow: none;
+  --float: 0 10px 30px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+  :root[data-theme='system'] {
     --ink: #0e0d24;
     --ink-2: #3a3480;
     --paper: #12122a;
@@ -231,7 +256,8 @@ main { width: 100%; max-width: 1180px; margin: 0 auto; padding: 16px 16px 112px;
 [data-s='DISPATCHED_TO_CUSTOMER'] { --c: var(--s-tocust); --sc: var(--s-tocust); --t: #962070; --b: #fbe8f3; }
 [data-s='CLOSED'] { --c: var(--s-closed); --sc: var(--s-closed); --t: #2e6a22; --b: #e8f4e2; }
 [data-s='CLOSED_RETURNED'] { --c: var(--s-returned); --sc: var(--s-returned); --t: #55555a; --b: #efeff1; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .st { --b: color-mix(in srgb, var(--c) 22%, transparent); --t: #e7edf5; } }
+:root[data-theme='dark'] .st { --b: color-mix(in srgb, var(--c) 22%, transparent); --t: #e7edf5; }
+@media (prefers-color-scheme: dark) { :root[data-theme='system'] .st { --b: color-mix(in srgb, var(--c) 22%, transparent); --t: #e7edf5; } }
 
 /* ---------- KPI tiles ---------- */
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
@@ -285,7 +311,7 @@ table.data a:hover { text-decoration: underline; }
 .field .req { color: var(--accent); margin-left: 2px; }
 .field .hint { font-size: 0.78rem; color: var(--muted); }
 .field .error { font-size: 0.8rem; color: var(--rust); font-weight: 600; }
-input[type='text'], input[type='email'], input[type='password'], input[type='number'], input[type='date'], input[type='tel'],
+input:not([type]), input[type='text'], input[type='email'], input[type='password'], input[type='number'], input[type='date'], input[type='tel'],
 input[type='search'], select, textarea {
   width: 100%; min-height: 46px; padding: 10px 14px; border-radius: var(--radius); border: 1.5px solid var(--line);
   background: var(--surface); font-size: 1rem;
@@ -690,3 +716,16 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .brand .brandlogo-top { margin: -4px 0; }
 .logochip { display: inline-grid; place-items: center; padding: 6px 8px; background: #fff; border-radius: 14px; box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.4); }
 .sidenav .version .brandlogo { display: none; }
+
+/* Company logo */
+.companylogo { display: block; flex: none; object-fit: contain; }
+.dash-hello { display: flex; align-items: center; gap: 16px; }
+.dash-logo { border-radius: 10px; }
+.logo-preview { min-width: 120px; min-height: 72px; display: grid; place-items: center; padding: 8px 12px; border: 1px dashed var(--field); border-radius: 12px; background: #fff; }
+.danger-text { color: var(--rust); }
+.print-brand { display: none; }
+@media print {
+  .print-brand { display: flex; align-items: center; gap: 12px; padding-bottom: 10px; margin-bottom: 14px; border-bottom: 2px solid #303090; }
+  .print-brand span { display: grid; } .print-brand small { color: #555; }
+}
+@media (max-width: 719px) { .dash-logo { display: none; } }

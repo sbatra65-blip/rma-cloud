@@ -385,3 +385,49 @@ export function CountUp({ n, ms = 700 }) {
   }, [target, ms]);
   return <data className="countup" value={target}>{v}</data>;
 }
+
+// ---------- Appearance (per device): light by default ----------
+const THEME_KEY = 'rma.theme';
+export function getTheme() {
+  try { const t = localStorage.getItem(THEME_KEY); return t === 'dark' || t === 'system' ? t : 'light'; } catch { return 'light'; }
+}
+export function applyTheme(t = getTheme()) {
+  document.documentElement.dataset.theme = t;
+  const dark = t === 'dark' || (t === 'system' && typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#0e0d24' : '#ffffff');
+}
+export function ThemePicker() {
+  const [t, setT] = useState(getTheme);
+  const pick = (v) => { setT(v); try { localStorage.setItem(THEME_KEY, v); } catch { /* private mode */ } applyTheme(v); };
+  return (
+    <section className="panel">
+      <h2>Appearance</h2>
+      <p className="muted small" style={{ margin: '4px 0 12px' }}>Saved on this phone or computer.</p>
+      <div className="seg" role="radiogroup" aria-label="Theme">
+        {[['light', 'Light'], ['dark', 'Dark'], ['system', 'Match this device']].map(([v, l]) => (
+          <button key={v} type="button" role="radio" aria-checked={t === v} onClick={() => pick(v)}>{l}</button>))}
+      </div>
+    </section>
+  );
+}
+
+// The company's own logo (uploaded in Company settings), or nothing.
+export function CompanyLogo({ boot, height = 40, className = '' }) {
+  const at = boot?.settings?.logoAt;
+  if (!at) return null;
+  return <img className={`companylogo ${className}`} src={`/api/company/logo?v=${at}`} alt="" style={{ height, width: 'auto', maxWidth: height * 3.2 }} />;
+}
+
+// Shrinks an image file to fit max x max and returns a PNG/JPEG blob (keeps transparency as PNG).
+export async function shrinkImage(file, max = 512) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('That file is not an image we can read')); i.src = url; });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const type = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+    return await new Promise((res) => c.toBlob(res, type, 0.9));
+  } finally { URL.revokeObjectURL(url); }
+}

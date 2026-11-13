@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, setSessionEndedHandler } from './api.js';
 import { broadcastLogout, useIdle } from './idle.js';
-import { Dialog, Icon, Link, BrandLogo, Logo, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
+import { CompanyLogo, Dialog, Icon, Link, BrandLogo, Logo, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
 import Auth from './pages/Auth.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RmaList from './pages/RmaList.jsx';
@@ -147,7 +147,7 @@ function Shell() {
   return (
     <div className="app">
       <aside className="sidenav" aria-label="Main">
-        <Link to="/" className="brand"><BrandLogo height={56} />
+        <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={48} /> : <BrandLogo height={56} />}
           <span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
         <form role="search" className="navsearch" onSubmit={(e) => { e.preventDefault(); const q = new FormData(e.currentTarget).get('q').trim(); if (q) navigate(`/rma?q=${encodeURIComponent(q)}`); }}>
           <Icon name="search" size={16} /><input name="q" type="search" placeholder="RMA, serial, customer" aria-label="Search RMAs" />
@@ -167,13 +167,15 @@ function Shell() {
         </div>
       </aside>
       <header className="topbar">
-        <Link to="/" className="brand"><BrandLogo height={38} /><span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
+        <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={34} /> : <BrandLogo height={38} />}<span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
         <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
           <Link to="/profile" className="iconbtn" aria-label="My profile"><Icon name="user" /></Link>
           <button type="button" className="iconbtn" onClick={() => signOut('logout')} aria-label="Log out" title="Log out"><Icon name="logout" /></button>
         </div>
       </header>
-      <main><div className="page" key={route}>{page}</div></main>
+      <main>
+        <div className="print-brand" aria-hidden="true"><CompanyLogo boot={boot} height={44} /><span><b>{user.company.name}</b><small>RMA Cloud · printed {new Date().toLocaleDateString('en-IN')}</small></span></div>
+        <div className="page" key={route}>{page}</div></main>
       <nav className="bottomnav" aria-label="Main">
         <Link to="/" aria-current={current('/') ? 'page' : undefined}><Icon name="home" /><span>Home</span></Link>
         <Link to="/rma" aria-current={route === '/rma' || /^\/rma\/\d/.test(route) ? 'page' : undefined}><Icon name="ticket" /><span>RMAs</span></Link>

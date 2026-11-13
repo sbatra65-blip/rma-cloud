@@ -255,7 +255,7 @@ export class Company extends DurableObject {
       // read: everyone in the company
       bootstrap: 'read', dashboard: 'read', listTickets: 'read', getTicket: 'read', checkDuplicates: 'read', emailContext: 'read',
       deviceHistory: 'read', searchDevices: 'read', bulkClose: 'edit', setReceivedPart: 'edit',
-      getPhoto: 'read', listBatches: 'read', getBatch: 'read', batchCandidates: 'read', reminders: 'read', getTemplate: 'read',
+      getPhoto: 'read', listBatches: 'read', getBatch: 'read', batchCandidates: 'read', reminders: 'read', getTemplate: 'read', getLogo: 'read',
       listMasters: 'read', importLog: 'read',
       // edit: everyone except Viewer
       createTicket: 'edit', updateTicket: 'edit', deleteTicket: 'edit', ticketAction: 'edit', markExcel: 'edit', recordOemEmail: 'edit',
@@ -263,7 +263,7 @@ export class Company extends DurableObject {
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only
-      getSettings: 'read', saveSettings: 'admin', putTemplate: 'admin', deleteTemplate: 'admin', auditLog: 'admin',
+      getSettings: 'read', saveSettings: 'admin', putTemplate: 'admin', deleteTemplate: 'admin', putLogo: 'admin', deleteLogo: 'admin', auditLog: 'admin',
       // system (cron)
       reminderDigest: 'system',
       // care pack (finer role checks inside each method)
@@ -308,7 +308,8 @@ export class Company extends DurableObject {
   getSettings(user) {
     const s = this.settings();
     const tpl = this.one('SELECT name, size, updated_at, updated_by FROM files WHERE id = ?', TEMPLATE_ID);
-    return { ...s, ...this.cpSettings(), template: tpl || null };
+    const logo = this.one('SELECT updated_at FROM files WHERE id = ?', 'company_logo');
+    return { ...s, ...this.cpSettings(), template: tpl || null, logoAt: logo?.updated_at || null };
   }
   saveSettings(user, b) {
     const c = new Checker(b);
@@ -1006,6 +1007,24 @@ export class Company extends DurableObject {
     this.sql.exec('INSERT OR REPLACE INTO files (id, name, mime, size, updated_at, updated_by) VALUES (?,?,?,?,?,?)',
       TEMPLATE_ID, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes.byteLength, Date.now(), user.name);
     this.audit(user, 'upload', 'template', TEMPLATE_ID, { name, size: bytes.byteLength });
+    return this.getSettings(user);
+  }
+  // Company logo (PNG/JPEG/WebP, already resized by the browser). Shown in the app header, dashboard and printouts.
+  putLogo(user, { bytes, mime }) {
+    this.storeBytes('company_logo', bytes);
+    this.sql.exec('INSERT OR REPLACE INTO files (id, name, mime, size, updated_at, updated_by) VALUES (?,?,?,?,?,?)',
+      'company_logo', 'logo', mime, bytes.byteLength, Date.now(), user.name);
+    this.audit(user, 'upload', 'logo', 'company_logo', { size: bytes.byteLength });
+    return this.getSettings(user);
+  }
+  getLogo() {
+    const f = this.one('SELECT * FROM files WHERE id = ?', 'company_logo');
+    return f ? { mime: f.mime, bytes: this.readBytes('company_logo', f.size) } : null;
+  }
+  deleteLogo(user) {
+    this.sql.exec("DELETE FROM file_chunks WHERE file_id = 'company_logo'");
+    this.sql.exec("DELETE FROM files WHERE id = 'company_logo'");
+    this.audit(user, 'delete', 'logo', 'company_logo', null);
     return this.getSettings(user);
   }
   getTemplate() {
