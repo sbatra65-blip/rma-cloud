@@ -2,7 +2,7 @@
 import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
-import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail, signupEmail } from './mail.js';
+import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -233,6 +233,11 @@ async function handle(request, env, ctx) {
     const sent = await sendMail(env, { to: v.email, ...signupEmail({ appName, appUrl: app, name: v.name, token: r.invite.token, days: r.invite.days, company: r.company }) });
     if (!sent.ok) console.error('signup email', sent.error);
     await dcall(env, 'mailResult', { companyId: r.company.id, userId: r.user.id, email: v.email, kind: 'signup', ok: sent.ok, error: sent.error }).catch(() => {});
+    ctx.waitUntil((async () => {
+      for (const o of await dcall(env, 'operatorEmails', {})) {
+        await sendMail(env, { to: o.email, ...signupAlertEmail({ appName, consoleUrl: consoleUrlOf(env, app), company: r.company, name: v.name, email: v.email, phone: v.phone }) });
+      }
+    })().catch((e) => console.error('signup alert', e)));
     const out = { ok: true, emailed: sent.ok, company: { code: r.company.code, name: r.company.name } };
     if (env.DEV_SHOW_RESET_LINK === '1' && url.hostname === 'localhost') out.devLink = `/invite#token=${encodeURIComponent(r.invite.token)}`;
     return json(out);
@@ -865,6 +870,16 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
       : await dcall(env, 'consoleMarkPaid', { op, id: m[1], validUntil: b.validUntil, amount: b.amount, ref: b.ref, ip: client.ip });
     return respond({ ...d, transactions: await company(env, m[1]).transactionCounts() });
   }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/remind$/);
+  if (m && method === 'POST') {
+    const n = await dcall(env, 'consoleRemindInfo', { op, id: m[1], ip: client.ip });
+    const sent = [];
+    for (const p of n.people) {
+      const r = await sendMail(env, { to: p.email, ...accessEmail({ appName, appUrl: app, kind: n.kind, company: n.company, info: n.info, payment: n.payment, recipientName: p.name }) });
+      sent.push({ to: p.email, ok: r.ok, error: r.ok ? null : r.error });
+    }
+    return respond({ sent });
+  }
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/delete$/);
   if (m && method === 'POST') {
     const b = await body(request);
@@ -965,6 +980,10 @@ async function serveStatic(request, env, url) {
   return env.ASSETS.fetch(request);
 }
 
+function consoleUrlOf(env, appUrl) {
+  return env.CONSOLE_HOST ? `https://${env.CONSOLE_HOST}/console` : `${appUrl.replace(/\/+$/, '')}/console`;
+}
+
 const cpItems = (list = []) => list.map((i) => ({ ...i, ticket_no: i.invoice, serial: '', part: i.detail, href: `/care-packs/${i.id}`, age: null }));
 
 // Daily job: one digest per company to its Admins and Managers (plus any extra addresses set).
@@ -994,6 +1013,15 @@ async function runReminders(env, appUrl) {
     for (const p of n.people) {
       const r = await sendMail(env, { to: p.email, ...accessEmail({ appName, appUrl, kind: n.kind, company: n.company, info: n.info, payment, recipientName: p.name }) });
       report.push({ company: n.company.code, access: n.kind, to: p.email, ok: r.ok, error: r.error });
+    }
+  }
+  // Daily summary for the service provider: sign-ups, buying signals, access ending / ended.
+  const d = await dcall(env, 'providerDigest', {});
+  if (d.signups.length + d.hot.length + d.ending.length + d.readOnly.length + d.ended.length) {
+    const sentToCustomers = report.filter((r) => r.access);
+    for (const o of d.to) {
+      const r = await sendMail(env, { to: o.email, ...providerDigestEmail({ appName, consoleUrl: consoleUrlOf(env, appUrl), d, sentToCustomers }) });
+      report.push({ provider: o.email, ok: r.ok, error: r.error });
     }
   }
   console.log('reminders', JSON.stringify(report));

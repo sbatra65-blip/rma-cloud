@@ -60,6 +60,36 @@ export function inviteEmail({ appName, appUrl, name, token, days, companies, inv
   return { subject: reset ? `${appName}: set up your login again` : `${appName}: you're invited to ${where}`, html, text };
 }
 
+// Service provider: someone started a free trial.
+export function signupAlertEmail({ appName, consoleUrl, company, name, email, phone }) {
+  const subject = `New trial sign-up: ${company.name} (${company.code})`;
+  const body = `<p><b>${esc(name)}</b> just started a 30-day free trial.</p>
+    <table style="font-size:14px">${[['Company', `${company.name} (${company.code})`], ['Email', email], ['Phone', phone || '—']]
+      .map(([k, v]) => `<tr><td style="padding:3px 12px 3px 0;color:#5f6278">${k}</td><td style="font-weight:600">${esc(v)}</td></tr>`).join('')}</table>
+    <p>They still need to open the setup link we emailed them. A quick call in the first day helps them get going.</p>
+    <p><a href="${esc(consoleUrl)}" style="color:#303090;font-weight:700">Open the console</a></p>`;
+  return { subject, html: shell(`${appName} Console`, subject, body, new URL(consoleUrl).host) };
+}
+
+// Service provider: daily summary of sign-ups, buying signals and access ending.
+export function providerDigestEmail({ appName, consoleUrl, d, sentToCustomers = [] }) {
+  const dmy = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
+  const sec = (title, items, line) => (items.length ? `<h3 style="font-size:15px;margin:18px 0 6px">${title} (${items.length})</h3><ul style="padding-left:18px;margin:0">${items.map((i) => `<li style="margin:3px 0">${line(i)}</li>`).join('')}</ul>` : '');
+  const who = (i) => `<b>${esc(i.name)}</b> (${esc(i.code)})${i.contact ? ` · ${esc(i.contact)}` : ''}${i.phone ? ` · ${esc(i.phone)}` : ''}`;
+  const plan = (i) => (i.plan === 'trial' ? 'trial' : 'paid plan');
+  const body = `<p>Here's today's summary.</p>
+    ${sec('New trial sign-ups', d.signups, (i) => `${esc(i.detail || '')} · ${esc(i.email || '')}`)}
+    ${sec('Buying signal: imported their data', d.hot, (i) => `<b>${esc(i.name)}</b> (${esc(i.code)})${i.import_rows ? ` · ${i.import_rows} RMAs` : ''}`)}
+    ${sec('Ending within 7 days', d.ending, (i) => `${who(i)} · ${plan(i)} ends ${dmy(i.validUntil)} (${i.daysLeft === 0 ? 'today' : `${i.daysLeft} d`})`)}
+    ${sec('Read-only now (not paid)', d.readOnly, (i) => `${who(i)} · ${plan(i)} ended ${dmy(i.validUntil)}, locks after ${dmy(i.readOnlyUntil)}`)}
+    ${sec('Locked yesterday', d.ended, (i) => `${who(i)} · ${plan(i)} ended ${dmy(i.validUntil)}`)}
+    ${sentToCustomers.length ? `<p style="color:#5f6278;font-size:13px;margin-top:18px">Reminders emailed to customers today: ${sentToCustomers.map((r) => `${esc(r.company)} ${r.ok ? '✓' : `✗ (${esc(String(r.error || '').slice(0, 80))})`}`).join(', ')}</p>` : ''}
+    <p style="margin-top:18px">To record a payment: console → company → <b>Mark as paid</b> / <b>Record renewal</b>.</p>
+    <p><a href="${esc(consoleUrl)}" style="color:#303090;font-weight:700">Open the console</a></p>`;
+  const n = d.signups.length + d.hot.length + d.ending.length + d.readOnly.length + d.ended.length;
+  return { subject: `${appName}: ${d.signups.length ? `${d.signups.length} new sign-up${d.signups.length > 1 ? 's' : ''}, ` : ''}${n} item${n === 1 ? '' : 's'} to follow up`, html: shell(`${appName} Console`, 'Daily summary', body, new URL(consoleUrl).host) };
+}
+
 export function signupEmail({ appName, appUrl, name, token, days, company }) {
   const link = inviteLink(appUrl, token);
   const host = new URL(appUrl).host;
@@ -162,10 +192,17 @@ export function accessEmail({ appName, appUrl, kind, company, info, payment, rec
   const trial = info.plan === 'trial';
   const what = trial ? 'free trial' : 'access';
   const t = info.trial;
-  const subject = kind === 'readonly'
+  const left = info.daysLeft;
+  const when = kind === 'ends1' ? 'tomorrow' : kind === 'ends7' ? 'in 7 days' : left === 0 ? 'today' : left === 1 ? 'tomorrow' : `in ${left} days`;
+  const subject = kind === 'ended'
+    ? `${company.name}: ${what} has ended — renew to log in again`
+    : kind === 'readonly'
     ? `${company.name}: ${what} ended — read-only until ${dmyMail(info.readOnlyUntil)}`
-    : `${company.name}: ${what} ends ${kind === 'ends1' ? 'tomorrow' : 'in 7 days'} (${dmyMail(info.validUntil)})`;
-  const lines = kind === 'readonly'
+    : `${company.name}: ${what} ends ${when} (${dmyMail(info.validUntil)})`;
+  const lines = kind === 'ended'
+    ? [`The ${what} for <b>${esc(company.name)}</b> ended on ${dmyMail(info.validUntil)} and logins are paused.`,
+      trial ? `Your data is kept until <b>${dmyMail(info.keepDataUntil)}</b>. Buy a plan before then and everything is back as you left it.` : 'Renew and everything is back as you left it.']
+    : kind === 'readonly'
     ? [`The ${what} for <b>${esc(company.name)}</b> ended on ${dmyMail(info.validUntil)}.`,
       `Until <b>${dmyMail(info.readOnlyUntil)}</b> everyone can still log in to view, print and export, but not add or change anything. After that, logins stop.`,
       trial ? `Your data is kept until <b>${dmyMail(info.keepDataUntil)}</b>. Buy a plan any time before then and you carry on exactly where you left off.` : 'Renew to carry on exactly where you left off.']

@@ -620,7 +620,14 @@ function CompanyPage({ id, appUrl }) {
         </div>
       </div>
 
-      <BillingPanel c={c} onExtend={() => setDlg('extend')} onPaid={() => setDlg('paid')} />
+      <BillingPanel c={c} onExtend={() => setDlg('extend')} onPaid={() => setDlg('paid')} reminding={busy === 'remind'} onRemind={async () => {
+        setBusy('remind');
+        try {
+          const r = await post(`/api/console/companies/${c.id}/remind`, {});
+          const bad = r.sent.filter((x) => !x.ok);
+          toast(bad.length ? `Not sent to ${bad.map((x) => x.to).join(', ')}: ${bad[0].error}` : `Payment reminder emailed to ${r.sent.map((x) => x.to).join(', ')}`);
+        } catch (x) { toast(x.message); } finally { setBusy(''); }
+      }} />
 
       <div className="tabs" role="tablist">
         {[['users', `Users (${data.users.length})`], ['sessions', `Signed in (${data.sessions.length})`], ['settings', 'Settings & limits'], ['log', 'Login history'], ['changes', 'Changes']].map(([k, l]) => (
@@ -793,7 +800,7 @@ function ConsoleLogo({ id }) {
 }
 
 // Plan, trial dates, advance and buying signals for one company.
-function BillingPanel({ c, onExtend, onPaid }) {
+function BillingPanel({ c, onExtend, onPaid, onRemind, reminding }) {
   const trial = c.plan === 'trial';
   const rows = [
     ['Plan', trial ? 'Free trial' : 'Paid'],
@@ -812,6 +819,7 @@ function BillingPanel({ c, onExtend, onPaid }) {
         <dl className="kv" style={{ margin: 0 }}>{rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}</dl>
         <div className="row">
           {trial && !c.extended && <button className="btn ghost small" onClick={onExtend}>Extend {c.trial.extendDays} days</button>}
+          {c.validUntil && <button className="btn ghost small" disabled={reminding} onClick={onRemind} title="Email this company's Admins the end date and your payment details">{reminding ? 'Sending…' : 'Email payment reminder'}</button>}
           <button className="btn primary small" onClick={onPaid}>{trial ? 'Mark as paid' : 'Record renewal'}</button>
         </div>
       </div>

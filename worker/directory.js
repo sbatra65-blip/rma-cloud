@@ -178,7 +178,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'signup', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'signup', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1256,6 +1256,46 @@ export class Directory extends DurableObject {
       if (people.length) out.push({ kind, company: { name: c.name, code: c.code }, people, info: this.accessInfo(c) });
     }
     return { notices: out, payment: this.paymentInfo() };
+  }
+
+  // Who hears about sign-ups, buying signals and trials ending: active console operators with 2FA set up,
+  // plus the contact email on the payment details (if different).
+  operatorEmails() {
+    const list = this.all('SELECT email, name FROM console_users WHERE disabled = 0 AND totp_enabled = 1');
+    const pay = this.paymentInfo();
+    if (pay?.contactEmail && !list.some((o) => o.email.toLowerCase() === pay.contactEmail.toLowerCase())) list.push({ email: pay.contactEmail, name: '' });
+    return list;
+  }
+  // Daily summary for the service provider.
+  providerDigest() {
+    const today = todayIST();
+    const since = Date.now() - DAY;
+    const signups = this.all("SELECT detail, email, at FROM auth_log WHERE event = 'company_signup' AND at > ? ORDER BY at", since);
+    const hot = this.all('SELECT name, code, import_rows FROM companies WHERE import_signal_at > ?', since);
+    const rows = this.all('SELECT * FROM companies WHERE active = 1 AND valid_until IS NOT NULL ORDER BY valid_until');
+    const ending = [];
+    const readOnly = [];
+    const ended = [];
+    for (const c of rows) {
+      const info = this.accessInfo(c);
+      const item = { name: c.name, code: c.code, plan: c.plan || 'paid', validUntil: c.valid_until, daysLeft: info.daysLeft, readOnlyUntil: info.readOnlyUntil, contact: c.contact_email || '', phone: c.contact_phone || '' };
+      if (info.access === 'open' && c.valid_until <= addDays(today, 7)) ending.push(item);
+      else if (info.access === 'readonly') readOnly.push(item);
+      else if (info.access === 'ended' && info.readOnlyUntil === addDays(today, -1)) ended.push(item);
+    }
+    return { to: this.operatorEmails(), signups, hot, ending, readOnly, ended };
+  }
+  // Data for a "send payment reminder now" from the console.
+  consoleRemindInfo({ op, id, ip }) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    if (!c.valid_until) throw new AuthError(422, 'This company has no end date, so there is nothing to remind about. Set "Valid until" first.');
+    const info = this.accessInfo(c);
+    const people = this.all("SELECT email, name FROM users WHERE company_id = ? AND role = 'Admin' AND disabled = 0", id);
+    if (!people.length) throw new AuthError(422, 'This company has no active Admin to email yet.');
+    const kind = info.access === 'readonly' ? 'readonly' : info.access === 'ended' ? 'ended' : 'now';
+    this.cLog(op, 'payment_reminder_sent', { companyId: id, detail: `${c.name} (${c.code}): ${kind} reminder to ${people.map((p) => p.email).join(', ')}`, ip });
+    return { kind, company: { name: c.name, code: c.code }, people, info, payment: this.paymentInfo() };
   }
 
   // Operators normally never see company data, so every download is written to the console log.

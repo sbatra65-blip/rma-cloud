@@ -488,6 +488,10 @@ ok(r.status === 200 && r.data.company.plan === 'trial' && r.data.company.daysLef
   ok(r.data.imported === 1, 'trial: old records import', r.data);
   r = await opc('GET', `/api/console/companies/${trlId}`);
   ok(r.data.company.hotLead && r.data.company.importSignalAt > 0, 'trial import flags a hot lead in the console', r.data.company.importRows);
+  r = await opc('POST', `/api/console/companies/${trlId}/remind`, {});
+  ok(r.status === 200 && r.data.sent.length >= 1 && r.data.sent[0].to, 'console can email a payment reminder to the Admins', JSON.stringify(r.data));
+  r = await opc('GET', '/api/console/log');
+  ok(JSON.stringify(r.data).includes('payment_reminder_sent'), 'payment reminder is logged in the console', JSON.stringify(r.data).slice(0, 200));
   r = await opc('POST', `/api/console/companies/${trlId}/extend-trial`, { amount: 0 });
   ok(r.status === 422, 'extension needs the advance amount');
   r = await opc('POST', `/api/console/companies/${trlId}/extend-trial`, { amount: 5000, ref: 'UTR123' });
