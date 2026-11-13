@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { del, get, post, setSessionEndedHandler } from '../api.js';
 import {
-  Dialog, Empty, ErrorPanel, Field, Icon, Link, Logo, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
+  Dialog, Empty, ErrorPanel, Field, Icon, Link, BrandLogo, Logo, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
   navigate, passwordScore, todayISO, useLoad, usePath, useToast,
 } from '../ui.jsx';
 
@@ -44,7 +44,7 @@ function Shell() {
 
   useIdleTimer(state.phase === 'in', state.idle || 15, () => signOut('idle'));
 
-  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><Logo size={56} /></div>;
+  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} /></div>;
   if (state.phase === 'out') {
     return <ConsoleAuth reason={state.reason} onIn={async (note) => {
       const r = await get('/api/console/me');
@@ -70,7 +70,7 @@ function Shell() {
   return (
     <div className="app">
       <aside className="sidenav" aria-label="Console">
-        <Link to="/console" className="brand"><Logo size={34} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
+        <Link to="/console" className="brand"><BrandLogo height={56} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
         <Link to="/console/companies/new" className="btn primary block addbtn"><Icon name="plus" size={18} /> New company</Link>
         {nav.map(([to, icon, label]) => <Link key={to} to={to} className="navlink" aria-current={cur(to) ? 'page' : undefined}><Icon name={icon} size={19} /> {label}</Link>)}
         <div className="foot">
@@ -81,7 +81,7 @@ function Shell() {
         </div>
       </aside>
       <header className="topbar">
-        <Link to="/console" className="brand"><Logo size={30} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
+        <Link to="/console" className="brand"><BrandLogo height={38} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
         <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
           <Link to="/console/profile" className="iconbtn" aria-label="My profile"><Icon name="user" /></Link>
           <button type="button" className="iconbtn" onClick={() => signOut('logout')} aria-label="Log out"><Icon name="logout" /></button>
@@ -126,7 +126,7 @@ function ConsoleAuth({ reason, onIn }) {
   return (
     <div className="auth">
       <div className="auth-art">
-        <div className="brand"><Logo size={38} /><span style={{ fontSize: '1.15rem' }}>RMA Cloud Console</span></div>
+        <div className="brand"><span className="logochip"><BrandLogo height={52} /></span><span style={{ fontSize: '1.15rem' }}>RMA Cloud Console</span></div>
         <div>
           <h1>Companies, limits and logins — in one place.</h1>
           <p>For the service provider only. Create companies, set how many people may use them, switch modules on or off, and help their users get in.</p>

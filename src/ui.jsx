@@ -147,6 +147,11 @@ export function Logo({ size = 30 }) {
   return <img className="brandmark-img" src="/icons/favicon.svg" width={size} height={size} alt="" />;
 }
 
+// The real Infinite Solutions logo (infinity, barcode and wordmark). Width follows its 233 x 216 shape.
+export function BrandLogo({ height = 48, className = '' }) {
+  return <img className={`brandlogo-top ${className}`} src="/brand/infinite-solutions.png" alt="Infinite Solutions" height={height} width={Math.round(height * 233 / 216)} />;
+}
+
 // ---------- Form field ----------
 export function Field({ label, required, hint, error, children, className = '', htmlFor }) {
   // Link the label to the first control so tapping the label focuses it and screen readers read it.

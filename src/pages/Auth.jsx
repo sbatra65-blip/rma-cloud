@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { get, post } from '../api.js';
-import { Field, Icon, Logo, Strength, VersionLabel, passwordScore } from '../ui.jsx';
+import { Field, Icon, BrandLogo, Logo, Strength, VersionLabel, passwordScore } from '../ui.jsx';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
 const CODE_KEY = 'rma.companyCode';
@@ -15,7 +15,7 @@ function initialMode() {
 function Art() {
   return (
     <div className="auth-art">
-      <div className="brand"><Logo size={38} /><span style={{ fontSize: '1.15rem' }}>RMA Cloud</span></div>
+      <div className="brand"><span className="logochip"><BrandLogo height={52} /></span><span style={{ fontSize: '1.15rem' }}>RMA Cloud</span></div>
       <div>
         <h1>Every faulty part, from customer to OEM and back.</h1>
         <p>Raise RMAs with photos, generate the OEM form, batch dispatches and close the loop — from the office or the service bench.</p>

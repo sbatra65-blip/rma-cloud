@@ -684,3 +684,9 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .version .brandlogo { display: block; margin: 0 auto 6px; height: 56px; width: auto; }
 .brandmark-img { display: block; border-radius: 24%; box-shadow: 0 0 0 1px var(--line); animation: dot-in 0.5s var(--ease-spring) both; }
 .sidenav .version .brandlogo { height: 40px; }
+
+/* Real company logo in the brand spot */
+.brandlogo-top { display: block; flex: none; object-fit: contain; animation: dot-in 0.5s var(--ease-spring) both; }
+.brand .brandlogo-top { margin: -4px 0; }
+.logochip { display: inline-grid; place-items: center; padding: 6px 8px; background: #fff; border-radius: 14px; box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.4); }
+.sidenav .version .brandlogo { display: none; }
