@@ -63,8 +63,10 @@ Runs on Cloudflare Workers + Durable Objects and installs as an app on Android a
      then add variables `CONSOLE_HOST` = `console.example.com` and `APP_URL` = `https://rma.example.com` (the RMA app address,
      used in invite links). With `CONSOLE_HOST` set, the console answers only on that domain.
 5. **Email sender** — until you verify your domain in Resend, mail only reaches your own Resend address.
-   Verify `infinitesolutions.co.in` in Resend, then set the Worker variable `MAIL_FROM`
-   (e.g. `RMA Desk <rma@infinitesolutions.co.in>`). OEM emails to `tsc_rma@tscprinters.com` need this.
+   Verify `trackmyrma.com` in Resend, then set the Worker variable `MAIL_FROM`
+   (e.g. `TrackMyRMA <noreply@trackmyrma.com>`) and use a Resend API key allowed to send from that domain.
+   All mail (invites, password resets, reminders, OEM emails) uses this sender; OEM emails set Reply-To to the
+   company's own email (Company settings), so OEM replies reach the company, not the sender address.
 6. **Phones** — open the address in Chrome (Android: menu → *Install app*) or Safari (iPhone: Share → *Add to Home Screen*).
 
 Every push to `main` redeploys.
@@ -96,7 +98,7 @@ existing numbers. Do the same with `Customers` → **Import → Customers**. Pho
 | `IDLE_MINUTES` | 5 | sign-out after this many idle minutes |
 | `CONSOLE_IDLE_MINUTES` | 15 | console sign-out after this many idle minutes |
 | `CONSOLE_HOST` | — | serve the console only on this hostname |
-| `APP_URL` | — | RMA app address used in invite links sent from the console |
+| `APP_URL` | — | main app address (e.g. `https://trackmyrma.com`): email links, and other attached domains redirect here |
 | `MAX_SESSION_HOURS` | 12 | longest session |
 | `PBKDF2_ITERATIONS` | 100000 | lower it if login shows "exceeded resource limits" on the free plan |
 | `MAIL_FROM` | Resend test sender | verified sender address |

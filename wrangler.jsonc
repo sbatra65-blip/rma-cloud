@@ -44,7 +44,7 @@
     "PBKDF2_ITERATIONS": "100000",
     "CONSOLE_IDLE_MINUTES": "15"
     // Optional (set in the Cloudflare dashboard; keep_vars stops deploys wiping them):
-    //   MAIL_FROM     e.g. "Infinite Solutions RMA <rma@infinitesolutions.co.in>" — sender on your
+    //   MAIL_FROM     e.g. "TrackMyRMA <noreply@trackmyrma.com>" — sender on your
     //                 Resend-verified domain. Without it, mail goes from Resend's test sender.
     //   RESEND_API_KEY (secret) — from resend.com, needed for any email
     //   CONSOLE_HOST  e.g. "console.trackmyrma.com" — console only on that domain
