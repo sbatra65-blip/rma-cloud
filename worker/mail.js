@@ -60,6 +60,20 @@ export function inviteEmail({ appName, appUrl, name, token, days, companies, inv
   return { subject: reset ? `${appName}: set up your login again` : `${appName}: you're invited to ${where}`, html, text };
 }
 
+export function signupEmail({ appName, appUrl, name, token, days, company }) {
+  const link = inviteLink(appUrl, token);
+  const host = new URL(appUrl).host;
+  const html = shell(appName, `Finish setting up ${company.name}`, `
+    <p>Hello ${esc(name)},</p>
+    <p>Thanks for starting your 30-day free trial of ${esc(appName)}. Your company is ready:</p>
+    <p style="font-size:15px;background:#f2f1f8;border-radius:10px;padding:12px 14px">Company code <b style="font-family:Consolas,monospace;font-size:17px">${esc(company.code)}</b><br>${esc(company.name)}</p>
+    <p>Choose your password, then set up two-step login with an authenticator app (Google Authenticator, Microsoft Authenticator or Authy). You'll log in with the company code above and this email address.</p>
+    ${button(link, 'Set up my login')}
+    <p style="color:#5f6278;font-size:13px">This link works once and expires in ${days} days. Didn't sign up? Ignore this email and nothing happens.</p>`, host);
+  const text = `Hello ${name},\n\nThanks for starting your 30-day free trial of ${appName}.\nCompany code: ${company.code} (${company.name})\nSet up your login here (works once, expires in ${days} days):\n${link}\n\nDidn't sign up? Ignore this email.`;
+  return { subject: `${appName}: finish setting up ${company.name}`, html, text };
+}
+
 export function resetEmail({ appName, appUrl, name, token, minutes }) {
   const link = `${appUrl}/reset-password#token=${encodeURIComponent(token)}`;
   const host = new URL(appUrl).host;

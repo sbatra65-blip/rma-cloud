@@ -47,6 +47,7 @@ export class Directory extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.ipHits = new Map();
+    this.signupHits = new Map();
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
@@ -177,7 +178,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'signup', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1099,6 +1100,49 @@ export class Directory extends DurableObject {
       gstin: d.gstin || null, notes: d.notes || null, max_users: Number(d.maxUsers) || 0, max_concurrent: Number(d.maxConcurrent) || 0,
       valid_until: d.validUntil || null, modules: JSON.stringify(mods), idle_minutes: Number(d.idleMinutes) || 0, email_domains: d.emailDomains || null,
     };
+  }
+  // Self sign-up from the website: a new company on the 30-day free trial, with the person signing up as
+  // its first Admin. They get an invite email (proves the address) to choose a password and set up 2FA.
+  freeCode(name) {
+    const words = String(name || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+    let base = words.length > 1 ? words.map((w) => w[0]).join('').slice(0, 6) : (words[0] || '').slice(0, 6);
+    if (base.length < 2) base = (base + 'CO').slice(0, 2);
+    if (!this.one('SELECT 1 AS x FROM companies WHERE code = ?', base)) return base;
+    for (let i = 2; i < 1000; i++) {
+      const c = `${base.slice(0, 12 - String(i).length)}${i}`;
+      if (!this.one('SELECT 1 AS x FROM companies WHERE code = ?', c)) return c;
+    }
+    throw new AuthError(409, 'Choose a company code.', { field: 'code' });
+  }
+  async signup({ data, admin, ip }) {
+    const now = Date.now();
+    const hits = (this.signupHits.get(ip || '-') || []).filter((t) => now - t < 60 * MIN);
+    if (hits.length >= 3) throw new AuthError(429, 'Too many sign-ups from this network. Try again in an hour.');
+    hits.push(now);
+    this.signupHits.set(ip || '-', hits);
+    const today = this.one("SELECT COUNT(*) AS n FROM auth_log WHERE event = 'company_signup' AND at > ?", now - DAY).n;
+    if (today >= 50) throw new AuthError(429, 'Sign-ups are busy right now. Please try again tomorrow or contact us.');
+    if (this.one('SELECT 1 AS x FROM companies WHERE lower(name) = lower(?)', data.name)) {
+      throw new AuthError(409, 'A company with this name is already registered. If it is yours, log in or ask its Admin to invite you.', { field: 'companyName' });
+    }
+    let code = data.code;
+    if (code && this.one('SELECT 1 AS x FROM companies WHERE code = ?', code)) throw new AuthError(409, 'This company code is taken. Try another.', { field: 'code' });
+    if (!code) code = this.freeCode(data.name);
+    const id = uuid();
+    const userId = uuid();
+    const f = {
+      contact_name: admin.name, contact_email: admin.email, contact_phone: data.phone || null, notes: 'Self sign-up from the website',
+      plan: 'trial', trial_started: todayIST(), valid_until: addDays(todayIST(), TRIAL.days), modules: JSON.stringify([...MODULES]),
+      max_users: TRIAL.users, max_concurrent: 0, idle_minutes: 0,
+    };
+    this.sql.exec(`INSERT INTO companies (id, code, name, ticket_prefix, active, created_at, updated_at, ${Object.keys(f).join(', ')})
+      VALUES (?,?,?,?,1,?,?, ${Object.keys(f).map(() => '?').join(',')})`, id, code, data.name, code.slice(0, 8), now, now, ...Object.values(f));
+    this.sql.exec("INSERT INTO users (id, company_id, email, name, role, dup_override, created_at, created_by) VALUES (?,?,?,?, 'Admin', 1, ?, 'signup')",
+      userId, id, admin.email, admin.name, now);
+    const invite = await this.makeInvite(userId);
+    this.log('company_signup', { companyId: id, userId, email: admin.email, detail: `${data.name} (${code}) self sign-up`, client: { ip } });
+    this.cLog({ email: admin.email }, 'company_signup', { companyId: id, detail: `${data.name} (${code}): self sign-up, 30-day trial; Admin ${admin.name} <${admin.email}>${data.phone ? `, ${data.phone}` : ''}`, ip });
+    return { company: { id, code, name: data.name }, user: { id: userId, email: admin.email, name: admin.name }, invite };
   }
   async consoleCreateCompany({ op, data, admin, ip }) {
     if (this.one('SELECT 1 AS x FROM companies WHERE code = ?', data.code)) throw new AuthError(409, 'Another company already uses this login code.', { field: 'code' });

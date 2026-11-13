@@ -9,7 +9,7 @@ const savedCode = () => { try { return localStorage.getItem(CODE_KEY) || ''; } c
 const saveCode = (c) => { try { localStorage.setItem(CODE_KEY, c); } catch { /* private mode */ } };
 
 function initialMode() {
-  return { '/setup': 'setup', '/invite': 'invite', '/forgot-password': 'forgot', '/reset-password': 'reset' }[location.pathname] || 'login';
+  return { '/setup': 'setup', '/invite': 'invite', '/forgot-password': 'forgot', '/reset-password': 'reset', '/signup': 'signup' }[location.pathname] || 'login';
 }
 
 function Art() {
@@ -39,7 +39,7 @@ export default function Auth({ onSignedIn, reason }) {
   const [notice, setNotice] = useState('');
   const [needsSetup, setNeedsSetup] = useState(false);
   useEffect(() => {
-    const paths = { setup: '/setup', invite: '/invite', forgot: '/forgot-password', reset: '/reset-password', login: '/login' };
+    const paths = { setup: '/setup', invite: '/invite', forgot: '/forgot-password', reset: '/reset-password', login: '/login', signup: '/signup' };
     history.replaceState({}, '', paths[mode]);
   }, [mode]);
   useEffect(() => {
@@ -52,7 +52,8 @@ export default function Auth({ onSignedIn, reason }) {
     <div className="auth">
       <Art />
       <div className="auth-card">
-        {mode === 'login' && <Login onSignedIn={onSignedIn} reason={reason} notice={notice} toForgot={() => setMode('forgot')} needsSetup={needsSetup} toSetup={() => setMode('setup')} />}
+        {mode === 'login' && <Login onSignedIn={onSignedIn} reason={reason} notice={notice} toForgot={() => setMode('forgot')} needsSetup={needsSetup} toSetup={() => setMode('setup')} toSignup={() => setMode('signup')} />}
+        {mode === 'signup' && <Signup toLogin={() => setMode('login')} />}
         {mode === 'setup' && <Setup onSignedIn={onSignedIn} toLogin={() => setMode('login')} />}
         {mode === 'invite' && <Invite token={token} onSignedIn={onSignedIn} toLogin={() => setMode('login')} />}
         {mode === 'forgot' && <Forgot toLogin={() => setMode('login')} />}
@@ -73,7 +74,7 @@ function CodeField({ value, onChange, error, useRecovery, id = 'code', autoFocus
   );
 }
 
-function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
+function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup, toSignup }) {
   const [step, setStep] = useState('password');
   const [f, setF] = useState({ companyCode: savedCode(), email: '', password: '' });
   const [code, setCode] = useState('');
@@ -165,6 +166,12 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
           </Field>
           <button className="btn primary block" disabled={busy}>{busy ? 'Checking…' : 'Continue'}</button>
           {needsSetup && <button type="button" className="btn ghost block" onClick={toSetup}>First time? Set up the app</button>}
+          {!needsSetup && (
+            <div className="signup-cta">
+              <span>New to TrackMyRMA?</span>
+              <button type="button" className="btn ghost block" onClick={toSignup}>Start 30-day free trial</button>
+            </div>
+          )}
         </form>
       )}
       {step === 'code' && (
@@ -394,6 +401,88 @@ function Invite({ token, onSignedIn, toLogin }) {
       <input type="email" autoComplete="username" value={info.email} readOnly hidden />
       <PasswordPair f={f} setF={setF} errors={errors} email={info.email} />
       <button className="btn primary block" disabled={busy}>{busy ? 'Saving…' : 'Continue to two-step login'}</button>
+    </form>
+  );
+}
+
+// Suggests a short login code from the company name: initials of several words, or the first letters.
+function suggestCode(name) {
+  const words = name.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? words.map((w) => w[0]).join('') : words[0] || '').slice(0, 6);
+}
+
+// New company on the 30-day free trial. The person signing up becomes its first Admin; the emailed link
+// proves the address, then they choose a password and set up two-step login like any invite.
+function Signup({ toLogin }) {
+  const [f, setF] = useState({ companyName: '', code: '', name: '', email: '', phone: '', website: '' });
+  const [codeTouched, setCodeTouched] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  function setName(e) {
+    const companyName = e.target.value;
+    setF((x) => ({ ...x, companyName, code: codeTouched ? x.code : suggestCode(companyName) }));
+  }
+  async function submit(e) {
+    e.preventDefault();
+    const errs = {};
+    if (!f.companyName.trim()) errs.companyName = 'Enter your company name';
+    if (f.code && !/^[A-Za-z0-9]{2,12}$/.test(f.code)) errs.code = 'Use 2–12 letters or numbers, e.g. ACME';
+    if (!f.name.trim()) errs.name = 'Enter your name';
+    if (!EMAIL.test(f.email.trim())) errs.email = 'Enter a valid email address';
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+    setBusy(true);
+    try {
+      setDone(await post('/api/signup', { ...f, companyName: f.companyName.trim(), name: f.name.trim(), email: f.email.trim(), phone: f.phone.trim() }));
+    } catch (err) {
+      setErrors(Object.keys(err.fields || {}).length ? err.fields : { form: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (done) {
+    return (
+      <div className="stack">
+        <h2 style={{ fontSize: '1.5rem' }}>{done.emailed ? 'Check your email' : 'Your company is ready'}</h2>
+        {done.company.code && <p><span className="cochip"><b>{done.company.code}</b>{done.company.name}</span></p>}
+        {done.emailed
+          ? <p className="muted">We've sent a link to <b>{f.email.trim()}</b>. Open it to choose your password and set up two-step login. It works once and expires in 7 days.</p>
+          : <div className="warnbox">We couldn't send the email just now. Please contact us and we'll send your setup link.</div>}
+        {done.company.code && <p className="muted small">Note your company code <b>{done.company.code}</b>: you and your team log in with it.</p>}
+        {done.emailed && <p className="muted small">No email? Check spam or promotions, and wait a couple of minutes.</p>}
+        {done.devLink && <a className="btn ghost block" href={done.devLink}>Open setup link (local test only)</a>}
+        <button className="btn primary block" onClick={toLogin}>Back to log in</button>
+      </div>
+    );
+  }
+  return (
+    <form className="stack" onSubmit={submit} noValidate>
+      <div>
+        <h2 style={{ fontSize: '1.5rem' }}>Start your free trial</h2>
+        <p className="muted" style={{ marginTop: 6 }}>30 days, every feature, up to 3 logins and 50 RMAs. No card needed.</p>
+      </div>
+      {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
+      <Field label="Company name" htmlFor="su-co" required error={errors.companyName}>
+        <input id="su-co" type="text" autoComplete="organization" maxLength={120} value={f.companyName} onChange={setName} />
+      </Field>
+      <Field label="Company code" htmlFor="su-code" error={errors.code} hint="Short code your team types when logging in. Leave blank and we'll pick one.">
+        <input id="su-code" className="upper" type="text" autoCapitalize="characters" maxLength={12} value={f.code}
+          onChange={(e) => { setCodeTouched(true); setF((x) => ({ ...x, code: e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase() })); }} />
+      </Field>
+      <Field label="Your name" htmlFor="su-name" required error={errors.name}>
+        <input id="su-name" type="text" autoComplete="name" maxLength={80} value={f.name} onChange={set('name')} />
+      </Field>
+      <Field label="Work email" htmlFor="su-email" required error={errors.email} hint="You'll be the Admin. We send the setup link here.">
+        <input id="su-email" type="email" autoComplete="email" inputMode="email" value={f.email} onChange={set('email')} />
+      </Field>
+      <Field label="Phone (optional)" htmlFor="su-phone" error={errors.phone}>
+        <input id="su-phone" type="tel" autoComplete="tel" inputMode="tel" value={f.phone} onChange={set('phone')} />
+      </Field>
+      <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" className="hp" value={f.website} onChange={set('website')} />
+      <button className="btn primary block" disabled={busy}>{busy ? 'Creating…' : 'Create my company'}</button>
+      <button type="button" className="btn ghost block" onClick={toLogin}>I already have a login</button>
     </form>
   );
 }

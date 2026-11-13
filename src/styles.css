@@ -776,3 +776,5 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .wordmark b { font-weight: 800; color: #c03a96; }
 :root[data-theme='dark'] .wordmark b { color: #f08ad0; }
 @media (prefers-color-scheme: dark) { :root[data-theme='system'] .wordmark b { color: #f08ad0; } }
+.signup-cta { display: grid; gap: 8px; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: 0.9rem; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }

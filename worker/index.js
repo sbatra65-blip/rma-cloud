@@ -2,7 +2,7 @@
 import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
-import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail } from './mail.js';
+import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -216,6 +216,26 @@ async function handle(request, env, ctx) {
     });
     return json({ user: data.user, endedOther: data.endedOther, idleMinutes: data.user.idleMinutes },
       200, { 'Set-Cookie': sessionCookie(data.token) });
+  }
+
+  // ---------- Self sign-up: new company on the free trial ----------
+  if (path === '/api/signup' && method === 'POST') {
+    if (env.SIGNUP_OFF === '1') return err(403, 'New sign-ups are paused. Contact us to start a trial.');
+    if (env.CONSOLE_HOST && url.hostname === env.CONSOLE_HOST) return err(404, 'Not found');
+    const b = await body(request);
+    if (b.website) return json({ ok: true, emailed: true, company: { code: '', name: '' } }); // bots fill the hidden field
+    const v = new Checker(b).text('companyName', { required: true, max: 120, label: 'Company name' }).text('name', { required: true, max: 80, label: 'Your name' })
+      .email('email', { required: true, label: 'Work email' }).phone('phone', { label: 'Phone' }).done();
+    const code = companyCode(b.code);
+    if (code && !CODE_RE.test(code)) throw new ValidationError({ code: 'Use 2–12 letters or numbers, e.g. ACME' });
+    const r = await dcall(env, 'signup', { data: { name: v.companyName, code, phone: v.phone }, admin: { name: v.name, email: v.email }, ip: client.ip });
+    const app = await appOrigin(env, url);
+    const sent = await sendMail(env, { to: v.email, ...signupEmail({ appName, appUrl: app, name: v.name, token: r.invite.token, days: r.invite.days, company: r.company }) });
+    if (!sent.ok) console.error('signup email', sent.error);
+    await dcall(env, 'mailResult', { companyId: r.company.id, userId: r.user.id, email: v.email, kind: 'signup', ok: sent.ok, error: sent.error }).catch(() => {});
+    const out = { ok: true, emailed: sent.ok, company: { code: r.company.code, name: r.company.name } };
+    if (env.DEV_SHOW_RESET_LINK === '1' && url.hostname === 'localhost') out.devLink = `/invite#token=${encodeURIComponent(r.invite.token)}`;
+    return json(out);
   }
 
   // ---------- Forgot / reset password ----------

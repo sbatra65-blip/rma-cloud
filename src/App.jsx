@@ -29,7 +29,7 @@ export default function App() {
   );
 }
 
-const AUTH_PATHS = ['/login', '/setup', '/invite', '/forgot-password', '/reset-password'];
+const AUTH_PATHS = ['/login', '/setup', '/invite', '/forgot-password', '/reset-password', '/signup'];
 
 function Shell() {
   const toast = useToast();

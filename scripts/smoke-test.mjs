@@ -696,5 +696,30 @@ r = await phone('GET', '/api/admin/login-log');
 { const rows = r.data.rows || r.data.log || r.data;
   ok(rows.some((e) => e.event === 'reset_skipped' && /within 2 minutes/.test(e.detail || '')), 'skipped reset is shown to Admins with the reason'); }
 
+console.log('Self sign-up (new company on the free trial)');
+{
+  const sign = client('Signup browser');
+  let x = await sign('POST', '/api/signup', { companyName: '', name: '', email: 'bad' });
+  ok(x.status === 422 && x.data.fields?.companyName && x.data.fields?.email, 'sign-up checks required fields');
+  x = await sign('POST', '/api/signup', { companyName: 'Bot Co', name: 'Bot', email: 'bot@example.com', website: 'http://spam' });
+  ok(x.status === 200, 'honeypot answers ok without creating');
+  x = await sign('POST', '/api/signup', { companyName: 'Acme Print Services', name: 'Asha Rao', email: 'asha@acmeprint.example', phone: '9810000000' });
+  ok(x.status === 200 && x.data.company.code === 'APS' && x.data.devLink?.includes('/invite#token='), 'sign-up creates company with suggested code', JSON.stringify(x.data));
+  const tok = decodeURIComponent(x.data.devLink.split('token=')[1]);
+  x = await sign('POST', '/api/signup', { companyName: 'acme print services', name: 'Other', email: 'other@example.com' });
+  ok(x.status === 409 && x.data.fields?.companyName, 'same company name refused');
+  x = await sign('POST', '/api/signup', { companyName: 'Another Co', code: 'APS', name: 'Other', email: 'other@example.com' });
+  ok(x.status === 409 && x.data.fields?.code, 'taken company code refused');
+  x = await sign('POST', '/api/auth/invite/check', { token: tok });
+  ok(x.status === 200 && x.data.company.code === 'APS', 'sign-up link opens the invite for the new company');
+  x = await sign('POST', '/api/auth/invite/accept', { token: tok, password: PW2, confirm: PW2 });
+  x = await enroll(sign, x.data);
+  ok(x.status === 200 && x.data.user.role === 'Admin', 'person who signed up is the Admin with 2FA');
+  x = await sign('GET', '/api/auth/me');
+  ok(x.data.user?.company?.billing?.plan === 'trial', 'new company is on the free trial', JSON.stringify(x.data).slice(0, 300));
+  x = await sign('POST', '/api/signup', { companyName: 'Third Co', name: 'T', email: 't@example.com' });
+  ok(x.status === 429, 'fourth sign-up from one network is limited', x.status);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
