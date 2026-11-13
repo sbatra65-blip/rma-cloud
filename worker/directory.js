@@ -24,7 +24,13 @@ const COMPANY_COLS = [
   ['contact_name', 'TEXT'], ['contact_email', 'TEXT'], ['contact_phone', 'TEXT'], ['address', 'TEXT'], ['gstin', 'TEXT'], ['notes', 'TEXT'],
   ['max_users', 'INTEGER NOT NULL DEFAULT 0'], ['max_concurrent', 'INTEGER NOT NULL DEFAULT 0'], ['valid_until', 'TEXT'], ['modules', 'TEXT'],
   ['idle_minutes', 'INTEGER NOT NULL DEFAULT 0'], ['email_domains', 'TEXT'], ['suspend_reason', 'TEXT'], ['updated_at', 'INTEGER'],
+  // Plans: 'trial' (30 days, all modules, 3 users, 50 RMAs) or 'paid'. Existing companies count as paid.
+  ['plan', "TEXT NOT NULL DEFAULT 'paid'"], ['trial_started', 'TEXT'], ['extended_at', 'INTEGER'], ['advance_amount', 'INTEGER'],
+  ['advance_ref', 'TEXT'], ['paid_at', 'INTEGER'], ['import_signal_at', 'INTEGER'], ['import_rows', 'INTEGER NOT NULL DEFAULT 0'],
 ];
+// Trial and access rules (days are calendar days in IST).
+export const TRIAL = { days: 30, rmas: 50, users: 3, graceDays: 7, retainDays: 60, extendDays: 15, advancePct: 25 };
+const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const todayIST = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 const dmy = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
 
@@ -109,7 +115,28 @@ export class Directory extends DurableObject {
     const m = Number(c?.idle_minutes) || 0;
     return (m >= 2 && m <= 60 ? m : Number(this.env.IDLE_MINUTES || 5)) * MIN;
   }
-  expired(c) { return !!(c?.valid_until && c.valid_until < todayIST()); }
+  // open: normal use. readonly: up to 7 days after the access date (view and export only). ended: locked.
+  access(c) {
+    if (!c?.valid_until) return 'open';
+    const today = todayIST();
+    if (today <= c.valid_until) return 'open';
+    return today <= addDays(c.valid_until, TRIAL.graceDays) ? 'readonly' : 'ended';
+  }
+  expired(c) { return this.access(c) === 'ended'; }
+  // What the company's people see on the trial banner, the read-only screen and the locked login.
+  paymentInfo() {
+    try { return JSON.parse(this.one("SELECT value FROM meta WHERE key = 'payment_info'")?.value || 'null'); } catch { return null; }
+  }
+  accessInfo(c) {
+    const acc = this.access(c);
+    const days = (iso) => Math.round((Date.parse(`${iso}T00:00:00Z`) - Date.parse(`${todayIST()}T00:00:00Z`)) / DAY);
+    return {
+      plan: c.plan || 'paid', access: acc, validUntil: c.valid_until || null, daysLeft: c.valid_until ? days(c.valid_until) : null,
+      readOnlyUntil: c.valid_until ? addDays(c.valid_until, TRIAL.graceDays) : null,
+      keepDataUntil: c.valid_until && (c.plan === 'trial') ? addDays(c.valid_until, TRIAL.retainDays) : null,
+      extended: !!c.extended_at, advanceAmount: c.advance_amount || 0, trialRmas: TRIAL.rmas, trial: TRIAL,
+    };
+  }
   domains(c) { return String(c?.email_domains || '').split(/[\s,;]+/).map((x) => x.trim().toLowerCase().replace(/^@/, '')).filter(Boolean); }
   domainOk(c, email) {
     const list = this.domains(c);
@@ -128,7 +155,11 @@ export class Directory extends DurableObject {
   }
   accessEnded(c) {
     if (!c || !c.active) return `Access for ${c?.name || 'this company'} is suspended.${c?.suspend_reason ? ` ${c.suspend_reason}` : ''} Please contact your service provider.`;
-    if (this.expired(c)) return `Access for ${c.name} ended on ${dmy(c.valid_until)}. Please contact your service provider.`;
+    if (this.expired(c)) {
+      return c.plan === 'trial'
+        ? `The free trial for ${c.name} ended on ${dmy(c.valid_until)}. Your data is kept until ${dmy(addDays(c.valid_until, TRIAL.retainDays))}. Buy a plan to continue.`
+        : `Access for ${c.name} ended on ${dmy(c.valid_until)}. Please renew to continue.`;
+    }
     return null;
   }
 
@@ -146,7 +177,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleSignOutAll', 'consoleAct',
+      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -254,7 +285,7 @@ export class Directory extends DurableObject {
     if (!user || user.disabled) throw new AuthError(400, 'This step expired. Please start again.');
     const co = this.one('SELECT * FROM companies WHERE id = ?', user.company_id);
     const ended = this.accessEnded(co);
-    if (ended) throw new AuthError(403, ended);
+    if (ended) throw new AuthError(403, ended, { code: 'access_ended', payment: this.paymentInfo() });
     this.cleanup();
     if (co.max_concurrent > 0 && this.seatsInUse(co, user.id) >= co.max_concurrent) {
       throw new AuthError(409, `All ${co.max_concurrent} sign-in seat${co.max_concurrent === 1 ? '' : 's'} for ${co.name} ${co.max_concurrent === 1 ? 'is' : 'are'} in use right now. Try this code again when someone logs out.`, { code: 'seats_full' });
@@ -314,7 +345,7 @@ export class Directory extends DurableObject {
     const ended = this.accessEnded(company);
     if (ended) {
       this.log('login_refused', { companyId: company.id, userId: user.id, email, detail: 'company access ended', client });
-      throw new AuthError(403, ended);
+      throw new AuthError(403, ended, { code: 'access_ended', payment: this.paymentInfo() });
     }
     const token = newToken();
     this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)',
@@ -341,7 +372,7 @@ export class Directory extends DurableObject {
 
     const c = this.one('SELECT * FROM companies WHERE id = ?', user.company_id);
     const ended = this.accessEnded(c);
-    if (ended) throw new AuthError(403, ended);
+    if (ended) throw new AuthError(403, ended, { code: 'access_ended', payment: this.paymentInfo() });
     // Seats: how many people of this company may be signed in at the same time.
     this.cleanup();
     if (c.max_concurrent > 0 && this.seatsInUse(c, user.id) >= c.max_concurrent) {
@@ -532,7 +563,7 @@ export class Directory extends DurableObject {
     if (!s) return null;
     const u = this.one(
       `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.disabled, c.id AS company_id, c.name AS company_name,
-              c.code AS company_code, c.ticket_prefix, c.active, c.valid_until, c.idle_minutes, c.modules
+              c.code AS company_code, c.ticket_prefix, c.active, c.valid_until, c.idle_minutes, c.modules, c.plan, c.extended_at, c.advance_amount, c.trial_started
        FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, s.user_id);
     const idle = this.idleFor(u);
     if (!u || u.disabled || !u.active || this.expired(u) || now - s.last_active > idle || now - s.created_at > this.maxMs) {
@@ -552,6 +583,7 @@ export class Directory extends DurableObject {
       companyId: u.company_id, companyName: u.company_name, companyCode: u.company_code, ticketPrefix: u.ticket_prefix,
       role: u.role, dupOverride: !!u.dup_override || u.role === 'Admin', modules: this.modulesOf(u),
       newToken: newTok, expiresIn: idle, idleMinutes: idle / MIN,
+      plan: u.plan || 'paid', access: this.access(u), trialStarted: u.trial_started || null,
     };
   }
 
@@ -567,13 +599,14 @@ export class Directory extends DurableObject {
     const userId = typeof arg === 'string' ? arg : arg.userId;
     const u = this.one(
       `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.recovery, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix,
-              c.modules, c.idle_minutes, c.valid_until
+              c.modules, c.idle_minutes, c.valid_until, c.plan, c.extended_at, c.advance_amount
        FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, userId);
     if (!u) return null;
     return {
       id: u.id, email: u.email, name: u.name, role: u.role, isOwner: !!u.is_owner,
       dupOverride: !!u.dup_override || u.role === 'Admin',
-      company: { id: u.cid, name: u.cname, code: u.code, ticketPrefix: u.ticket_prefix, modules: this.modulesOf(u), validUntil: u.valid_until },
+      company: { id: u.cid, name: u.cname, code: u.code, ticketPrefix: u.ticket_prefix, modules: this.modulesOf(u), validUntil: u.valid_until,
+        billing: { ...this.accessInfo(u), payment: this.paymentInfo() } },
       idleMinutes: this.idleFor(u) / MIN,
       recoveryLeft: JSON.parse(u.recovery).length,
     };
@@ -1033,6 +1066,9 @@ export class Directory extends DurableObject {
       lastLogin: this.one('SELECT MAX(last_login) AS t FROM users WHERE company_id = ?', c.id).t,
       daysLeft: c.valid_until ? Math.round((Date.parse(`${c.valid_until}T00:00:00Z`) - Date.parse(`${todayIST()}T00:00:00Z`)) / DAY) : null,
       checkedAt: now,
+      ...this.accessInfo(c), advanceRef: c.advance_ref || '', paidAt: c.paid_at || null, trialStarted: c.trial_started || null,
+      hotLead: c.plan === 'trial' && !!c.import_signal_at, importSignalAt: c.import_signal_at || null, importRows: c.import_rows || 0,
+      canPurge: c.plan === 'trial' && !!c.valid_until && todayIST() > addDays(c.valid_until, TRIAL.retainDays),
     };
   }
   consoleCompanies() {
@@ -1071,6 +1107,13 @@ export class Directory extends DurableObject {
     const userId = uuid();
     const now = Date.now();
     const f = this.cFields(data);
+    if (data.plan === 'trial') {
+      // Free trial: everything switched on, 3 logins, 30 days. No card needed.
+      Object.assign(f, { plan: 'trial', trial_started: todayIST(), valid_until: addDays(todayIST(), TRIAL.days), modules: JSON.stringify([...MODULES]),
+        max_users: f.max_users && f.max_users < TRIAL.users ? f.max_users : TRIAL.users });
+    } else {
+      f.plan = 'paid';
+    }
     const tmp = { ...f, email_domains: f.email_domains };
     if (!this.domainOk(tmp, admin.email)) throw new AuthError(422, `The first Admin's email must be at: ${this.domains(tmp).join(', ')}`, { field: 'adminEmail' });
     this.sql.exec(`INSERT INTO companies (id, code, name, ticket_prefix, active, created_at, updated_at, ${Object.keys(f).join(', ')})
@@ -1085,10 +1128,16 @@ export class Directory extends DurableObject {
   }
   // Deleting a company, step 1: checks it is suspended, the typed code matches and the operator's
   // authenticator code is right. Returns a one-time token (5 minutes) for step 2.
-  async consoleDeleteCheck({ op, id, confirmCode, code, ip }) {
+  async consoleDeleteCheck({ op, id, confirmCode, code, tx, ip }) {
     const c = this.one('SELECT * FROM companies WHERE id = ?', id);
     if (!c) throw new AuthError(404, 'Company not found.');
-    if (c.active) throw new AuthError(409, 'Suspend the company first. Only a suspended company can be deleted.');
+    // Companies with RMAs, batches or care packs are kept, except a trial whose 60-day data period has passed.
+    const purge = c.plan === 'trial' && c.valid_until && todayIST() > addDays(c.valid_until, TRIAL.retainDays);
+    if (tx?.total && !purge) {
+      const parts = [[tx.rmas, 'RMA'], [tx.oemBatches, 'OEM batch'], [tx.carePacks, 'care pack']].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : w.endsWith('h') ? 'es' : 's'}`);
+      throw new AuthError(409, `${parts.join(', ')} recorded. A company with transactions cannot be deleted; suspend it instead.`, { code: 'has_transactions', transactions: tx });
+    }
+    if (c.active && !purge) throw new AuthError(409, 'Suspend the company first. Only a suspended company can be deleted.');
     if (String(confirmCode || '').trim().toUpperCase() !== c.code) throw new AuthError(422, `Type the company code ${c.code} exactly.`, { fields: { confirmCode: `Type the company code ${c.code} exactly` } });
     const me = this.cOp(op.opId);
     if (!me || !me.totp_enabled) throw new AuthError(403, 'Your console login needs two-step setup first.');
@@ -1103,6 +1152,68 @@ export class Directory extends DurableObject {
     this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), id, 'c_delete', Date.now() + 5 * MIN);
     return { token, company: { id: c.id, name: c.name, code: c.code } };
   }
+  // One 15-day extension of a trial, after a 25% advance that is adjusted against the purchase.
+  consoleExtendTrial({ op, id, amount, ref, ip }) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    if (c.plan !== 'trial') throw new AuthError(409, 'Only a trial can be extended. For a paid company, change "Access until".');
+    if (c.extended_at) throw new AuthError(409, 'This trial was already extended once.');
+    const amt = Math.round(Number(amount));
+    if (!Number.isFinite(amt) || amt <= 0) throw new AuthError(422, 'Enter the advance received (25% of the plan price).', { fields: { amount: 'Enter the amount received' } });
+    const from = c.valid_until && c.valid_until > todayIST() ? c.valid_until : todayIST();
+    const until = addDays(from, TRIAL.extendDays);
+    this.sql.exec('UPDATE companies SET valid_until = ?, extended_at = ?, advance_amount = ?, advance_ref = ?, active = 1, suspend_reason = NULL, updated_at = ? WHERE id = ?',
+      until, Date.now(), amt, String(ref || '').trim().slice(0, 120) || null, Date.now(), id);
+    this.cLog(op, 'trial_extended', { companyId: id, detail: `${c.name} (${c.code}): +${TRIAL.extendDays} days to ${dmy(until)}; advance ₹${amt.toLocaleString('en-IN')}${ref ? ` (${ref})` : ''} to adjust against purchase`, ip });
+    return this.consoleCompany({ op, id });
+  }
+  // Trial (or lapsed company) has paid: becomes a paid plan with a new access date.
+  consoleMarkPaid({ op, id, validUntil, amount, ref, ip }) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(validUntil || '')) || validUntil <= todayIST()) throw new AuthError(422, 'Choose the date the payment covers access until.', { fields: { validUntil: 'Pick a future date' } });
+    this.sql.exec("UPDATE companies SET plan = 'paid', paid_at = ?, valid_until = ?, active = 1, suspend_reason = NULL, updated_at = ? WHERE id = ?", Date.now(), validUntil, Date.now(), id);
+    const adv = c.advance_amount ? `; advance ₹${Number(c.advance_amount).toLocaleString('en-IN')} adjusted` : '';
+    const amt = Number(amount) > 0 ? `; ₹${Math.round(Number(amount)).toLocaleString('en-IN')} received` : '';
+    this.cLog(op, 'company_paid', { companyId: id, detail: `${c.name} (${c.code}): paid until ${dmy(validUntil)}${amt}${ref ? ` (${ref})` : ''}${adv}`, ip });
+    return this.consoleCompany({ op, id });
+  }
+  // Bank / UPI details shown to companies on the trial banner, read-only screen and locked login.
+  consolePaymentGet() { return { payment: this.paymentInfo() || {}, trial: TRIAL }; }
+  consolePaymentSave({ op, payment, ip }) {
+    const keep = ['payeeName', 'bankName', 'accountNo', 'ifsc', 'upiId', 'payLink', 'contactEmail', 'contactPhone', 'priceNote'];
+    const clean = Object.fromEntries(keep.map((k) => [k, String(payment?.[k] || '').trim().slice(0, k === 'priceNote' ? 600 : 120)]).filter(([, v]) => v));
+    if (clean.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(clean.ifsc)) throw new AuthError(422, 'IFSC looks wrong (11 characters, e.g. HDFC0001234).', { fields: { ifsc: 'Check the IFSC' } });
+    if (clean.payLink && !/^https:\/\//.test(clean.payLink)) throw new AuthError(422, 'Payment link must start with https://', { fields: { payLink: 'Must start with https://' } });
+    if (clean.ifsc) clean.ifsc = clean.ifsc.toUpperCase();
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('payment_info', ?)", JSON.stringify(clean));
+    this.cLog(op, 'payment_details_saved', { detail: Object.keys(clean).join(', '), ip });
+    return { payment: clean };
+  }
+  // A trial company importing its old data is a strong sign it will buy: flag it for the console.
+  importSignal({ companyId, rows }) {
+    const c = this.one('SELECT id, plan, import_signal_at FROM companies WHERE id = ?', companyId);
+    if (!c || c.plan !== 'trial') return { ok: true };
+    this.sql.exec('UPDATE companies SET import_signal_at = COALESCE(import_signal_at, ?), import_rows = import_rows + ? WHERE id = ?', Date.now(), Number(rows) || 0, companyId);
+    if (!c.import_signal_at) this.log('trial_import', { companyId, detail: `imported ${rows || 0} rows during trial` });
+    return { ok: true };
+  }
+  // Daily: trial / access reminders to the company's Admins (7 and 1 days before, and when read-only starts).
+  accessNotices() {
+    const today = todayIST();
+    const out = [];
+    for (const c of this.all("SELECT * FROM companies WHERE active = 1 AND valid_until IS NOT NULL")) {
+      let kind = null;
+      if (c.valid_until === addDays(today, 7)) kind = 'ends7';
+      else if (c.valid_until === addDays(today, 1)) kind = 'ends1';
+      else if (addDays(c.valid_until, 1) === today) kind = 'readonly';
+      if (!kind) continue;
+      const people = this.all("SELECT email, name FROM users WHERE company_id = ? AND role = 'Admin' AND disabled = 0", c.id);
+      if (people.length) out.push({ kind, company: { name: c.name, code: c.code }, people, info: this.accessInfo(c) });
+    }
+    return { notices: out, payment: this.paymentInfo() };
+  }
+
   // Operators normally never see company data, so every download is written to the console log.
   consoleExportLog({ op, id, detail, ip }) {
     const c = this.one('SELECT name, code FROM companies WHERE id = ?', id);

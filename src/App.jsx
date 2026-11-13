@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, setSessionEndedHandler } from './api.js';
 import { broadcastLogout, useIdle } from './idle.js';
-import { CompanyLogo, Dialog, Icon, Link, BrandLogo, Logo, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
+import { CompanyLogo, TrialBar, Dialog, Icon, Link, BrandLogo, Logo, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
 import Auth from './pages/Auth.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RmaList from './pages/RmaList.jsx';
@@ -175,6 +175,7 @@ function Shell() {
       </header>
       <main>
         <div className="print-brand" aria-hidden="true"><CompanyLogo boot={boot} height={44} /><span><b>{user.company.name}</b><small>RMA Cloud · printed {new Date().toLocaleDateString('en-IN')}</small></span></div>
+        <TrialBar user={user} boot={boot} />
         <div className="page" key={route}>{page}</div></main>
       <nav className="bottomnav" aria-label="Main">
         <Link to="/" aria-current={current('/') ? 'page' : undefined}><Icon name="home" /><span>Home</span></Link>

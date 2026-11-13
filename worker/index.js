@@ -2,7 +2,7 @@
 import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
-import { consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail } from './mail.js';
+import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, reminderEmail, resetEmail, sendMail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -258,6 +258,7 @@ async function handle(request, env, ctx) {
     userId: session.userId, sessionId: session.sessionId, email: session.email, name: session.name, role: session.role,
     isOwner: session.isOwner, dupOverride: session.dupOverride, companyId: session.companyId, companyName: session.companyName,
     companyCode: session.companyCode, ticketPrefix: session.ticketPrefix, modules: session.modules,
+    plan: session.plan, access: session.access, trialStarted: session.trialStarted,
   };
   // Parts of the app the service provider has switched off for this company.
   const needs = moduleFor(path);
@@ -269,6 +270,14 @@ async function handle(request, env, ctx) {
   const respond = (data, status = 200) => json(data, status, withCookie());
   const raw = (data, headers) => new Response(data, { headers: withCookie({ ...SECURITY_HEADERS, ...headers }) });
   const isAdmin = user.role === 'Admin';
+
+  // Access date passed: up to 7 days of read-only use (view, export, print). Logging out and own-login changes still work.
+  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping'];
+  if (user.access === 'readonly' && !['GET', 'HEAD'].includes(method) && !READ_ONLY_OK.includes(path)) {
+    return json({ error: user.plan === 'trial'
+      ? 'Your free trial has ended, so the app is read-only for now. You can still view, print and export. Buy a plan to keep working.'
+      : 'Access has ended, so the app is read-only for now. You can still view, print and export. Renew to keep working.', code: 'read_only' }, 403, withCookie());
+  }
 
   if (path === '/api/auth/me' && method === 'GET') {
     return respond({ user: await dcall(env, 'publicUser', { userId: user.userId }), idleMinutes: session.idleMinutes });
@@ -496,7 +505,12 @@ async function handle(request, env, ctx) {
   if (m && method === 'GET') return respond(await ccall(env, user, 'getBatch', { code: m[1] }));
 
   // Import
-  if (path === '/api/import/rma' && method === 'POST') return respond(await ccall(env, user, 'importTickets', await body(request, 4 * 1024 * 1024)));
+  if (path === '/api/import/rma' && method === 'POST') {
+    const b = await body(request, 4 * 1024 * 1024);
+    const r = await ccall(env, user, 'importTickets', b);
+    if (user.plan === 'trial' && !b.dryRun && r.imported) await dcall(env, 'importSignal', { companyId: user.companyId, rows: r.imported }).catch(() => {});
+    return respond(r);
+  }
   if (path === '/api/import/log' && method === 'GET') return respond(await ccall(env, user, 'importLog'));
   if (path === '/api/import/customers' && method === 'POST') return respond(await ccall(env, user, 'importCustomers', await body(request, 4 * 1024 * 1024)));
 
@@ -565,7 +579,10 @@ async function handle(request, env, ctx) {
     return respond({ user: data.user, ...(await emailInvite(env, url, user, data, { reset })) });
   }
   if (path === '/api/admin/migration-key' && method === 'GET') return respond(await dcall(env, 'migrateKeyStatus', { actor: user }));
-  if (path === '/api/admin/migration-key' && method === 'POST') return respond(await dcall(env, 'migrateKeyCreate', { actor: user }));
+  if (path === '/api/admin/migration-key' && method === 'POST') {
+    if (user.plan === 'trial') await dcall(env, 'importSignal', { companyId: user.companyId, rows: 0 }).catch(() => {});
+    return respond(await dcall(env, 'migrateKeyCreate', { actor: user }));
+  }
   if (path === '/api/admin/migration-key' && method === 'DELETE') return respond(await dcall(env, 'migrateKeyRevoke', { actor: user }));
   if (path === '/api/admin/sessions' && method === 'GET') return respond(await dcall(env, 'listSessions', { actor: user }));
   m = path.match(/^\/api\/admin\/sessions\/([0-9a-f-]{36})$/);
@@ -595,7 +612,11 @@ async function handleMigrate(request, env, url, path, method) {
     return json({ company: { name: user.companyName, code: user.companyCode }, by: user.name, expires: user.expires, counts: await ccall(env, user, 'migrateStatus', {}) });
   }
   if (path === '/api/migrate/masters' && method === 'POST') return json(await ccall(env, user, 'migrateMasters', await body(request, 8 * 1024 * 1024)));
-  if (path === '/api/migrate/tickets' && method === 'POST') return json(await ccall(env, user, 'migrateTickets', await body(request, 8 * 1024 * 1024)));
+  if (path === '/api/migrate/tickets' && method === 'POST') {
+    const r = await ccall(env, user, 'migrateTickets', await body(request, 8 * 1024 * 1024));
+    if (r.created) await dcall(env, 'importSignal', { companyId: user.companyId, rows: r.created }).catch(() => {});
+    return json(r);
+  }
   if (path === '/api/migrate/batches' && method === 'POST') return json(await ccall(env, user, 'migrateBatches', await body(request, 8 * 1024 * 1024)));
   if (path === '/api/migrate/carepacks' && method === 'POST') return json(await ccall(env, user, 'migrateCarePacks', await body(request, 8 * 1024 * 1024)));
   if (path === '/api/migrate/photo' && method === 'HEAD') {
@@ -653,6 +674,7 @@ function companyData(b, creating) {
   v.emailDomains = doms.join(', ');
   v.modules = Array.isArray(b.modules) ? b.modules.filter((m) => MODULES.includes(m)) : MODULES;
   if (typeof b.active === 'boolean') v.active = b.active;
+  if (creating) v.plan = b.plan === 'trial' ? 'trial' : 'paid';
   try { c.done(); } catch (e) { Object.assign(errs, e.fields || {}); }
   if (Object.keys(errs).length) throw new ValidationError(errs);
   return v;
@@ -813,16 +835,22 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
     }
     if (method === 'DELETE') { const r = await ccall(env, sys, 'deleteLogo'); return respond({ logoAt: r.logoAt }); }
   }
+  if (path === '/api/console/payment' && method === 'GET') return respond(await dcall(env, 'consolePaymentGet', {}));
+  if (path === '/api/console/payment' && method === 'POST') return respond(await dcall(env, 'consolePaymentSave', { op, payment: (await body(request)).payment, ip: client.ip }));
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/(extend-trial|mark-paid)$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    const d = m[2] === 'extend-trial'
+      ? await dcall(env, 'consoleExtendTrial', { op, id: m[1], amount: b.amount, ref: b.ref, ip: client.ip })
+      : await dcall(env, 'consoleMarkPaid', { op, id: m[1], validUntil: b.validUntil, amount: b.amount, ref: b.ref, ip: client.ip });
+    return respond({ ...d, transactions: await company(env, m[1]).transactionCounts() });
+  }
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/delete$/);
   if (m && method === 'POST') {
     const b = await body(request);
-    // Only a company with no RMAs, OEM batches or care packs can be deleted.
+    // Only a company with no RMAs, OEM batches or care packs can be deleted (or a trial past its 60-day data period).
     const tx = await company(env, m[1]).transactionCounts();
-    if (tx.total) {
-      const parts = [[tx.rmas, 'RMA'], [tx.oemBatches, 'OEM batch'], [tx.carePacks, 'care pack']].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : w.endsWith('h') ? 'es' : 's'}`);
-      throw Object.assign(new Error(`${parts.join(', ')} recorded. A company with transactions cannot be deleted; suspend it instead.`), { status: 409, more: { code: 'has_transactions', transactions: tx } });
-    }
-    const chk = await dcall(env, 'consoleDeleteCheck', { op, id: m[1], confirmCode: b.confirmCode, code: b.code, ip: client.ip });
+    const chk = await dcall(env, 'consoleDeleteCheck', { op, id: m[1], confirmCode: b.confirmCode, code: b.code, tx, ip: client.ip });
     await company(env, m[1]).wipeAll();
     if (env.FILES) {
       let cursor;
@@ -925,6 +953,14 @@ async function runReminders(env, appUrl) {
       sentTo.push({ to: p.email, ok: r.ok, error: r.error });
     }
     report.push({ company: c.code, items: items.length, sentTo });
+  }
+  // Trial / access reminders to each company's Admins.
+  const { notices, payment } = await dcall(env, 'accessNotices', {});
+  for (const n of notices) {
+    for (const p of n.people) {
+      const r = await sendMail(env, { to: p.email, ...accessEmail({ appName, appUrl, kind: n.kind, company: n.company, info: n.info, payment, recipientName: p.name }) });
+      report.push({ company: n.company.code, access: n.kind, to: p.email, ok: r.ok, error: r.error });
+    }
   }
   console.log('reminders', JSON.stringify(report));
   return report;

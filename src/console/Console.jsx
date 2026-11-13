@@ -1,6 +1,6 @@
 // RMA Cloud Console — the service provider's website. Separate login (operators, 2FA), separate cookie.
 // Operators create companies, set limits and modules, and manage each company's logins. No RMA data here.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { api, del, downloadBlob, get, post, setSessionEndedHandler } from '../api.js';
 import {
@@ -61,11 +61,12 @@ function Shell() {
   else if (route === '/console/companies/new') page = <NewCompany appUrl={state.appUrl} />;
   else if ((m = route.match(/^\/console\/companies\/([0-9a-f-]{36})$/))) page = <CompanyPage id={m[1]} key={m[1]} appUrl={state.appUrl} />;
   else if (route === '/console/operators') page = <Operators />;
+  else if (route === '/console/payment') page = <PaymentSettings />;
   else if (route === '/console/log') page = <ActivityLog />;
   else if (route === '/console/profile') page = <ConsoleProfile op={state.op} onLogout={() => signOut('logout')} />;
   else page = <div className="panel"><h1>Page not found</h1><p className="muted"><Link to="/console">Back to companies</Link></p></div>;
 
-  const nav = [['/console', 'building', 'Companies'], ['/console/operators', 'users', 'Operators'], ['/console/log', 'history', 'Activity log']];
+  const nav = [['/console', 'building', 'Companies'], ['/console/payment', 'shield', 'Payment details'], ['/console/operators', 'users', 'Operators'], ['/console/log', 'history', 'Activity log']];
   const cur = (to) => (to === '/console' ? route === '/console' || route.startsWith('/console/companies') : route.startsWith(to));
   return (
     <div className="app">
@@ -353,6 +354,9 @@ function Enroll({ enroll, onIn }) {
 // ======================= Companies =======================
 function statusOf(c) {
   if (!c.active) return ['Suspended', 'bad'];
+  if (c.access === 'ended') return [c.plan === 'trial' ? 'Trial ended' : 'Expired', 'bad'];
+  if (c.access === 'readonly') return ['Read-only', 'warn'];
+  if (c.plan === 'trial') return [`Trial · ${c.daysLeft} d left`, c.daysLeft <= 7 ? 'warn' : ''];
   if (c.expired) return ['Expired', 'bad'];
   if (c.daysLeft !== null && c.daysLeft <= 15) return [`Ends in ${c.daysLeft} d`, 'warn'];
   if (!c.adminsReady) return ['Admin not set up', 'warn'];
@@ -384,7 +388,7 @@ function Companies() {
             const [label, tone] = statusOf(c);
             return (
               <Link key={c.id} to={`/console/companies/${c.id}`} className="tcard" style={{ '--c': tone === 'ok' ? 'var(--ok)' : tone === 'warn' ? 'var(--amber)' : 'var(--rust)' }}>
-                <div className="top"><span className="no">{c.code}</span><span className={`pill ${tone}`}>{label}</span></div>
+                <div className="top"><span className="no">{c.code}</span><span>{c.hotLead && <span className="pill ok" style={{ marginRight: 6 }}>Hot lead</span>}<span className={`pill ${tone}`}>{label}</span></span></div>
                 <h3>{c.name}</h3>
                 <span className="meta">Users {limit(c.users, c.maxUsers)} · signed in {limit(c.online, c.maxConcurrent)} · until {c.validUntil ? fmtDate(c.validUntil) : 'no end'}</span>
               </Link>);
@@ -396,7 +400,7 @@ function Companies() {
               return (
                 <tr key={c.id} onClick={() => navigate(`/console/companies/${c.id}`)} style={{ cursor: 'pointer' }}>
                   <td><Link to={`/console/companies/${c.id}`}><b>{c.name}</b></Link><div className="tiny muted">{[c.contactName, c.contactEmail].filter(Boolean).join(' · ')}</div></td>
-                  <td className="mono">{c.code}</td><td><span className={`pill ${tone}`}>{label}</span></td>
+                  <td className="mono">{c.code}</td><td><span className={`pill ${tone}`}>{label}</span>{c.hotLead && <span className="pill ok" style={{ marginLeft: 6 }} title="Imported its own data during the trial">Hot lead</span>}</td>
                   <td className="num">{limit(c.users, c.maxUsers)}</td><td className="num">{limit(c.online, c.maxConcurrent)}</td>
                   <td className="nowrap">{c.validUntil ? fmtDate(c.validUntil) : '—'}</td>
                   <td className="small">{c.modules.map((m) => MODULE_INFO[m][0]).join(', ') || 'RMA only'}</td>
@@ -410,7 +414,7 @@ function Companies() {
 }
 
 const blankCompany = () => ({ name: '', code: '', ticketPrefix: '', gstin: '', contactName: '', contactEmail: '', contactPhone: '', address: '', notes: '',
-  maxUsers: '10', maxConcurrent: '5', validUntil: '', idleMinutes: '', emailDomains: '', modules: [...ALL_MODULES] });
+  maxUsers: '10', maxConcurrent: '5', validUntil: '', idleMinutes: '', emailDomains: '', modules: [...ALL_MODULES], plan: 'trial' });
 
 function CompanyForm({ f, setF, errors, creating }) {
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -443,7 +447,7 @@ function CompanyForm({ f, setF, errors, creating }) {
         <div className="fields">
           <Field label="Maximum users" error={errors.maxUsers} hint="Active logins allowed. 0 = no limit"><input type="text" inputMode="numeric" value={f.maxUsers} onChange={num('maxUsers')} /></Field>
           <Field label="Signed in at the same time" error={errors.maxConcurrent} hint="Extra logins are refused until someone logs out. 0 = no limit"><input type="text" inputMode="numeric" value={f.maxConcurrent} onChange={num('maxConcurrent')} /></Field>
-          <Field label="Valid until" error={errors.validUntil} hint="Logins stop after this date. Empty = no end date"><input type="date" min={creating ? todayISO() : undefined} value={f.validUntil} onChange={set('validUntil')} /></Field>
+          <Field label="Valid until" error={errors.validUntil} hint="After this date: 7 days read-only, then logins stop. Empty = no end date"><input type="date" min={creating ? todayISO() : undefined} value={f.validUntil} onChange={set('validUntil')} /></Field>
           <Field label="Sign out after idle (minutes)" error={errors.idleMinutes} hint="2–60. Empty = app default (5)"><input type="text" inputMode="numeric" value={f.idleMinutes} onChange={num('idleMinutes')} /></Field>
           <Field label="Allowed email domains" error={errors.emailDomains} className="wide" hint="Logins must use these domains, e.g. infinite.co.in. Empty = any email">
             <input type="text" value={f.emailDomains} onChange={set('emailDomains')} /></Field>
@@ -496,6 +500,14 @@ function NewCompany({ appUrl }) {
       <div className="page-head"><div><Link to="/console" className="small muted" style={{ textDecoration: 'none' }}>← Companies</Link><h1>New company</h1>
         <p className="muted">The company gets its own login code, its own data, and a first Admin who sets up their own password and authenticator.</p></div></div>
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
+      <section className="panel">
+        <h2>Plan</h2>
+        <div className="plan-pick" role="radiogroup" aria-label="Plan">
+          {[['trial', 'Free trial', '30 days · every module · 3 logins · 50 new RMAs · no card needed'], ['paid', 'Paid', 'Set limits, modules and the access date yourself']].map(([v, t, d]) => (
+            <button key={v} type="button" role="radio" aria-checked={f.plan === v} onClick={() => setF({ ...f, plan: v })}><b>{t}</b><span>{d}</span></button>))}
+        </div>
+        {f.plan === 'trial' && <p className="small muted" style={{ marginTop: 10 }}>After 30 days the app turns read-only for 7 days (view and export), then logins stop. Data is kept 60 days. One 15-day extension is possible against a 25% advance.</p>}
+      </section>
       <CompanyForm f={f} setF={setF} errors={errors} creating />
       <section className="panel">
         <h2>First Admin login</h2>
@@ -603,10 +615,12 @@ function CompanyPage({ id, appUrl }) {
           {c.active ? <button className="btn danger small" onClick={() => setDlg('suspend')}>Suspend</button>
             : <button className="btn primary small" disabled={busy === 'active'} onClick={() => setActive(true)}>Activate</button>}
           {data.transactions?.total > 0 && <button className="btn ghost small" onClick={() => setDlg('export')}><Icon name="download" size={16} /> Download data</button>}
-          {!c.active && <button className="btn danger small" disabled={!!data.transactions?.total} onClick={() => setDlg('delete')}
-            title={data.transactions?.total ? 'This company has transactions, so it can only be suspended' : 'Delete this company permanently'}><Icon name="trash" size={16} /> Delete company</button>}
+          {(!c.active || c.canPurge) && <button className="btn danger small" disabled={!!data.transactions?.total && !c.canPurge} onClick={() => setDlg('delete')}
+            title={data.transactions?.total && !c.canPurge ? 'This company has transactions, so it can only be suspended' : 'Delete this company permanently'}><Icon name="trash" size={16} /> Delete company</button>}
         </div>
       </div>
+
+      <BillingPanel c={c} onExtend={() => setDlg('extend')} onPaid={() => setDlg('paid')} />
 
       <div className="tabs" role="tablist">
         {[['users', `Users (${data.users.length})`], ['sessions', `Signed in (${data.sessions.length})`], ['settings', 'Settings & limits'], ['log', 'Login history'], ['changes', 'Changes']].map(([k, l]) => (
@@ -686,6 +700,8 @@ function CompanyPage({ id, appUrl }) {
       )}
 
       {dlg === 'add' && <AddUser id={id} roles={data.roles} domains={c.emailDomains} onClose={() => setDlg(null)} onDone={(r) => { setDlg(null); setResult(r); reload(); }} />}
+      {dlg === 'extend' && <ExtendDialog c={c} onClose={() => setDlg(null)} onDone={async () => { setDlg(null); toast(`Trial extended by ${c.trial.extendDays} days`); setF(null); await reload(); }} />}
+      {dlg === 'paid' && <PaidDialog c={c} onClose={() => setDlg(null)} onDone={async () => { setDlg(null); toast('Marked as paid'); setF(null); await reload(); }} />}
       {dlg === 'export' && <ExportDialog company={c} tx={data.transactions} onClose={() => setDlg(null)} />}
       {dlg === 'delete' && <DeleteCompanyDialog company={c} users={data.users.length} onClose={() => setDlg(null)}
         onDone={(r) => { toast(`${r.name} (${r.code}) deleted`); navigate('/console', { replace: true }); }} />}
@@ -773,6 +789,130 @@ function ConsoleLogo({ id }) {
         {has && <button type="button" className="btn ghost danger-text" disabled={busy} onClick={remove}>Remove</button>}
       </div>
     </section>
+  );
+}
+
+// Plan, trial dates, advance and buying signals for one company.
+function BillingPanel({ c, onExtend, onPaid }) {
+  const trial = c.plan === 'trial';
+  const rows = [
+    ['Plan', trial ? 'Free trial' : 'Paid'],
+    trial && c.trialStarted && ['Trial started', fmtDate(c.trialStarted)],
+    c.validUntil && [trial ? 'Trial ends' : 'Access until', `${fmtDate(c.validUntil)}${c.daysLeft !== null && c.daysLeft >= 0 ? ` (${c.daysLeft} d left)` : ''}`],
+    c.validUntil && c.access !== 'open' && ['Read-only until', fmtDate(c.readOnlyUntil)],
+    trial && c.keepDataUntil && ['Data kept until', fmtDate(c.keepDataUntil)],
+    c.extended && ['Extension', `+${c.trial.extendDays} days given`],
+    c.advanceAmount > 0 && ['Advance received', `₹${Number(c.advanceAmount).toLocaleString('en-IN')}${c.advanceRef ? ` (${c.advanceRef})` : ''} — adjust against purchase`],
+    c.paidAt && ['Marked paid', fmtMs(c.paidAt)],
+    c.hotLead && ['Buying signal', `Imported its own data on ${fmtMs(c.importSignalAt)}${c.importRows ? ` (${c.importRows} RMAs)` : ''} — follow up`],
+  ].filter(Boolean);
+  return (
+    <section className={`panel billing ${c.hotLead ? 'hot' : ''}`} style={{ marginBottom: 16 }}>
+      <div className="spread" style={{ alignItems: 'flex-start', gap: 12 }}>
+        <dl className="kv" style={{ margin: 0 }}>{rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}</dl>
+        <div className="row">
+          {trial && !c.extended && <button className="btn ghost small" onClick={onExtend}>Extend {c.trial.extendDays} days</button>}
+          <button className="btn primary small" onClick={onPaid}>{trial ? 'Mark as paid' : 'Record renewal'}</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ExtendDialog({ c, onClose, onDone }) {
+  const [f, setF] = useState({ amount: '', ref: '' });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  async function go(e) {
+    e.preventDefault(); setBusy(true); setErrors({});
+    try { await post(`/api/console/companies/${c.id}/extend-trial`, { amount: Number(f.amount), ref: f.ref }); onDone(); }
+    catch (x) { setErrors({ ...(x.fields || {}), form: x.fields ? null : x.message }); setBusy(false); }
+  }
+  return (
+    <Dialog open onClose={onClose} title={`Extend ${c.name}'s trial by ${c.trial.extendDays} days`}>
+      <form className="stack" onSubmit={go} noValidate>
+        <p className="small">Once only, against a {c.trial.advancePct}% advance. The advance is noted on the company and adjusted against the purchase.</p>
+        {errors.form && <div className="formerror">{errors.form}</div>}
+        <Field label="Advance received (₹)" required error={errors.amount}><input type="text" inputMode="numeric" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value.replace(/\D/g, '') })} /></Field>
+        <Field label="Payment reference" hint="UTR, UPI reference or invoice number"><input type="text" value={f.ref} onChange={(e) => setF({ ...f, ref: e.target.value })} /></Field>
+        <div className="row end"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy || !f.amount}>{busy ? 'Saving…' : 'Extend trial'}</button></div>
+      </form>
+    </Dialog>
+  );
+}
+
+function PaidDialog({ c, onClose, onDone }) {
+  const nextYear = (() => { const d = new Date(Date.now() + 19800000); d.setUTCFullYear(d.getUTCFullYear() + 1); return d.toISOString().slice(0, 10); })();
+  const [f, setF] = useState({ validUntil: nextYear, amount: '', ref: '' });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  async function go(e) {
+    e.preventDefault(); setBusy(true); setErrors({});
+    try { await post(`/api/console/companies/${c.id}/mark-paid`, { ...f, amount: Number(f.amount) || 0 }); onDone(); }
+    catch (x) { setErrors({ ...(x.fields || {}), form: x.fields ? null : x.message }); setBusy(false); }
+  }
+  return (
+    <Dialog open onClose={onClose} title={c.plan === 'trial' ? `Mark ${c.name} as paid` : `Record renewal for ${c.name}`}>
+      <form className="stack" onSubmit={go} noValidate>
+        {c.advanceAmount > 0 && <div className="notice">Advance of ₹{Number(c.advanceAmount).toLocaleString('en-IN')} already received — adjust it in the invoice.</div>}
+        {errors.form && <div className="formerror">{errors.form}</div>}
+        <Field label="Paid until" required error={errors.validUntil}><input type="date" value={f.validUntil} onChange={(e) => setF({ ...f, validUntil: e.target.value })} /></Field>
+        <Field label="Amount received (₹)"><input type="text" inputMode="numeric" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value.replace(/\D/g, '') })} /></Field>
+        <Field label="Payment reference" hint="UTR, UPI reference or invoice number"><input type="text" value={f.ref} onChange={(e) => setF({ ...f, ref: e.target.value })} /></Field>
+        <p className="small muted">The company becomes a paid plan, access is restored at once, and limits and modules stay as set under Settings &amp; limits.</p>
+        <div className="row end"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>
+      </form>
+    </Dialog>
+  );
+}
+
+// Your bank / UPI details, shown to companies on the trial banner, read-only screen, locked login and reminder emails.
+function PaymentSettings() {
+  const toast = useToast();
+  const [data, reload, error] = useLoad(() => get('/api/console/payment'));
+  const [f, setF] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  if (error && !data) return <ErrorPanel error={error} retry={reload} />;
+  if (!data) return <Skeleton rows={4} />;
+  const v = f || { payeeName: '', bankName: '', accountNo: '', ifsc: '', upiId: '', payLink: '', contactEmail: '', contactPhone: '', priceNote: '', ...data.payment };
+  const set = (k) => (e) => setF({ ...v, [k]: e.target.value });
+  async function save(e) {
+    e.preventDefault(); setBusy(true); setErrors({});
+    try { await post('/api/console/payment', { payment: v }); toast('Payment details saved'); setF(null); await reload(); }
+    catch (x) { setErrors({ ...(x.fields || {}), form: x.fields ? null : x.message }); } finally { setBusy(false); }
+  }
+  const t = data.trial;
+  return (
+    <form onSubmit={save} noValidate>
+      <div className="page-head"><div><h1>Payment details</h1><p className="muted">Shown to trial and lapsed companies on their banner, the read-only screen, the locked login screen and reminder emails.</p></div></div>
+      {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
+      <section className="panel">
+        <h2>Bank transfer</h2>
+        <div className="fields">
+          <Field label="Account name" error={errors.payeeName}><input type="text" value={v.payeeName} onChange={set('payeeName')} placeholder="Infinite Solutions" /></Field>
+          <Field label="Bank and branch" error={errors.bankName}><input type="text" value={v.bankName} onChange={set('bankName')} /></Field>
+          <Field label="Account number" error={errors.accountNo}><input type="text" inputMode="numeric" value={v.accountNo} onChange={set('accountNo')} /></Field>
+          <Field label="IFSC" error={errors.ifsc}><input type="text" className="upper" value={v.ifsc} onChange={set('ifsc')} /></Field>
+        </div>
+      </section>
+      <section className="panel">
+        <h2>UPI and online</h2>
+        <div className="fields">
+          <Field label="UPI ID" error={errors.upiId}><input type="text" value={v.upiId} onChange={set('upiId')} placeholder="name@bank" /></Field>
+          <Field label="Online payment link" error={errors.payLink} hint="Razorpay or Zoho payment page, optional"><input type="url" value={v.payLink} onChange={set('payLink')} placeholder="https://" /></Field>
+          <Field label="Contact email" error={errors.contactEmail}><input type="email" value={v.contactEmail} onChange={set('contactEmail')} /></Field>
+          <Field label="Contact phone" error={errors.contactPhone}><input type="tel" value={v.contactPhone} onChange={set('contactPhone')} /></Field>
+          <Field label="Plans and prices" error={errors.priceNote} className="wide" hint="One or two lines, e.g. Unlimited ₹7,999/month + GST or ₹79,999/year + GST">
+            <textarea rows={3} value={v.priceNote} onChange={set('priceNote')} /></Field>
+        </div>
+      </section>
+      <section className="panel">
+        <h2>Trial rules</h2>
+        <p className="small">{t.days}-day trial with every module, {t.users} logins and {t.rmas} new RMAs (imported old records don't count). Then {t.graceDays} days read-only, then logins stop. Data kept {t.retainDays} days after the trial. One {t.extendDays}-day extension against a {t.advancePct}% advance.</p>
+      </section>
+      <div className="savebar"><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Save payment details'}</button></div>
+    </form>
   );
 }
 

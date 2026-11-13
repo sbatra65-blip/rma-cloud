@@ -1,4 +1,4 @@
-import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from 'react';
+import { Children, cloneElement, createContext, Fragment, isValidElement, useContext, useEffect, useId, useRef, useState } from 'react';
 import { post as apiPost } from './api.js';
 
 // ---------- Version (filled in at build time from package.json) ----------
@@ -93,9 +93,11 @@ export function Stepper({ status }) {
 }
 
 // ---------- Permissions (mirror of the server rules) ----------
+// Read-only (access date passed, 7-day grace): nobody can add or change anything; viewing and exports still work.
+const readOnly = (u) => u?.company?.billing?.access === 'readonly';
 export const can = {
-  edit: (u) => ['Admin', 'Manager', 'Technician'].includes(u?.role),
-  manage: (u) => ['Admin', 'Manager'].includes(u?.role),
+  edit: (u) => ['Admin', 'Manager', 'Technician'].includes(u?.role) && !readOnly(u),
+  manage: (u) => ['Admin', 'Manager'].includes(u?.role) && !readOnly(u),
   admin: (u) => u?.role === 'Admin',
 };
 
@@ -430,4 +432,58 @@ export async function shrinkImage(file, max = 512) {
     const type = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
     return await new Promise((res) => c.toBlob(res, type, 0.9));
   } finally { URL.revokeObjectURL(url); }
+}
+
+// ---------- Plan: trial banner, how to buy ----------
+const dmyUi = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
+export function PaymentBox({ p, compact = false }) {
+  if (!p || !Object.keys(p).length) return <p className="small muted">Please contact your service provider to buy a plan.</p>;
+  const rows = [['Account name', p.payeeName], ['Bank', p.bankName], ['Account no.', p.accountNo], ['IFSC', p.ifsc], ['UPI', p.upiId]].filter(([, v]) => v);
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      {rows.length > 0 && <dl className="paybox">{rows.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd className={k === 'Account no.' || k === 'IFSC' ? 'mono' : ''}>{v}</dd></Fragment>)}</dl>}
+      {p.payLink && <a className="btn primary" href={p.payLink} target="_blank" rel="noopener noreferrer"><Icon name="share" size={18} /> Pay online</a>}
+      {!compact && p.priceNote && <p className="small" style={{ whiteSpace: 'pre-line' }}>{p.priceNote}</p>}
+      {(p.contactPhone || p.contactEmail) && <p className="small muted">Questions: {[p.contactPhone, p.contactEmail].filter(Boolean).join(' · ')}</p>}
+    </div>
+  );
+}
+export function TrialBar({ user, boot }) {
+  const [open, setOpen] = useState(false);
+  const b = user?.company?.billing;
+  if (!b) return null;
+  const trial = b.plan === 'trial';
+  const ro = b.access === 'readonly';
+  const soon = !trial && b.access === 'open' && b.daysLeft !== null && b.daysLeft <= 15;
+  if (!trial && !ro && !soon) return null;
+  const used = boot?.settings?.trialRmasUsed ?? null;
+  const left = Math.max(0, b.daysLeft ?? 0);
+  return (
+    <>
+      <div className={`trialbar ${ro ? 'ro' : trial && left <= 7 ? 'warn' : ''}`} role="status">
+        {ro ? (
+          <span><b>{trial ? 'Free trial ended' : 'Access ended'} on {dmyUi(b.validUntil)}.</b> Read-only until {dmyUi(b.readOnlyUntil)}: you can view, print and export, but not add or change anything.{trial && b.keepDataUntil ? ` Data kept until ${dmyUi(b.keepDataUntil)}.` : ''}</span>
+        ) : trial ? (
+          <>
+            <span><b>Free trial</b> · {left === 0 ? 'ends today' : `${left} day${left === 1 ? '' : 's'} left`} (until {dmyUi(b.validUntil)})</span>
+            {used !== null && <span className="small" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>{used} of {b.trialRmas} new RMAs
+              <span className="meter" aria-hidden="true"><i style={{ width: `${Math.min(100, (used / b.trialRmas) * 100)}%` }} /></span></span>}
+          </>
+        ) : (
+          <span><b>Access ends in {b.daysLeft} day{b.daysLeft === 1 ? '' : 's'}</b> ({dmyUi(b.validUntil)}). Renew to continue without a break.</span>
+        )}
+        <button type="button" className="btn primary small" style={{ marginLeft: 'auto' }} onClick={() => setOpen(true)}>{trial ? 'How to buy' : 'How to renew'}</button>
+      </div>
+      {open && (
+        <Dialog open onClose={() => setOpen(false)} title={trial ? 'Buy RMA Cloud' : 'Renew RMA Cloud'}>
+          <div className="stack">
+            <p>{trial ? 'Everything you have entered during the trial stays as it is when you buy.' : 'Your data and settings carry on as they are.'} After payment, your service provider switches the plan on, usually the same day.</p>
+            <PaymentBox p={b.payment} />
+            {trial && !b.extended && <div className="notice small">Need more time? Pay a {b.trial.advancePct}% advance and the trial is extended by {b.trial.extendDays} days. The advance is adjusted against your purchase.</div>}
+            <div className="row end"><button className="btn ghost" onClick={() => setOpen(false)}>Close</button></div>
+          </div>
+        </Dialog>
+      )}
+    </>
+  );
 }

@@ -729,3 +729,20 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
   .print-brand span { display: grid; } .print-brand small { color: #555; }
 }
 @media (max-width: 719px) { .dash-logo { display: none; } }
+
+/* Plans and trial */
+.plan-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.plan-pick button { display: grid; gap: 4px; text-align: left; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.plan-pick button span { color: var(--text-2); font-size: 0.86rem; }
+.plan-pick button[aria-checked='true'] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.billing.hot { border-color: var(--ok); }
+.trialbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 16px; margin-bottom: 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--brand-grad) top / 100% 3px no-repeat, var(--surface); }
+.trialbar.warn { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); background: var(--brand-grad) top / 100% 3px no-repeat, #fff8e6; }
+.trialbar.ro { border-color: color-mix(in srgb, var(--rust) 40%, var(--line)); background: #fff1f0; }
+.trialbar .meter { flex: 1 1 140px; max-width: 220px; height: 6px; border-radius: 99px; background: var(--mist); overflow: hidden; }
+.trialbar .meter i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.paybox { display: grid; gap: 4px 14px; grid-template-columns: max-content 1fr; font-size: 0.92rem; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.paybox dt { color: var(--text-2); } .paybox dd { margin: 0; font-weight: 600; }
+:root[data-theme='dark'] .trialbar.warn { background: var(--brand-grad) top / 100% 3px no-repeat, #2a2410; }
+:root[data-theme='dark'] .trialbar.ro { background: #2a1416; }

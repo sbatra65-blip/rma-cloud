@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { get, post } from '../api.js';
-import { Field, Icon, BrandLogo, Logo, Strength, VersionLabel, passwordScore } from '../ui.jsx';
+import { Field, Icon, BrandLogo, Logo, Strength, VersionLabel, passwordScore, PaymentBox } from '../ui.jsx';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
 const CODE_KEY = 'rma.companyCode';
@@ -101,7 +101,7 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
       setStep('code');
       setF((x) => ({ ...x, password: '' }));
     } catch (err) {
-      setErrors({ form: err.message, ...(err.fields || {}) });
+      setErrors({ form: err.message, ...(err.fields || {}), payment: err.data?.code === 'access_ended' ? (err.data.payment || {}) : null });
     } finally {
       setBusy(false);
     }
@@ -125,7 +125,7 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
         setActive(err.data.active);
         setStep('active');
       } else if (err.status === 403 || err.data?.code === 'seats_full') {
-        setErrors({ form: err.message });
+        setErrors({ form: err.message, payment: err.data?.code === 'access_ended' ? (err.data.payment || {}) : null });
         setCode('');
       } else if (err.status === 400 && /expired|start again/i.test(err.message)) {
         setStep('password');
@@ -149,6 +149,7 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
       {notice && step === 'password' && <div className="notice" role="status">{notice}</div>}
       {!notice && reason && step === 'password' && <div className="warnbox">{reason}</div>}
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
+      {errors.payment && <div className="panel" style={{ padding: 14 }}><h2 style={{ fontSize: '1rem', marginBottom: 10 }}>How to pay</h2><PaymentBox p={errors.payment} /></div>}
       {step === 'password' && (
         <form className="stack" onSubmit={submitPassword} noValidate>
           <Field label="Company code" htmlFor="cc" error={errors.companyCode} hint="Each company has its own logins. Your admin gives you the code.">

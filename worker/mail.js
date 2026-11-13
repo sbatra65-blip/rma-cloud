@@ -127,3 +127,37 @@ export function consoleInviteEmail({ appName, consoleUrl, name, token, days, inv
     <p style="color:#5f6278;font-size:13px">This link works once and expires in ${days} days.</p>`, host);
   return { subject: `${appName} Console: ${reset ? 'set up your login again' : 'you are invited'}`, html, text: `Hello ${name},\n\nSet up your ${appName} Console login (works once, expires in ${days} days):\n${link}` };
 }
+
+// Bank / UPI block for trial and renewal emails (details set by the service provider in the console).
+function paymentHtml(p) {
+  if (!p) return '';
+  const row = (k, v) => (v ? `<tr><td style="padding:3px 12px 3px 0;color:#5f6278">${esc(k)}</td><td style="padding:3px 0;font-weight:600">${esc(v)}</td></tr>` : '');
+  return `<div style="margin:18px 0;padding:14px 16px;border:1px solid #e7e5f0;border-radius:10px;background:#f6f5fa">
+    <p style="margin:0 0 8px;font-weight:700">How to pay</p>
+    <table style="font-size:13px;border-collapse:collapse">${row('Account name', p.payeeName)}${row('Bank', p.bankName)}${row('Account no.', p.accountNo)}${row('IFSC', p.ifsc)}${row('UPI', p.upiId)}</table>
+    ${p.payLink ? `<p style="margin:10px 0 0"><a href="${esc(p.payLink)}" style="display:inline-block;background:#303090;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">Pay online</a></p>` : ''}
+    ${p.priceNote ? `<p style="margin:10px 0 0;font-size:13px;color:#47546a">${esc(p.priceNote)}</p>` : ''}
+    ${p.contactEmail || p.contactPhone ? `<p style="margin:10px 0 0;font-size:13px">Questions: ${esc([p.contactPhone, p.contactEmail].filter(Boolean).join(' · '))}</p>` : ''}
+  </div>`;
+}
+const dmyMail = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
+
+// Trial / access reminders: 7 and 1 days before the access date, and when read-only starts.
+export function accessEmail({ appName, appUrl, kind, company, info, payment, recipientName }) {
+  const host = new URL(appUrl).host;
+  const trial = info.plan === 'trial';
+  const what = trial ? 'free trial' : 'access';
+  const t = info.trial;
+  const subject = kind === 'readonly'
+    ? `${company.name}: ${what} ended — read-only until ${dmyMail(info.readOnlyUntil)}`
+    : `${company.name}: ${what} ends ${kind === 'ends1' ? 'tomorrow' : 'in 7 days'} (${dmyMail(info.validUntil)})`;
+  const lines = kind === 'readonly'
+    ? [`The ${what} for <b>${esc(company.name)}</b> ended on ${dmyMail(info.validUntil)}.`,
+      `Until <b>${dmyMail(info.readOnlyUntil)}</b> everyone can still log in to view, print and export, but not add or change anything. After that, logins stop.`,
+      trial ? `Your data is kept until <b>${dmyMail(info.keepDataUntil)}</b>. Buy a plan any time before then and you carry on exactly where you left off.` : 'Renew to carry on exactly where you left off.']
+    : [`The ${what} for <b>${esc(company.name)}</b> ends on <b>${dmyMail(info.validUntil)}</b>.`,
+      trial ? `Buy a plan to keep everything you have entered and continue without a break. Need more time? Pay a ${t.advancePct}% advance and we extend the trial by ${t.extendDays} days; the advance is adjusted against your purchase.` : 'Renew before then to continue without a break.'];
+  const body = `<p>Hello${recipientName ? ` ${esc(recipientName.split(' ')[0])}` : ''},</p>${lines.map((l) => `<p>${l}</p>`).join('')}${paymentHtml(payment)}
+    <p><a href="${esc(appUrl)}" style="color:#303090;font-weight:700">Open ${esc(appName)}</a></p>`;
+  return { subject, html: shell(appName, subject, body, host) };
+}

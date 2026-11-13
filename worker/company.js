@@ -309,7 +309,9 @@ export class Company extends DurableObject {
     const s = this.settings();
     const tpl = this.one('SELECT name, size, updated_at, updated_by FROM files WHERE id = ?', TEMPLATE_ID);
     const logo = this.one('SELECT updated_at FROM files WHERE id = ?', 'company_logo');
-    return { ...s, ...this.cpSettings(), template: tpl || null, logoAt: logo?.updated_at || null };
+    const since = user?.trialStarted ? Date.parse(`${user.trialStarted}T00:00:00+05:30`) : 0;
+    const trialRmasUsed = user?.plan === 'trial' ? this.one('SELECT COUNT(*) AS n FROM tickets WHERE COALESCE(is_imported, 0) = 0 AND created_at >= ?', since).n : null;
+    return { ...s, ...this.cpSettings(), template: tpl || null, logoAt: logo?.updated_at || null, trialRmasUsed };
   }
   saveSettings(user, b) {
     const c = new Checker(b);
@@ -588,6 +590,12 @@ export class Company extends DurableObject {
     v.customer_company = cust.name;
     const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
+    // Free trial: up to 50 new RMAs (old records brought in by import or migration do not count).
+    if (user.plan === 'trial') {
+      const since = user.trialStarted ? Date.parse(`${user.trialStarted}T00:00:00+05:30`) : 0;
+      const used = this.one('SELECT COUNT(*) AS n FROM tickets WHERE COALESCE(is_imported, 0) = 0 AND created_at >= ?', since).n;
+      if (used >= 50) throw Object.assign(new Error('The free trial includes 50 new RMAs and all of them are used. Buy a plan to keep raising RMAs; everything entered so far is kept.'), { status: 402, extra: { code: 'trial_limit' } });
+    }
     const head = this.applyHeadGate(user, v, headReason);
     const psn = this.applyPartSerialGate(v, partSnNote, 0);
     if (!device && addToCarePack) {
