@@ -90,7 +90,7 @@ function RecoveryCodes({ user }) {
     }
   }
   function download() {
-    const text = `RMA Cloud recovery codes\nCompany: ${user.company.name} (${user.company.code})\nLogin: ${user.email}\n\n${codes.join('\n')}\n\nEach code works once.\n`;
+    const text = `TrackMyRMA recovery codes\nCompany: ${user.company.name} (${user.company.code})\nLogin: ${user.email}\n\n${codes.join('\n')}\n\nEach code works once.\n`;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
     a.download = `rma-recovery-codes-${user.company.code}.txt`;

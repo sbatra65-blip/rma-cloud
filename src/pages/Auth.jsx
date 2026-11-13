@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { get, post } from '../api.js';
-import { Field, Icon, BrandLogo, Logo, Strength, VersionLabel, passwordScore, PaymentBox } from '../ui.jsx';
+import { Field, Icon, BrandLogo, Logo, Wordmark, Strength, VersionLabel, passwordScore, PaymentBox } from '../ui.jsx';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
 const CODE_KEY = 'rma.companyCode';
@@ -15,7 +15,7 @@ function initialMode() {
 function Art() {
   return (
     <div className="auth-art">
-      <div className="brand"><span className="logochip"><BrandLogo height={52} /></span><span style={{ fontSize: '1.15rem' }}>RMA Cloud</span></div>
+      <div className="brand"><BrandLogo height={52} /><span style={{ fontSize: '1.35rem' }}><Wordmark /></span></div>
       <div>
         <h1>Every faulty part, from customer to OEM and back.</h1>
         <p>Raise RMAs with photos, generate the OEM form, batch dispatches and close the loop — from the office or the service bench.</p>
@@ -171,7 +171,7 @@ function Login({ onSignedIn, reason, notice, toForgot, needsSetup, toSetup }) {
         <form className="stack" onSubmit={submitCode} noValidate>
           <div className="steps" aria-hidden="true"><i className="on" /><i className="on" /></div>
           <p className="muted">{useRecovery ? 'Enter one of your saved recovery codes for this company. Each code works once.'
-            : `Open your authenticator app and enter the 6-digit code for RMA Cloud (${company?.code}).`}</p>
+            : `Open your authenticator app and enter the 6-digit code for TrackMyRMA (${company?.code}).`}</p>
           <CodeField value={code} onChange={setCode} error={errors.code} useRecovery={useRecovery} />
           <button className="btn primary block" disabled={busy}>{busy ? 'Verifying…' : 'Log in'}</button>
           <button type="button" className="btn ghost block" onClick={() => { setUseRecovery(!useRecovery); setCode(''); setErrors({}); }}>
@@ -221,7 +221,7 @@ function Enroll({ setup, onSignedIn, stepBase = 1, total = 3, welcome }) {
     }
   }
   function download() {
-    const text = `RMA Cloud recovery codes\nCompany: ${setup.company?.name} (${setup.company?.code})\n\n${done.recoveryCodes.join('\n')}\n\nEach code works once. Keep them somewhere safe.\n`;
+    const text = `TrackMyRMA recovery codes\nCompany: ${setup.company?.name} (${setup.company?.code})\n\n${done.recoveryCodes.join('\n')}\n\nEach code works once. Keep them somewhere safe.\n`;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
     a.download = `rma-recovery-codes-${setup.company?.code || 'login'}.txt`;
@@ -236,7 +236,7 @@ function Enroll({ setup, onSignedIn, stepBase = 1, total = 3, welcome }) {
           <div>
             <h2 style={{ fontSize: '1.5rem' }}>Set up two-step login</h2>
             <p className="muted" style={{ marginTop: 6 }}>Scan with Google Authenticator, Microsoft Authenticator or Authy, then enter the 6-digit code.
-              It will show as <b>RMA Cloud ({setup.company?.code})</b>.</p>
+              It will show as <b>TrackMyRMA ({setup.company?.code})</b>.</p>
           </div>
           <div className="qr">{qr && <img src={qr} alt="QR code for your authenticator app" />}</div>
           <details>
@@ -256,7 +256,7 @@ function Enroll({ setup, onSignedIn, stepBase = 1, total = 3, welcome }) {
           <div className="codes">{done.recoveryCodes.map((c) => <span key={c}>{c}</span>)}</div>
           <button className="btn ghost block" onClick={download}><Icon name="download" size={18} /> Download codes</button>
           <label className="check"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />I have saved these codes somewhere safe</label>
-          <button className="btn primary block" disabled={!saved} onClick={() => onSignedIn(done.user, done.idleMinutes, welcome)}>Open RMA Cloud</button>
+          <button className="btn primary block" disabled={!saved} onClick={() => onSignedIn(done.user, done.idleMinutes, welcome)}>Open TrackMyRMA</button>
         </div>
       )}
     </>
@@ -311,7 +311,7 @@ function Setup({ onSignedIn, toLogin }) {
     <form className="stack" onSubmit={submit} noValidate>
       <div className="steps" aria-label="Step 1 of 3"><i className="on" /><i /><i /></div>
       <div>
-        <h2 style={{ fontSize: '1.5rem' }}>Set up RMA Cloud</h2>
+        <h2 style={{ fontSize: '1.5rem' }}>Set up TrackMyRMA</h2>
         <p className="muted" style={{ marginTop: 6 }}>Create the first company and its Admin login. More companies, their limits and logins are managed from the separate console website.</p>
       </div>
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}

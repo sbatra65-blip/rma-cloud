@@ -154,7 +154,7 @@ function InviteDialog({ roles, onClose, onDone }) {
 export function LinkDialog({ result, company, onClose }) {
   const toast = useToast();
   if (!result) return null;
-  const text = `You've been added to ${company?.name || 'RMA Cloud'}. Company code: ${company?.code || ''}. Set up your login here (link works once, for ${result.days} days): ${result.link}`;
+  const text = `You've been added to ${company?.name || 'TrackMyRMA'}. Company code: ${company?.code || ''}. Set up your login here (link works once, for ${result.days} days): ${result.link}`;
   return (
     <Dialog open onClose={onClose} title={result.reset ? 'Login reset' : 'Invite ready'}>
       <div className="stack">

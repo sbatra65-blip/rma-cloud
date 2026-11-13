@@ -298,7 +298,7 @@ export async function blobToBase64(blob) {
 export async function writeTable({ sheet = 'Sheet1', title, subtitle, headers, rows, widths, total }) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'RMA Cloud';
+  wb.creator = 'TrackMyRMA';
   const ws = wb.addWorksheet(sheet.slice(0, 31));
   let r = 1;
   const last = String.fromCharCode(64 + headers.length);

@@ -1,4 +1,4 @@
-/* RMA Cloud — calm work tool: slate ink, one safety-orange action per view, one colour per workflow stage.
+/* TrackMyRMA — calm work tool: slate ink, one safety-orange action per view, one colour per workflow stage.
    Every text/background pair here passes WCAG AA (4.5:1). */
 :root {
   --ink: #1e1b4b;
@@ -707,14 +707,13 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .brandmark { display: inline-grid; place-items: center; background: #fff; border-radius: 28%; box-shadow: 0 0 0 1px var(--line); }
 
 .sidenav .navlink .count { background: #fde7e8; color: #a1101a; }
-.version .brandlogo { display: block; margin: 0 auto 6px; height: 56px; width: auto; }
+.version .brandlogo { display: flex; justify-content: center; margin: 0 auto 6px; }
 .brandmark-img { display: block; border-radius: 24%; box-shadow: 0 0 0 1px var(--line); animation: dot-in 0.5s var(--ease-spring) both; }
 .sidenav .version .brandlogo { height: 40px; }
 
 /* Real company logo in the brand spot */
-.brandlogo-top { display: block; flex: none; object-fit: contain; animation: dot-in 0.5s var(--ease-spring) both; }
+.brandlogo-top { display: block; flex: none; }
 .brand .brandlogo-top { margin: -4px 0; }
-.logochip { display: inline-grid; place-items: center; padding: 6px 8px; background: #fff; border-radius: 14px; box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.4); }
 .sidenav .version .brandlogo { display: none; }
 
 /* Company logo */
@@ -746,3 +745,34 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .paybox dt { color: var(--text-2); } .paybox dd { margin: 0; font-weight: 600; }
 :root[data-theme='dark'] .trialbar.warn { background: var(--brand-grad) top / 100% 3px no-repeat, #2a2410; }
 :root[data-theme='dark'] .trialbar.ro { background: #2a1416; }
+
+/* ---------- TrackMyRMA mark ---------- */
+.tmr-mark { display: block; flex: none; border-radius: 22.6%; }
+.tmr-mark .tmr-ring { opacity: 0; }
+.tmr-mark .tmr-track { stroke-dasharray: 100 100; stroke-dashoffset: 0; }
+.tmr-mark .tmr-head, .tmr-mark .tmr-dot, .tmr-mark .tmr-ring { transform-box: fill-box; transform-origin: center; }
+.tmr-mark .tmr-head { transform-origin: 50% 100%; }
+@media (prefers-reduced-motion: no-preference) {
+  .tmr-mark.anim .tmr-dot { animation: tmr-dot 0.35s var(--ease-spring) both; }
+  .tmr-mark.anim .tmr-track { animation: tmr-draw 1s cubic-bezier(.6, 0, .2, 1) 0.25s both; }
+  .tmr-mark.anim .tmr-head { animation: tmr-head 0.4s var(--ease-spring) 1.1s both; }
+  .tmr-mark.anim .tmr-ring { animation: tmr-ring 0.8s ease-out 1.45s both; }
+  .tmr-mark.anim.loop .tmr-dot { animation: tmr-dot-l 3.6s var(--ease-spring) infinite; }
+  .tmr-mark.anim.loop .tmr-track { animation: tmr-draw-l 3.6s cubic-bezier(.6, 0, .2, 1) infinite; }
+  .tmr-mark.anim.loop .tmr-head { animation: tmr-head-l 3.6s var(--ease-spring) infinite; }
+  .tmr-mark.anim.loop .tmr-ring { animation: tmr-ring-l 3.6s ease-out infinite; }
+  .brand:hover .tmr-mark.anim .tmr-head { animation: tmr-nudge 0.5s var(--ease-spring); }
+}
+@keyframes tmr-dot { from { transform: scale(0); } 70% { transform: scale(1.2); } to { transform: scale(1); } }
+@keyframes tmr-draw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+@keyframes tmr-head { from { opacity: 0; transform: scale(0.3); } 70% { opacity: 1; transform: scale(1.15); } to { opacity: 1; transform: scale(1); } }
+@keyframes tmr-ring { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.1); } }
+@keyframes tmr-nudge { 50% { transform: translateY(14px); } }
+@keyframes tmr-dot-l { 0% { transform: scale(0); } 6% { transform: scale(1.2); } 9%, 100% { transform: scale(1); } }
+@keyframes tmr-draw-l { 0%, 7% { stroke-dashoffset: 100; opacity: 1; } 35%, 88% { stroke-dashoffset: 0; opacity: 1; } 97%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes tmr-head-l { 0%, 30% { opacity: 0; transform: scale(0.3); } 38% { opacity: 1; transform: scale(1.15); } 42%, 88% { opacity: 1; transform: scale(1); } 97%, 100% { opacity: 0; transform: scale(1); } }
+@keyframes tmr-ring-l { 0%, 40% { opacity: 0; transform: scale(1); } 41% { opacity: 0.9; transform: scale(1); } 62%, 100% { opacity: 0; transform: scale(2.1); } }
+.wordmark { font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; }
+.wordmark b { font-weight: 800; color: #c03a96; }
+:root[data-theme='dark'] .wordmark b { color: #f08ad0; }
+@media (prefers-color-scheme: dark) { :root[data-theme='system'] .wordmark b { color: #f08ad0; } }

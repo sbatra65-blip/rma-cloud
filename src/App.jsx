@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, setSessionEndedHandler } from './api.js';
 import { broadcastLogout, useIdle } from './idle.js';
-import { CompanyLogo, TrialBar, Dialog, Icon, Link, BrandLogo, Logo, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
+import { CompanyLogo, TrialBar, Dialog, Icon, Link, BrandLogo, Logo, Wordmark, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
 import Auth from './pages/Auth.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RmaList from './pages/RmaList.jsx';
@@ -82,7 +82,7 @@ function Shell() {
 
   const { secondsLeft, stay } = useIdle(state.phase === 'in', state.idleMinutes || 5, (why) => signOut(why === 'logout' ? 'logout-remote' : 'idle'));
 
-  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} /></div>;
+  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} loop /></div>;
   if (state.phase === 'out') {
     return (
       <Auth reason={state.reason} onSignedIn={async (user, idleMinutes, note) => {
@@ -148,7 +148,7 @@ function Shell() {
     <div className="app">
       <aside className="sidenav" aria-label="Main">
         <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={48} /> : <BrandLogo height={56} />}
-          <span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
+          <span className="co"><Wordmark /><small>{user.company.name}</small></span></Link>
         <form role="search" className="navsearch" onSubmit={(e) => { e.preventDefault(); const q = new FormData(e.currentTarget).get('q').trim(); if (q) navigate(`/rma?q=${encodeURIComponent(q)}`); }}>
           <Icon name="search" size={16} /><input name="q" type="search" placeholder="RMA, serial, customer" aria-label="Search RMAs" />
         </form>
@@ -167,14 +167,14 @@ function Shell() {
         </div>
       </aside>
       <header className="topbar">
-        <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={34} /> : <BrandLogo height={38} />}<span className="co"><span>RMA Cloud</span><small>{user.company.name}</small></span></Link>
+        <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={34} /> : <BrandLogo height={38} />}<span className="co"><Wordmark /><small>{user.company.name}</small></span></Link>
         <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
           <Link to="/profile" className="iconbtn" aria-label="My profile"><Icon name="user" /></Link>
           <button type="button" className="iconbtn" onClick={() => signOut('logout')} aria-label="Log out" title="Log out"><Icon name="logout" /></button>
         </div>
       </header>
       <main>
-        <div className="print-brand" aria-hidden="true"><CompanyLogo boot={boot} height={44} /><span><b>{user.company.name}</b><small>RMA Cloud · printed {new Date().toLocaleDateString('en-IN')}</small></span></div>
+        <div className="print-brand" aria-hidden="true"><CompanyLogo boot={boot} height={44} /><span><b>{user.company.name}</b><small>TrackMyRMA · printed {new Date().toLocaleDateString('en-IN')}</small></span></div>
         <TrialBar user={user} boot={boot} />
         <div className="page" key={route}>{page}</div></main>
       <nav className="bottomnav" aria-label="Main">

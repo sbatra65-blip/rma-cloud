@@ -1,10 +1,10 @@
-// RMA Cloud Console — the service provider's website. Separate login (operators, 2FA), separate cookie.
+// TrackMyRMA Console — the service provider's website. Separate login (operators, 2FA), separate cookie.
 // Operators create companies, set limits and modules, and manage each company's logins. No RMA data here.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { api, del, downloadBlob, get, post, setSessionEndedHandler } from '../api.js';
 import {
-  Dialog, Empty, ErrorPanel, Field, Icon, Link, BrandLogo, Logo, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
+  Dialog, Empty, ErrorPanel, Field, Icon, Link, BrandLogo, Logo, Wordmark, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
   navigate, passwordScore, shrinkImage, ThemePicker, todayISO, useLoad, usePath, useToast,
 } from '../ui.jsx';
 
@@ -44,7 +44,7 @@ function Shell() {
 
   useIdleTimer(state.phase === 'in', state.idle || 15, () => signOut('idle'));
 
-  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} /></div>;
+  if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} loop /></div>;
   if (state.phase === 'out') {
     return <ConsoleAuth reason={state.reason} onIn={async (note) => {
       const r = await get('/api/console/me');
@@ -71,7 +71,7 @@ function Shell() {
   return (
     <div className="app">
       <aside className="sidenav" aria-label="Console">
-        <Link to="/console" className="brand"><BrandLogo height={56} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
+        <Link to="/console" className="brand"><BrandLogo height={56} /><span className="co"><Wordmark /><small>Service console</small></span></Link>
         <Link to="/console/companies/new" className="btn primary block addbtn"><Icon name="plus" size={18} /> New company</Link>
         {nav.map(([to, icon, label]) => <Link key={to} to={to} className="navlink" aria-current={cur(to) ? 'page' : undefined}><Icon name={icon} size={19} /> {label}</Link>)}
         <div className="foot">
@@ -82,7 +82,7 @@ function Shell() {
         </div>
       </aside>
       <header className="topbar">
-        <Link to="/console" className="brand"><BrandLogo height={38} /><span className="co"><span>RMA Cloud</span><small>Service console</small></span></Link>
+        <Link to="/console" className="brand"><BrandLogo height={38} /><span className="co"><Wordmark /><small>Service console</small></span></Link>
         <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
           <Link to="/console/profile" className="iconbtn" aria-label="My profile"><Icon name="user" /></Link>
           <button type="button" className="iconbtn" onClick={() => signOut('logout')} aria-label="Log out"><Icon name="logout" /></button>
@@ -127,7 +127,7 @@ function ConsoleAuth({ reason, onIn }) {
   return (
     <div className="auth">
       <div className="auth-art">
-        <div className="brand"><span className="logochip"><BrandLogo height={52} /></span><span style={{ fontSize: '1.15rem' }}>RMA Cloud Console</span></div>
+        <div className="brand"><BrandLogo height={52} /><span style={{ fontSize: '1.35rem' }}><Wordmark /> <small style={{ fontWeight: 600, opacity: .8 }}>Console</small></span></div>
         <div>
           <h1>Companies, limits and logins — in one place.</h1>
           <p>For the service provider only. Create companies, set how many people may use them, switch modules on or off, and help their users get in.</p>
@@ -206,7 +206,7 @@ function Login({ reason, onIn, canSetup, toSetup }) {
         </form>
       ) : (
         <form className="stack" onSubmit={verify} noValidate>
-          <p className="muted">{rec ? 'Enter one of your saved recovery codes.' : 'Enter the 6-digit code for RMA Cloud Console from your authenticator app.'}</p>
+          <p className="muted">{rec ? 'Enter one of your saved recovery codes.' : 'Enter the 6-digit code for TrackMyRMA Console from your authenticator app.'}</p>
           <CodeInput value={code} onChange={setCode} error={errors.code} recovery={rec} />
           <button className="btn primary block" disabled={busy}>{busy ? 'Verifying…' : 'Log in'}</button>
           <button type="button" className="btn ghost block" onClick={() => { setRec(!rec); setCode(''); setErrors({}); }}>{rec ? 'Use authenticator code instead' : 'Lost your phone? Use a recovery code'}</button>
@@ -260,7 +260,7 @@ function Setup({ info, onIn, toLogin }) {
       <div className="steps"><i className="on" /><i /><i /></div>
       <div><h2 style={{ fontSize: '1.5rem' }}>Set up the console</h2>
         <p className="muted" style={{ marginTop: 6 }}>{owner
-          ? <>You are signed in to RMA Cloud as <b>{owner.name}</b>, who set the system up, so no setup key is needed. Choose the console login: email, password, then your authenticator app.</>
+          ? <>You are signed in to TrackMyRMA as <b>{owner.name}</b>, who set the system up, so no setup key is needed. Choose the console login: email, password, then your authenticator app.</>
           : <>Create the first console login. Easiest: log in to the RMA app (<a href="/">open it</a>) with the account that did the first setup, then come back here — you'll only need an email and password. Otherwise use the <b>CONSOLE_SETUP_KEY</b> secret.</>}</p></div>
       {!owner && info && !info.keyConfigured && <div className="warnbox">No setup key is configured, so log in to the RMA app as the account that did the first setup and open this page again.</div>}
       {errors.form && <div className="formerror" role="alert">{errors.form}</div>}
@@ -329,7 +329,7 @@ function Enroll({ enroll, onIn }) {
         <div className="codes">{done.recoveryCodes.map((c) => <span key={c}>{c}</span>)}</div>
         <button className="btn ghost block" onClick={() => {
           const a = document.createElement('a');
-          a.href = URL.createObjectURL(new Blob([`RMA Cloud Console recovery codes (${done.op.email})\n\n${done.recoveryCodes.join('\n')}\n`], { type: 'text/plain' }));
+          a.href = URL.createObjectURL(new Blob([`TrackMyRMA Console recovery codes (${done.op.email})\n\n${done.recoveryCodes.join('\n')}\n`], { type: 'text/plain' }));
           a.download = 'rma-console-recovery-codes.txt';
           a.click();
         }}><Icon name="download" size={18} /> Download codes</button>
@@ -342,7 +342,7 @@ function Enroll({ enroll, onIn }) {
     <form className="stack" onSubmit={submit} noValidate>
       <div className="steps"><i className="on" /><i className="on" /><i /></div>
       <div><h2 style={{ fontSize: '1.5rem' }}>Set up two-step login</h2>
-        <p className="muted" style={{ marginTop: 6 }}>Scan with your authenticator app. It will show as <b>RMA Cloud Console</b>.</p></div>
+        <p className="muted" style={{ marginTop: 6 }}>Scan with your authenticator app. It will show as <b>TrackMyRMA Console</b>.</p></div>
       <div className="qr">{qr && <img src={qr} alt="QR code for your authenticator app" />}</div>
       <details><summary className="small muted" style={{ cursor: 'pointer' }}>On this phone? Enter this key instead</summary><p className="secret" style={{ marginTop: 8 }}>{enroll.secret.match(/.{1,4}/g).join(' ')}</p></details>
       <CodeInput value={code} onChange={setCode} error={error} id="ecode" />
@@ -525,7 +525,7 @@ function NewCompany({ appUrl }) {
 
 function InviteResult({ result, company, appUrl, onClose }) {
   const toast = useToast();
-  const text = `You've been added to ${company.name} on RMA Cloud.\nApp: ${appUrl}\nCompany code: ${company.code}\nSet up your login (works once, for ${result.days} days): ${result.link}`;
+  const text = `You've been added to ${company.name} on TrackMyRMA.\nApp: ${appUrl}\nCompany code: ${company.code}\nSet up your login (works once, for ${result.days} days): ${result.link}`;
   return (
     <Dialog open onClose={onClose} title="Login invite ready">
       <div className="stack">

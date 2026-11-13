@@ -4,7 +4,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 export async function sendMail(env, { to, cc, replyTo, subject, html, text, attachments }) {
   if (!env.RESEND_API_KEY) return { ok: false, error: 'Email is not set up yet: the RESEND_API_KEY secret is missing.' };
   const toList = Array.isArray(to) ? to : [to];
-  const payload = { from: env.MAIL_FROM || 'RMA Cloud <onboarding@resend.dev>', to: toList, subject, html, text };
+  const payload = { from: env.MAIL_FROM || 'TrackMyRMA <onboarding@resend.dev>', to: toList, subject, html, text };
   if (cc && cc.length) payload.cc = cc;
   if (replyTo) payload.reply_to = replyTo;
   if (attachments && attachments.length) payload.attachments = attachments; // [{ filename, content (base64) }]
@@ -28,12 +28,12 @@ function shell(appName, title, bodyHtml, host) {
         <td style="height:4px;background:#5a80bc"></td><td style="height:4px;background:#6e68ae"></td><td style="height:4px;background:#c03a96"></td>
         <td style="height:4px;background:#19aec6"></td><td style="height:4px;background:#7fc06c"></td><td style="height:4px;background:#cfc455"></td></tr></table>
       <div style="background:#303090;color:#fff;padding:18px 24px">
-        <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.7">${esc(appName)}</div>
+        <img src="https://${esc(host)}/brand/trackmyrma-logo-white-email.png" width="168" height="36" alt="${esc(appName)}" style="display:block;border:0;margin-bottom:8px">
         <div style="font-size:18px;font-weight:700;margin-top:2px">${esc(title)}</div>
       </div>
       <div style="background:#fff;border-radius:0 0 14px 14px;padding:8px 24px 24px;color:#1e1b4b">${bodyHtml}
         <p style="color:#5f6278;font-size:12px;margin-top:20px">We never ask for your password by email. Links only go to ${esc(host)}.</p>
-        <p style="margin:18px 0 0;text-align:center"><img src="https://${esc(host)}/brand/infinite-solutions.png" width="64" height="59" alt="Infinite Solutions" style="display:inline-block;border:0"></p>
+        <p style="margin:18px 0 0;text-align:center"><img src="https://${esc(host)}/brand/trackmyrma-mark-96.png" width="40" height="40" alt="TrackMyRMA" style="display:inline-block;border:0"></p>
       </div>
     </div></body></html>`;
 }

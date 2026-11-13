@@ -192,7 +192,7 @@ export class Directory extends DurableObject {
   get idleMs() { return Number(this.env.IDLE_MINUTES || 5) * MIN; }
   get maxMs() { return Number(this.env.MAX_SESSION_HOURS || 12) * 60 * MIN; }
   get iterations() { return Number(this.env.PBKDF2_ITERATIONS || 100000); }
-  get appName() { return this.env.APP_NAME || 'RMA Cloud'; }
+  get appName() { return this.env.APP_NAME || 'TrackMyRMA'; }
 
   one(query, ...args) { return this.sql.exec(query, ...args).toArray()[0] || null; }
   all(query, ...args) { return this.sql.exec(query, ...args).toArray(); }
@@ -224,7 +224,7 @@ export class Directory extends DurableObject {
   }
 
   otpauth(user, company) {
-    // Shows as e.g. "RMA Cloud (INF): name@x.com" so people with logins in two companies can tell them apart.
+    // Shows as e.g. "TrackMyRMA (INF): name@x.com" so people with logins in two companies can tell them apart.
     const issuer = `${this.appName} (${company.code})`;
     return `otpauth://totp/${encodeURIComponent(`${issuer}:${user.email}`)}?secret=${'{SECRET}'}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
   }

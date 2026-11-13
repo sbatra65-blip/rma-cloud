@@ -125,7 +125,7 @@ const CODE_RE = /^[A-Z0-9]{2,12}$/;
 
 async function emailInvite(env, url, actor, data, { reset = false, companyName } = {}) {
   const mail = inviteEmail({
-    appName: env.APP_NAME || 'RMA Cloud', appUrl: url.origin, name: data.user.name, token: data.invite.token,
+    appName: env.APP_NAME || 'TrackMyRMA', appUrl: url.origin, name: data.user.name, token: data.invite.token,
     days: data.invite.days, companies: [companyName || actor.companyName], invitedBy: actor.name, reset,
   });
   const sent = await sendMail(env, { to: data.user.email, ...mail });
@@ -138,7 +138,7 @@ async function handle(request, env, ctx) {
   const path = url.pathname.replace(/\/+$/, '');
   const method = request.method;
   const client = clientInfo(request);
-  const appName = env.APP_NAME || 'RMA Cloud';
+  const appName = env.APP_NAME || 'TrackMyRMA';
 
   // Migration tool (old Windows RMA System → cloud): Bearer key, no cookie, so no cross-site risk.
   if (path.startsWith('/api/migrate/')) {
@@ -687,7 +687,7 @@ async function appOrigin(env, url) {
 }
 
 async function handleConsole(request, env, ctx, url, path, method, client) {
-  const appName = env.APP_NAME || 'RMA Cloud';
+  const appName = env.APP_NAME || 'TrackMyRMA';
   const cookie = (t) => ({ 'Set-Cookie': sessionCookie(t, CCOOKIE) });
 
   // ---- before login ----
@@ -949,7 +949,7 @@ const cpItems = (list = []) => list.map((i) => ({ ...i, ticket_no: i.invoice, se
 
 // Daily job: one digest per company to its Admins and Managers (plus any extra addresses set).
 async function runReminders(env, appUrl) {
-  const appName = env.APP_NAME || 'RMA Cloud';
+  const appName = env.APP_NAME || 'TrackMyRMA';
   const companies = await dcall(env, 'reminderRecipients', {});
   const report = [];
   for (const c of companies) {

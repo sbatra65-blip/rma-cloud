@@ -6,7 +6,7 @@ export function VersionLabel() {
   const date = new Date(__BUILD_DATE__ + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   return (
     <div className="version">
-      <img className="brandlogo" src="/brand/infinite-solutions.png" alt="Infinite Solutions" width="60" height="56" />
+      <span className="brandlogo"><Mark size={44} still /></span>
       <p>Designed and Developed by{' '}
         <a href="https://www.infinitesolutions.co.in" target="_blank" rel="noopener noreferrer">Infinite Solutions</a></p>
       <p>Version {__APP_VERSION__} · built {date}{__BUILD_COMMIT__ ? ` · ${__BUILD_COMMIT__}` : ''}</p>
@@ -149,9 +149,32 @@ export function Logo({ size = 30 }) {
   return <img className="brandmark-img" src="/icons/favicon.svg" width={size} height={size} alt="" />;
 }
 
-// The real Infinite Solutions logo (infinity, barcode and wordmark). Width follows its 233 x 216 shape.
-export function BrandLogo({ height = 48, className = '' }) {
-  return <img className={`brandlogo-top ${className}`} src="/brand/infinite-solutions.png" alt="Infinite Solutions" height={height} width={Math.round(height * 233 / 216)} />;
+// TrackMyRMA mark: a circular track from the start dot, ending in an arrowhead that returns to it.
+// Animates once when it appears (dot pops, track draws, arrowhead snaps on, ring pulses); CSS turns
+// the animation off for people who ask for reduced motion. `loop` repeats it (loading screens).
+export function Mark({ size = 48, still = false, loop = false, className = '' }) {
+  const id = useId().replace(/:/g, '');
+  return (
+    <svg className={`tmr-mark ${still ? '' : 'anim'} ${loop ? 'loop' : ''} ${className}`} viewBox="0 0 512 512" width={size} height={size} role="img" aria-label="TrackMyRMA">
+      <defs>
+        <linearGradient id={`${id}b`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#3a3aa6" /><stop offset="1" stopColor="#1e1b4b" /></linearGradient>
+        <linearGradient id={`${id}s`} x1="0" y1="1" x2="1" y2="0.2"><stop offset="0" stopColor="#19aec6" /><stop offset=".55" stopColor="#8f7ee0" /><stop offset="1" stopColor="#e05bb5" /></linearGradient>
+      </defs>
+      <rect width="512" height="512" rx="116" fill={`url(#${id}b)`} />
+      <g transform="translate(-25 -18)">
+        <path className="tmr-track" d="M212.2 382.3 A128 128 0 1 1 384.0 262.0" pathLength="100" fill="none" stroke={`url(#${id}s)`} strokeWidth="56" strokeLinecap="round" />
+        <path className="tmr-head" d="M432.2 256.5 L384.0 310.0 L335.8 256.5" fill="none" stroke="#e05bb5" strokeWidth="56" strokeLinecap="round" strokeLinejoin="round" />
+        <circle className="tmr-ring" cx="212.2" cy="382.3" r="40" fill="none" stroke="#19aec6" strokeWidth="6" />
+        <g className="tmr-dot"><circle cx="212.2" cy="382.3" r="40" fill="#fff" /><circle cx="212.2" cy="382.3" r="17" fill="#19aec6" /></g>
+      </g>
+    </svg>
+  );
+}
+export function BrandLogo({ height = 48, className = '', loop = false }) {
+  return <Mark size={height} loop={loop} className={`brandlogo-top ${className}`} />;
+}
+export function Wordmark() {
+  return <span className="wordmark">trackmy<b>RMA</b></span>;
 }
 
 // ---------- Form field ----------
@@ -475,7 +498,7 @@ export function TrialBar({ user, boot }) {
         <button type="button" className="btn primary small" style={{ marginLeft: 'auto' }} onClick={() => setOpen(true)}>{trial ? 'How to buy' : 'How to renew'}</button>
       </div>
       {open && (
-        <Dialog open onClose={() => setOpen(false)} title={trial ? 'Buy RMA Cloud' : 'Renew RMA Cloud'}>
+        <Dialog open onClose={() => setOpen(false)} title={trial ? 'Buy TrackMyRMA' : 'Renew TrackMyRMA'}>
           <div className="stack">
             <p>{trial ? 'Everything you have entered during the trial stays as it is when you buy.' : 'Your data and settings carry on as they are.'} After payment, your service provider switches the plan on, usually the same day.</p>
             <PaymentBox p={b.payment} />

@@ -52,7 +52,7 @@ with sync_playwright() as p:
 
     # ---- first-run setup ----
     page.goto(BASE + '/')
-    page.wait_for_selector('text=Set up RMA Cloud')
+    page.wait_for_selector('text=Set up TrackMyRMA')
     page.screenshot(path=f'{OUT}/01-setup.png', full_page=True)
     page.fill('#cn', 'Infinite Solutions')
     page.fill('#ccode', 'INF')
@@ -70,7 +70,7 @@ with sync_playwright() as p:
     page.wait_for_selector('text=Save your recovery codes')
     page.screenshot(path=f'{OUT}/03-codes.png', full_page=True)
     page.check('input[type=checkbox]')
-    page.click('text=Open RMA Cloud')
+    page.click('text=Open TrackMyRMA')
     page.wait_for_selector('.pipe')
     page.wait_for_timeout(600)
     ok(True, 'setup → 2FA → dashboard')
@@ -256,7 +256,7 @@ with sync_playwright() as p:
     p2.click('text=Verify and continue')
     p2.wait_for_selector('text=Save your recovery codes')
     p2.check('input[type=checkbox]')
-    p2.click('text=Open RMA Cloud')
+    p2.click('text=Open TrackMyRMA')
     p2.wait_for_selector('.pipe')
     ok(p2.locator('a[href="/users"]').count() == 0, 'technician sees no admin menu')
     p2.click('text=Log out') if p2.locator('.topbar [aria-label="Log out"]').count() == 0 else p2.click('.topbar [aria-label="Log out"]')

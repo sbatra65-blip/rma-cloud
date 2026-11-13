@@ -1,5 +1,5 @@
 {
-  // RMA Cloud — one Worker serves the PWA (static assets) and the /api.
+  // TrackMyRMA — one Worker serves the PWA (static assets) and the /api.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rma-cloud",
   "main": "worker/index.js",
@@ -38,7 +38,7 @@
   "triggers": { "crons": ["30 3 * * *"] },
 
   "vars": {
-    "APP_NAME": "RMA Cloud",
+    "APP_NAME": "TrackMyRMA",
     "IDLE_MINUTES": "5",
     "MAX_SESSION_HOURS": "12",
     "PBKDF2_ITERATIONS": "100000",
