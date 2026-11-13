@@ -145,7 +145,7 @@ export function Icon({ name, size = 22, ...rest }) {
   );
 }
 export function Logo({ size = 30 }) {
-  // Infinite Solutions infinity mark on a white tile: the same artwork as the app icon and favicon.
+  // TrackMyRMA mark: the same artwork as the app icon and favicon.
   return <img className="brandmark-img" src="/icons/favicon.svg" width={size} height={size} alt="" />;
 }
 
