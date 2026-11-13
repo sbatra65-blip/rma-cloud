@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3aa6"/><stop offset="1" stop-color="#1e1b4b"/></linearGradient>
+<linearGradient id="st" x1="0" y1="1" x2="1" y2="0.2"><stop offset="0" stop-color="#19aec6"/><stop offset=".55" stop-color="#8f7ee0"/><stop offset="1" stop-color="#e05bb5"/></linearGradient>
+</defs><rect width="512" height="512" rx="116" fill="url(#bg)"/><g transform="translate(-25 -18)"><g><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.9028;0.9722;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/>
+<path d="M212.2 382.3 A128 128 0 1 1 384.0 262.0" fill="none" stroke="url(#st)" stroke-width="56" stroke-linecap="round" pathLength="100" stroke-dasharray="100 100" stroke-dashoffset="100">
+ <animate attributeName="stroke-dashoffset" values="100;100;0;0" keyTimes="0;0.0694;0.3472;1" keySplines="0 0 1 1;.6 0 .2 1;0 0 1 1" calcMode="spline" dur="3.6s" repeatCount="indefinite" fill="freeze"/></path>
+<g transform-origin="384.0 310.0" opacity="0"><path d="M432.2 256.5 L384.0 310.0 L335.8 256.5" fill="none" stroke="#e05bb5" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+ <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.3056;0.3333;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/>
+ <animateTransform attributeName="transform" type="scale" values="0.3;0.3;1.15;1;1" keyTimes="0;0.3056;0.3750;0.4167;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/></g>
+<circle r="13" fill="#fff" opacity="0"><animateMotion path="M212.2 382.3 A128 128 0 1 1 384.0 262.0" keyPoints="0;0;1;1" keyTimes="0;0.0694;0.3472;1" keySplines="0 0 1 1;.6 0 .2 1;0 0 1 1" calcMode="spline" dur="3.6s" repeatCount="indefinite" fill="freeze"/>
+ <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.0694;0.0833;0.3194;0.3472;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/></circle>
+<circle cx="212.2" cy="382.3" r="40" fill="none" stroke="#19aec6" stroke-width="6" opacity="0">
+ <animate attributeName="r" values="40;40;86" keyTimes="0;0.4028;0.6250" dur="3.6s" repeatCount="indefinite" fill="freeze"/>
+ <animate attributeName="opacity" values="0;0;.9;0;0" keyTimes="0;0.4028;0.4167;0.6250;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/></circle>
+<g transform-origin="212.2 382.3"><animateTransform attributeName="transform" type="scale" values="0;1.2;1;1" keyTimes="0;0.0500;0.0778;1" dur="3.6s" repeatCount="indefinite" fill="freeze"/>
+<circle cx="212.2" cy="382.3" r="40" fill="#fff"/><circle cx="212.2" cy="382.3" r="17" fill="#19aec6"/></g></g></g></svg>

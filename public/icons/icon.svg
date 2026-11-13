@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3aa6"/><stop offset="1" stop-color="#1e1b4b"/></linearGradient>
-<linearGradient id="st" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#19aec6"/><stop offset=".55" stop-color="#8f7ee0"/><stop offset="1" stop-color="#e05bb5"/></linearGradient>
-</defs><rect width="512" height="512" rx="116" fill="url(#bg)"/><g transform="translate(-28 -34)"><path d="M172 380 V236 A84 84 0 0 1 340 236 V318" fill="none" stroke="url(#st)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M276 286 L340 350 L404 286" fill="none" stroke="#e05bb5" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
-<circle cx="172" cy="392" r="40" fill="#ffffff"/><circle cx="172" cy="392" r="17" fill="#19aec6"/></g></svg>
+<linearGradient id="st" x1="0" y1="1" x2="1" y2="0.2"><stop offset="0" stop-color="#19aec6"/><stop offset=".55" stop-color="#8f7ee0"/><stop offset="1" stop-color="#e05bb5"/></linearGradient>
+</defs><rect width="512" height="512" rx="116" fill="url(#bg)"/><g transform="translate(-25 -18)"><path d="M212.2 382.3 A128 128 0 1 1 384.0 262.0" fill="none" stroke="url(#st)" stroke-width="56" stroke-linecap="round"/>
+<path d="M432.2 256.5 L384.0 310.0 L335.8 256.5" fill="none" stroke="#e05bb5" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="212.2" cy="382.3" r="40" fill="#fff"/><circle cx="212.2" cy="382.3" r="17" fill="#19aec6"/></g></svg>
