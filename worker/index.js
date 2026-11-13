@@ -811,7 +811,7 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
 }
 
 // Pages: the RMA app and the console are two single-page sites in one Worker.
-// With CONSOLE_HOST set, the console answers only on that hostname and the app hostname has no console.
+// With CONSOLE_HOST set, the console answers only on that hostname; /console on the app hostname redirects there.
 async function serveStatic(request, env, url) {
   const host = env.CONSOLE_HOST;
   const onConsoleHost = !!host && url.hostname === host;
@@ -822,7 +822,8 @@ async function serveStatic(request, env, url) {
     if (/\.[a-z0-9]{2,8}$/i.test(url.pathname)) return env.ASSETS.fetch(request);
     return Response.redirect(new URL('/console', url), 302);
   }
-  if (isConsolePath) return host ? new Response('Not found', { status: 404 }) : consolePage();
+  // Console moved to its own hostname: send old bookmarks there instead of a bare "Not found".
+  if (isConsolePath) return host ? Response.redirect(`https://${host}/console`, 302) : consolePage();
   return env.ASSETS.fetch(request);
 }
 
