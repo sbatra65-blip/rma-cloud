@@ -756,8 +756,51 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
     return respond({ company: r.company, user: r.user, ...(await sendInvite(r, r.company.name)) });
   }
   let m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})$/);
-  if (m && method === 'GET') return respond(await dcall(env, 'consoleCompany', { op, id: m[1] }));
+  if (m && method === 'GET') {
+    const d = await dcall(env, 'consoleCompany', { op, id: m[1] });
+    return respond({ ...d, transactions: await company(env, m[1]).transactionCounts() });
+  }
   if (m && method === 'POST') return respond(await dcall(env, 'consoleUpdateCompany', { op, id: m[1], data: companyData(await body(request), false), ip: client.ip }));
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/export$/);
+  if (m && method === 'GET') {
+    const data = await company(env, m[1]).exportTables();
+    const rows = Object.values(data.tables).reduce((a, t) => a + t.length, 0);
+    const co = await dcall(env, 'consoleExportLog', { op, id: m[1], detail: `${rows} rows, ${data.photos.length} photos, ${data.files.length} files`, ip: client.ip });
+    return respond({ company: co, exportedAt: new Date().toISOString(), ...data });
+  }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/export\/(photo|file)\/([A-Za-z0-9_.:-]{1,80})$/);
+  if (m && method === 'GET') {
+    const f = await company(env, m[1]).exportFile({ kind: m[2], id: m[3] });
+    if (!f) return err(404, 'Not found');
+    let body = f.bytes;
+    if (f.store === 'r2') {
+      const o = env.FILES ? await env.FILES.get(`co/${m[1]}/photo/${m[3]}`) : null;
+      if (!o) return err(404, 'Photo file missing');
+      body = o.body;
+    }
+    return new Response(body, { headers: { 'Content-Type': f.mime, 'Cache-Control': 'no-store' } });
+  }
+  m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/delete$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    // Only a company with no RMAs, OEM batches or care packs can be deleted.
+    const tx = await company(env, m[1]).transactionCounts();
+    if (tx.total) {
+      const parts = [[tx.rmas, 'RMA'], [tx.oemBatches, 'OEM batch'], [tx.carePacks, 'care pack']].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : w.endsWith('h') ? 'es' : 's'}`);
+      throw Object.assign(new Error(`${parts.join(', ')} recorded. A company with transactions cannot be deleted; suspend it instead.`), { status: 409, more: { code: 'has_transactions', transactions: tx } });
+    }
+    const chk = await dcall(env, 'consoleDeleteCheck', { op, id: m[1], confirmCode: b.confirmCode, code: b.code, ip: client.ip });
+    await company(env, m[1]).wipeAll();
+    if (env.FILES) {
+      let cursor;
+      do {
+        const page = await env.FILES.list({ prefix: `co/${m[1]}/`, cursor });
+        if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+    }
+    return respond(await dcall(env, 'consoleDeleteFinish', { op, id: m[1], token: chk.token, ip: client.ip }));
+  }
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/signout-all$/);
   if (m && method === 'POST') return respond(await dcall(env, 'consoleSignOutAll', { op, id: m[1] }));
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/users$/);

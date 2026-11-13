@@ -2,7 +2,7 @@
 // Operators create companies, set limits and modules, and manage each company's logins. No RMA data here.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { del, get, post, setSessionEndedHandler } from '../api.js';
+import { del, downloadBlob, get, post, setSessionEndedHandler } from '../api.js';
 import {
   Dialog, Empty, ErrorPanel, Field, Icon, Link, BrandLogo, Logo, Skeleton, Strength, ToastProvider, VersionLabel, copyText, fmtDate, fmtMs,
   navigate, passwordScore, todayISO, useLoad, usePath, useToast,
@@ -596,11 +596,15 @@ function CompanyPage({ id, appUrl }) {
           <h1 className="cp-head">{c.name} <span className="pill mono">{c.code}</span> <span className={`pill ${tone}`}>{label}</span></h1>
           <p className="muted">Users {limit(c.users, c.maxUsers)} · signed in now {limit(c.online, c.maxConcurrent)} · {c.validUntil ? `valid until ${fmtDate(c.validUntil)}` : 'no end date'} · created {fmtMs(c.createdAt)}</p>
           {!c.active && c.suspendReason && <p className="small" style={{ marginTop: 4 }}>Reason: {c.suspendReason}</p>}
+          {!c.active && data.transactions?.total > 0 && <p className="small muted" style={{ marginTop: 4 }}>Cannot be deleted: {plural(data.transactions.rmas, 'RMA')}, {plural(data.transactions.oemBatches, 'OEM batch', 'OEM batches')} and {plural(data.transactions.carePacks, 'care pack')} recorded. It stays suspended with data kept; use Download data for a copy.</p>}
         </div>
         <div className="row">
           <button className="btn ghost small" disabled={!c.online || busy === 'signout'} onClick={() => setDlg('signout')}><Icon name="logout" size={16} /> Sign out everyone</button>
           {c.active ? <button className="btn danger small" onClick={() => setDlg('suspend')}>Suspend</button>
             : <button className="btn primary small" disabled={busy === 'active'} onClick={() => setActive(true)}>Activate</button>}
+          {data.transactions?.total > 0 && <button className="btn ghost small" onClick={() => setDlg('export')}><Icon name="download" size={16} /> Download data</button>}
+          {!c.active && <button className="btn danger small" disabled={!!data.transactions?.total} onClick={() => setDlg('delete')}
+            title={data.transactions?.total ? 'This company has transactions, so it can only be suspended' : 'Delete this company permanently'}><Icon name="trash" size={16} /> Delete company</button>}
         </div>
       </div>
 
@@ -681,6 +685,9 @@ function CompanyPage({ id, appUrl }) {
       )}
 
       {dlg === 'add' && <AddUser id={id} roles={data.roles} domains={c.emailDomains} onClose={() => setDlg(null)} onDone={(r) => { setDlg(null); setResult(r); reload(); }} />}
+      {dlg === 'export' && <ExportDialog company={c} tx={data.transactions} onClose={() => setDlg(null)} />}
+      {dlg === 'delete' && <DeleteCompanyDialog company={c} users={data.users.length} onClose={() => setDlg(null)}
+        onDone={(r) => { toast(`${r.name} (${r.code}) deleted`); navigate('/console', { replace: true }); }} />}
       {dlg === 'suspend' && <SuspendDialog company={c} busy={busy === 'active'} onClose={() => setDlg(null)} onConfirm={(reason) => setActive(false, reason)} />}
       <Dialog open={dlg === 'signout'} onClose={() => setDlg(null)} title="Sign out everyone?">
         <p>All {c.online} people signed in to {c.name} will be signed out now. They can log in again.</p>
@@ -729,6 +736,104 @@ function AddUser({ id, roles, domains, onClose, onDone }) {
         <Field label="Role"><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roles.map((r) => <option key={r}>{r}</option>)}</select></Field>
         <label className="check"><input type="checkbox" checked={f.dupOverride} onChange={(e) => setF({ ...f, dupOverride: e.target.checked })} />Can override duplicate RMA warnings</label>
         <div className="row end"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Adding…' : 'Add and create invite'}</button></div>
+      </form>
+    </Dialog>
+  );
+}
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+// Download everything the company has recorded as one ZIP: data.json, a CSV per table, photos and PDFs.
+// Secrets (Zoho keys and tokens) are left out. The download is written to the console log.
+function ExportDialog({ company, tx, onClose }) {
+  const [photos, setPhotos] = useState(true);
+  const [step, setStep] = useState(null);
+  const [error, setError] = useState(null);
+  const csv = (rows) => {
+    if (!rows.length) return '';
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+    const cell = (v) => { if (v === null || v === undefined) return ''; const t = String(v); return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    return '\ufeff' + [cols.join(','), ...rows.map((r) => cols.map((k) => cell(r[k])).join(','))].join('\r\n');
+  };
+  const safe = (t) => String(t || 'file').replace(/[^\w.-]+/g, '_').slice(0, 80);
+  async function go() {
+    setError(null);
+    try {
+      setStep('Reading data…');
+      const d = await get(`/api/console/companies/${company.id}/export`);
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      zip.file('data.json', JSON.stringify(d, null, 1));
+      for (const [name, rows] of Object.entries(d.tables)) if (rows.length) zip.file(`tables/${name}.csv`, csv(rows));
+      const files = [...(photos ? d.photos.map((p) => ({ kind: 'photo', id: p.id, path: `photos/${safe(p.ticket_no || p.ticket_id)}/${p.direction}-${safe(p.name || p.id)}` })) : []),
+        ...d.files.map((f) => ({ kind: 'file', id: f.id, path: `files/${safe(f.id)}-${safe(f.name)}` }))];
+      let done = 0; const missing = [];
+      for (const f of files) {
+        setStep(`Downloading photos and files ${++done} of ${files.length}…`);
+        const r = await fetch(`/api/console/companies/${company.id}/export/${f.kind}/${encodeURIComponent(f.id)}`, { credentials: 'same-origin' });
+        if (r.ok) zip.file(f.path, await r.arrayBuffer()); else missing.push(f.path);
+      }
+      zip.file('README.txt', [`${d.company.name} (${d.company.code}) — data downloaded ${d.exportedAt}`, '',
+        'data.json   everything in one file', 'tables/     one CSV per table (opens in Excel)', 'photos/     RMA photos by RMA number', 'files/      care pack PDFs, OEM template and other files',
+        '', 'Zoho keys and other secrets are not included.', missing.length ? `Could not download: ${missing.join(', ')}` : ''].join('\r\n'));
+      setStep('Making the ZIP…');
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      downloadBlob(blob, `${company.code}_data_${todayISO()}.zip`);
+      setStep('done');
+    } catch (e) { setError(e.message); setStep(null); }
+  }
+  const running = step && step !== 'done';
+  return (
+    <Dialog open onClose={running ? () => {} : onClose} title={`Download ${company.name} data`}>
+      <div className="stack">
+        <p>One ZIP with {plural(tx.rmas, 'RMA')}, {plural(tx.oemBatches, 'OEM batch', 'OEM batches')} and {plural(tx.carePacks, 'care pack')}, plus customers, masters, history and settings. Tables open in Excel.</p>
+        <label className="check"><input type="checkbox" checked={photos} disabled={running} onChange={(e) => setPhotos(e.target.checked)} />Include RMA photos (bigger, slower)</label>
+        <p className="small muted">Zoho keys and other secrets are left out. This download is recorded in the console log.</p>
+        {error && <div className="formerror">{error}</div>}
+        {running && <p className="small" role="status">{step}</p>}
+        {step === 'done' && <p className="small" style={{ color: 'var(--ok)' }} role="status">Downloaded.</p>}
+        <div className="row end">
+          <button className="btn ghost" disabled={running} onClick={onClose}>{step === 'done' ? 'Close' : 'Cancel'}</button>
+          {step !== 'done' && <button className="btn primary" disabled={running} onClick={go}><Icon name="download" size={18} /> {running ? 'Working…' : 'Download ZIP'}</button>}
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+// Permanent: wipes the company's database (RMAs, photos, care packs, settings) and removes its logins.
+function DeleteCompanyDialog({ company, users, onClose, onDone }) {
+  const [confirmCode, setConfirmCode] = useState('');
+  const [code, setCode] = useState('');
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  async function go(e) {
+    e.preventDefault();
+    setBusy(true); setErrors({});
+    try { onDone(await post(`/api/console/companies/${company.id}/delete`, { confirmCode, code })); }
+    catch (x) { setErrors({ ...(x.fields || {}), form: x.fields ? null : x.message }); setBusy(false); }
+  }
+  return (
+    <Dialog open onClose={busy ? () => {} : onClose} title={`Delete ${company.name}?`}>
+      <form className="stack" onSubmit={go} noValidate>
+        <div className="warnbox" role="alert"><b>This cannot be undone.</b> It permanently deletes:
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            <li>its customers, masters and anything else set up (it has no RMAs, OEM batches or care packs)</li>
+            <li>its settings, Zoho connection and OEM Excel template</li>
+            <li>{users === 1 ? 'its 1 login' : `all ${users} logins`}, with sessions, invites and login history</li>
+          </ul></div>
+        <p className="small muted">Before deleting, ask the company's Admin to download what they need from Reports (Excel). The console change log keeps a note that you deleted it.</p>
+        {errors.form && <div className="formerror">{errors.form}</div>}
+        <Field label={<>Type the company code <span className="mono">{company.code}</span> to confirm</>} error={errors.confirmCode}>
+          <input type="text" className="upper" autoComplete="off" value={confirmCode} onChange={(e) => setConfirmCode(e.target.value)} />
+        </Field>
+        <Field label="Code from your authenticator app" error={errors.code}>
+          <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
+        </Field>
+        <div className="row end">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="btn danger" disabled={busy || confirmCode.trim().toUpperCase() !== company.code || code.length !== 6}>{busy ? 'Deleting…' : 'Delete permanently'}</button>
+        </div>
       </form>
     </Dialog>
   );

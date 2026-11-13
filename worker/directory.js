@@ -146,7 +146,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleSignOutAll', 'consoleAct',
+      'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1083,6 +1083,49 @@ export class Directory extends DurableObject {
     this.cLog(op, 'company_created', { companyId: id, detail: `${data.name} (${data.code}); first Admin ${admin.email}; users ${f.max_users || '∞'}, seats ${f.max_concurrent || '∞'}, until ${f.valid_until || '—'}`, ip });
     return { company: this.cCompanyOut(this.cCompany(id)), invite, user: { id: userId, email: admin.email, name: admin.name } };
   }
+  // Deleting a company, step 1: checks it is suspended, the typed code matches and the operator's
+  // authenticator code is right. Returns a one-time token (5 minutes) for step 2.
+  async consoleDeleteCheck({ op, id, confirmCode, code, ip }) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    if (c.active) throw new AuthError(409, 'Suspend the company first. Only a suspended company can be deleted.');
+    if (String(confirmCode || '').trim().toUpperCase() !== c.code) throw new AuthError(422, `Type the company code ${c.code} exactly.`, { fields: { confirmCode: `Type the company code ${c.code} exactly` } });
+    const me = this.cOp(op.opId);
+    if (!me || !me.totp_enabled) throw new AuthError(403, 'Your console login needs two-step setup first.');
+    const counter = await verifyTotp(await decryptSecret(me.totp_enc, this.env.ENC_KEY), String(code || ''), me.totp_last);
+    if (counter === null) {
+      this.cLog(op, 'company_delete_refused', { companyId: id, detail: `${c.name} (${c.code}): wrong authenticator code`, ip });
+      throw new AuthError(422, 'That code did not match. Use the current code from your authenticator app.', { fields: { code: 'That code did not match. Use the current code from your authenticator app.' } });
+    }
+    this.sql.exec('UPDATE console_users SET totp_last = ? WHERE id = ?', counter, me.id);
+    this.sql.exec("DELETE FROM pending WHERE purpose = 'c_delete' AND user_id = ?", id);
+    const token = newToken();
+    this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), id, 'c_delete', Date.now() + 5 * MIN);
+    return { token, company: { id: c.id, name: c.name, code: c.code } };
+  }
+  // Operators normally never see company data, so every download is written to the console log.
+  consoleExportLog({ op, id, detail, ip }) {
+    const c = this.one('SELECT name, code FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    this.cLog(op, 'company_data_downloaded', { companyId: id, detail: `${c.name} (${c.code}): ${detail}`, ip });
+    return { name: c.name, code: c.code };
+  }
+  // Step 2, after the company's own database has been wiped: removes its logins, sessions, invites and login history.
+  async consoleDeleteFinish({ op, id, token, ip }) {
+    const p = await this.takePending(token, 'c_delete', false);
+    if (p.user_id !== id) throw new AuthError(400, 'This delete step expired. Please start again.');
+    const c = this.one('SELECT * FROM companies WHERE id = ?', id);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    const users = this.one('SELECT COUNT(*) AS n FROM users WHERE company_id = ?', id).n;
+    this.sql.exec('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id);
+    this.sql.exec('DELETE FROM pending WHERE user_id IN (SELECT id FROM users WHERE company_id = ?) OR user_id = ?', id, id);
+    this.sql.exec('DELETE FROM auth_log WHERE company_id = ?', id);
+    this.sql.exec('DELETE FROM users WHERE company_id = ?', id);
+    this.sql.exec('DELETE FROM companies WHERE id = ?', id);
+    this.cLog(op, 'company_deleted', { companyId: id, detail: `${c.name} (${c.code}) deleted with ${users} login${users === 1 ? '' : 's'} and all its data`, ip });
+    return { name: c.name, code: c.code, users };
+  }
+
   consoleUpdateCompany({ op, id, data, ip }) {
     const c = this.cCompany(id);
     if (data.name && this.one('SELECT 1 AS x FROM companies WHERE name = ? AND id != ?', data.name, id)) throw new AuthError(409, 'A company with this name already exists.', { field: 'name' });

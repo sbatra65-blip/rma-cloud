@@ -475,6 +475,28 @@ with sync_playwright() as p:
     c4.click('text=Activate')
     c4.wait_for_selector('.pill:has-text("Admin not set up")')
     ok(True, 'console: activate again')
+    c4.click('text=Suspend')
+    c4.fill('dialog input', 'Closing')
+    c4.click('dialog >> text=Suspend >> nth=-1')
+    c4.wait_for_selector('button:has-text("Delete company")')
+    ok(c4.is_enabled('button:has-text("Delete company")'), 'console: suspended company without transactions can be deleted')
+    c4.click('button:has-text("Delete company")')
+    c4.wait_for_selector('text=This cannot be undone')
+    ok(not c4.is_enabled('button:has-text("Delete permanently")'), 'console: delete stays off until code and authenticator code are typed')
+    c4.screenshot(path=f'{OUT}/43-console-delete.png', full_page=True)
+    c4.click('dialog >> text=Cancel')
+    c4.goto(BASE + '/console')
+    c4.click('td.mono:has-text("INF")')
+    c4.wait_for_selector('button:has-text("Download data")')
+    c4.click('button:has-text("Download data")')
+    c4.wait_for_selector('text=Download ZIP')
+    with c4.expect_download(timeout=60000) as dl:
+        c4.click('dialog >> text=Download ZIP')
+    path = dl.value.path()
+    import zipfile
+    names = zipfile.ZipFile(path).namelist()
+    ok('data.json' in names and 'tables/tickets.csv' in names and any(n.startswith('photos/') for n in names), 'console: company data downloads as ZIP with tables and photos')
+    c4.screenshot(path=f'{OUT}/44-console-download.png', full_page=True)
     browser.close()
 
 bad = [e for e in errors if 'favicon' not in e and '401' not in e and 'Failed to load resource' not in e]

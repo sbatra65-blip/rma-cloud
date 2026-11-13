@@ -125,6 +125,47 @@ export class Company extends DurableObject {
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
+  // Transactions that block deleting the company from the console (masters and settings do not count).
+  transactionCounts() {
+    const n = (t) => { try { return this.sql.exec(`SELECT COUNT(*) AS n FROM ${t}`).one().n; } catch { return 0; } };
+    const c = { rmas: n('tickets'), oemBatches: n('batches'), carePacks: n('cp_batches') };
+    return { ...c, total: c.rmas + c.oemBatches + c.carePacks };
+  }
+
+  // Console "Download data": every table as rows (secrets left out) plus the list of photos and files to fetch.
+  exportTables() {
+    const SECRET = /(secret|token|refresh|_enc$|password)/i;
+    const names = this.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")
+      .map((r) => r.name).filter((n) => n !== 'file_chunks');
+    const tables = {};
+    for (const n of names) {
+      let rows = this.all(`SELECT * FROM ${n}`);
+      rows = rows.filter((r) => !(typeof r.key === 'string' && SECRET.test(r.key)))
+        .map((r) => Object.fromEntries(Object.entries(r).filter(([k, v]) => !SECRET.test(k) && !(v instanceof ArrayBuffer))));
+      tables[n] = rows;
+    }
+    const photos = this.all('SELECT p.id, p.ticket_id, t.ticket_no, p.direction, p.name, p.mime, p.size, p.store FROM photos p LEFT JOIN tickets t ON t.id = p.ticket_id ORDER BY p.ticket_id');
+    let files = [];
+    try { files = this.all('SELECT id, name, mime, size FROM files ORDER BY id'); } catch { /* none */ }
+    return { tables, photos, files };
+  }
+  exportFile({ kind, id }) {
+    if (kind === 'photo') {
+      const p = this.one('SELECT * FROM photos WHERE id = ?', id);
+      if (!p) return null;
+      return { mime: p.mime, store: p.store, bytes: p.store === 'db' ? this.readBytes(p.id, p.size) : null };
+    }
+    const f = this.one('SELECT * FROM files WHERE id = ?', id);
+    return f ? { mime: f.mime || 'application/octet-stream', store: 'db', bytes: this.readBytes(f.id, f.size) } : null;
+  }
+
+  // Console "Delete company": removes every table, photo and setting of this company. Not reachable from the app.
+  async wipeAll() {
+    try { await this.ctx.storage.deleteAlarm(); } catch { /* no alarm */ }
+    await this.ctx.storage.deleteAll();
+    return { ok: true };
+  }
+
   migrate() {
     this.sql.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
     const v = Number(this.one("SELECT value FROM meta WHERE key = 'schema'")?.value || 0);

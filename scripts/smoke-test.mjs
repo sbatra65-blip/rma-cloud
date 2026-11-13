@@ -454,6 +454,41 @@ r = await scpRavi('POST', '/api/auth/enroll', { setupToken: scpRaviSetup.setupTo
 ok(r.status === 409 && r.data.code === 'seats_full', 'signed-in-at-once limit (1) blocks 2nd person');
 r = await opc('GET', `/api/console/companies/${scpId}`);
 ok(r.data.company.online === 1 && r.data.sessions.length === 1, 'console sees 1 of 1 seats in use');
+
+console.log('Delete company');
+r = await opc('GET', '/api/console/companies');
+{ const list = r.data.companies || r.data; const inf = list.find((x) => x.code === 'INF');
+  r = await opc('GET', `/api/console/companies/${inf.id}`);
+  ok(r.data.transactions?.rmas > 0, 'console shows transaction counts');
+  r = await opc('POST', `/api/console/companies/${inf.id}/delete`, { confirmCode: 'INF', code: '000000' });
+  ok(r.status === 409 && r.data.code === 'has_transactions' && /RMA/.test(r.data.error), 'company with transactions cannot be deleted', r.data?.error);
+  r = await opc('GET', `/api/console/companies/${inf.id}/export`);
+  const ex = r.data;
+  ok(r.status === 200 && ex.tables.tickets.length > 0 && ex.tables.customers && !JSON.stringify(ex).match(/zoho_(secret|refresh)|totp_enc|password_hash/), 'console data download has tables and no secrets', Object.keys(ex.tables || {}).join(','));
+  if (ex.photos.length) {
+    const pr = await opc('GET', `/api/console/companies/${inf.id}/export/photo/${ex.photos[0].id}`);
+    ok(pr.status === 200, 'photo downloads in the export');
+  }
+  r = await opc('GET', `/api/console/companies/${inf.id}`);
+  ok(r.data.consoleLog.some((l) => l.action === 'company_data_downloaded'), 'data download recorded in console log'); }
+r = await opc('POST', '/api/console/companies', { company: { name: 'Temp Co', code: 'TMPC', ticketPrefix: 'TMP', maxUsers: 2, maxConcurrent: 1 }, admin: { name: 'Tina', email: 'tina@tmp.example' } });
+const tmpId = r.data.company.id;
+r = await opc('POST', `/api/console/companies/${tmpId}/delete`, { confirmCode: 'TMPC', code: '000000' });
+ok(r.status === 409, 'active company cannot be deleted');
+r = await opc('POST', `/api/console/companies/${tmpId}`, { name: 'Temp Co', ticketPrefix: 'TMP', maxUsers: 2, maxConcurrent: 1, active: false, suspendReason: 'Closing' });
+r = await opc('POST', `/api/console/companies/${tmpId}/delete`, { confirmCode: 'WRONG', code: '000000' });
+ok(r.status === 422 && r.data.fields?.confirmCode, 'delete needs the company code typed');
+r = await opc('POST', `/api/console/companies/${tmpId}/delete`, { confirmCode: 'tmpc', code: '000000' });
+ok(r.status === 422 && r.data.fields?.code, 'delete needs a correct authenticator code');
+await new Promise((res) => setTimeout(res, 30000 - (Date.now() % 30000) + 300)); // next code window
+r = await opc('POST', `/api/console/companies/${tmpId}/delete`, { confirmCode: 'tmpc', code: await totp(opSecret) });
+ok(r.status === 200 && r.data.code === 'TMPC' && r.data.users === 1, 'suspended company deleted', r.data);
+r = await opc('GET', `/api/console/companies/${tmpId}`);
+ok(r.status === 404, 'deleted company is gone');
+r = await opc('GET', '/api/console/log');
+ok(JSON.stringify(r.data).includes('company_deleted'), 'deletion recorded in console log');
+r = await opc('POST', '/api/console/companies', { company: { name: 'Temp Co again', code: 'TMPC', ticketPrefix: 'TMP', maxUsers: 2, maxConcurrent: 1 }, admin: { name: 'Tina', email: 'tina@tmp.example' } });
+ok(r.status === 200, 'code and email free again after delete');
 r = await priya('POST', '/api/auth/logout');
 r = await enroll(scpRavi, scpRaviSetup);
 ok(r.status === 200, 'seat free after logout → 2nd person signs in');
