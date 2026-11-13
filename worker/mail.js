@@ -4,9 +4,12 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 export async function sendMail(env, { to, cc, replyTo, subject, html, text, attachments }) {
   if (!env.RESEND_API_KEY) return { ok: false, error: 'Email is not set up yet: the RESEND_API_KEY secret is missing.' };
   const toList = Array.isArray(to) ? to : [to];
-  const payload = { from: env.MAIL_FROM || 'TrackMyRMA <onboarding@resend.dev>', to: toList, subject, html, text };
+  // Every email carries a plain-text part too: HTML-only mail scores worse with spam filters.
+  const payload = { from: env.MAIL_FROM || 'TrackMyRMA <onboarding@resend.dev>', to: toList, subject, html, text: text || htmlToText(html) };
   if (cc && cc.length) payload.cc = cc;
-  if (replyTo) payload.reply_to = replyTo;
+  // Replies go to a real mailbox (MAIL_REPLY_TO) unless the email sets its own, e.g. OEM emails reply to the company.
+  const reply = replyTo || env.MAIL_REPLY_TO;
+  if (reply) payload.reply_to = reply;
   if (attachments && attachments.length) payload.attachments = attachments; // [{ filename, content (base64) }]
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -21,8 +24,18 @@ export async function sendMail(env, { to, cc, replyTo, subject, html, text, atta
   }
 }
 
+export function htmlToText(html = '') {
+  return String(html)
+    .replace(/<(head|style|script)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<a\s[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (m, href, t) => `${t.replace(/<[^>]+>/g, '').trim()} (${href})`)
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|h[1-6]|li|table)>/gi, '\n').replace(/<li[^>]*>/gi, '- ').replace(/<\/td>/gi, '  ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .split('\n').map((l) => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function shell(appName, title, bodyHtml, host) {
-  return `<!doctype html><html><body style="margin:0;background:#f2f1f8;font-family:Segoe UI,Roboto,Arial,sans-serif">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(title)}</title></head><body style="margin:0;background:#f2f1f8;font-family:Segoe UI,Roboto,Arial,sans-serif">
     <div style="max-width:600px;margin:0 auto;padding:24px">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border-radius:14px 14px 0 0;overflow:hidden"><tr>
         <td style="height:4px;background:#5a80bc"></td><td style="height:4px;background:#6e68ae"></td><td style="height:4px;background:#c03a96"></td>

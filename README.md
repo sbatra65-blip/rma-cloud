@@ -103,6 +103,7 @@ existing numbers. Do the same with `Customers` → **Import → Customers**. Pho
 | `PBKDF2_ITERATIONS` | 100000 | lower it if login shows "exceeded resource limits" on the free plan |
 | `SIGNUP_OFF` | — | set to `1` to pause self sign-up (Start free trial) on the login page |
 | `MAIL_FROM` | Resend test sender | verified sender address |
+| `MAIL_REPLY_TO` | — | where replies go (e.g. `support@trackmyrma.com`); OEM emails still reply to the company |
 
 Photos are stored inside each company's database. For lots of photos, create an R2 bucket `rma-photos` and uncomment
 `r2_buckets` in `wrangler.jsonc`.
