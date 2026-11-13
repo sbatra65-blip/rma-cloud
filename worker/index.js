@@ -914,11 +914,25 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
   return err(404, 'Not found');
 }
 
+function mainHost(env) {
+  try { return env.APP_URL ? new URL(env.APP_URL).hostname : ''; } catch { return ''; }
+}
+function isLocalHost(h) {
+  return h === 'localhost' || h === '127.0.0.1' || h.endsWith('.workers.dev');
+}
+
 // Pages: the RMA app and the console are two single-page sites in one Worker.
 // With CONSOLE_HOST set, the console answers only on that hostname; /console on the app hostname redirects there.
 async function serveStatic(request, env, url) {
   const host = env.CONSOLE_HOST;
   const onConsoleHost = !!host && url.hostname === host;
+  // Extra domains (old address, .in / .co.in, www) send pages to the main address in APP_URL.
+  // /api and /sw.js still answer everywhere, so an app installed from the old address can update itself.
+  const main = mainHost(env);
+  if (main && url.hostname !== main && !onConsoleHost && !isLocalHost(url.hostname) && url.pathname !== '/sw.js'
+      && (request.method === 'GET' || request.method === 'HEAD')) {
+    return Response.redirect(new URL(url.pathname + url.search, env.APP_URL).toString(), 301);
+  }
   const isConsolePath = url.pathname === '/console' || url.pathname.startsWith('/console/');
   const consolePage = () => env.ASSETS.fetch(new Request(new URL('/console', url), { headers: request.headers }));
   if (onConsoleHost) {

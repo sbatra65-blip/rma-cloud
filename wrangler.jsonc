@@ -47,8 +47,10 @@
     //   MAIL_FROM     e.g. "Infinite Solutions RMA <rma@infinitesolutions.co.in>" — sender on your
     //                 Resend-verified domain. Without it, mail goes from Resend's test sender.
     //   RESEND_API_KEY (secret) — from resend.com, needed for any email
-    //   CONSOLE_HOST  e.g. "console.example.com" — console only on that domain
-    //   APP_URL       e.g. "https://rma.example.com" — where invite links for company logins point
+    //   CONSOLE_HOST  e.g. "console.trackmyrma.com" — console only on that domain
+    //   APP_URL       e.g. "https://trackmyrma.com" — the main address: email links point here, and
+    //                 pages opened on any other domain attached to this Worker (old address,
+    //                 .in / .co.in, www) are redirected here. /api keeps working on every domain.
     //   CONSOLE_SETUP_KEY (secret) — needed once to create the first console operator
   },
 
