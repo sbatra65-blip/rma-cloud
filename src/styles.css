@@ -822,3 +822,5 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .plan-sum dd { margin: 0; text-align: right; }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
 .plan-grid > .plan-card { margin: 0; }
+.photo.pdf { display: grid; place-items: center; align-content: center; gap: 6px; padding: 10px 8px 26px; color: var(--accent); text-decoration: none; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border: 1px solid var(--line); }
+.photo.pdf .pname { font-size: 0.72rem; font-weight: 650; color: var(--text); text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; word-break: break-word; }

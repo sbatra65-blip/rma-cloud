@@ -851,7 +851,16 @@ export const carePackMethods = {
       customer_id: customer.contact_id, date: today(), reference_number: t.ticket_no, challan_type: 'others',
       notes: fill(s.challan_notes), line_items: [{ description: fill(s.challan_line_description), quantity: 1, unit: 'Nos' }],
     });
-    return { number: ch.number, id: ch.id, autoDispatch: s.challan_auto_dispatch !== '0' };
+    // Keep a copy of the challan PDF on the RMA (outbound documents).
+    let pdf = false;
+    try {
+      const bytes = ch.id ? await z.deliveryChallanPdf(ch.id) : null;
+      if (bytes && bytes.byteLength <= 10 * 1024 * 1024) {
+        this.putPhoto(user, { ticketId: t.id, direction: 'OUTBOUND', name: `Delivery challan ${ch.number}.pdf`, mime: 'application/pdf', bytes, kind: 'challan' });
+        pdf = true;
+      }
+    } catch (e) { console.error('challan pdf', e); }
+    return { number: ch.number, id: ch.id, autoDispatch: s.challan_auto_dispatch !== '0', pdf };
   },
 
   // ---------- drafts (survive a refresh; one per user) ----------

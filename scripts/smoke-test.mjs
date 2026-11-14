@@ -76,6 +76,7 @@ async function login(api, companyCode, email, password, secret, endOther = false
 
 const PW = 'Correct-Horse-91!x';
 const PW2 = 'Battery-Staple-73#q';
+const PDF = new TextEncoder().encode('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, ...new Array(60).fill(1), 0xff, 0xd9]);
 
 console.log('Setup and login');
@@ -184,6 +185,10 @@ r = await owner('POST', `/api/rma/${t1.id}/photos`, new TextEncoder().encode('<s
 ok(r.status === 422, 'non-image upload rejected');
 let res = await owner('GET', `/api/photos/${photoId}`, undefined, { raw: true });
 ok(res.status === 200 && res.headers.get('content-type') === 'image/jpeg', 'photo download');
+r = await owner('POST', `/api/rma/${t1.id}/photos`, PDF, { headers: { 'X-Direction': 'OUTBOUND', 'X-File-Name': 'challan.pdf', 'X-Kind': 'challan' } });
+ok(r.status === 200 && r.data.id, 'PDF upload to outbound');
+res = await owner('GET', `/api/photos/${r.data.id}`, undefined, { raw: true });
+ok(res.status === 200 && res.headers.get('content-type') === 'application/pdf' && !/sandbox/.test(res.headers.get('content-security-policy') || ''), 'PDF download inline');
 res = await owner('GET', '/api/template', undefined, { raw: true });
 ok(res.status === 200 && (await res.arrayBuffer()).byteLength > 50000, 'default OEM Excel template served');
 r = await owner('GET', `/api/rma/${t1.id}/email`);
@@ -199,6 +204,17 @@ r = await owner('POST', '/api/batches', { ticketIds: [t1.id, t2.id], dispatch_da
 ok(r.status === 409, 'batch refuses ticket without OEM RMA #');
 r = await owner('POST', '/api/batches', { ticketIds: [t1.id], dispatch_date: new Date().toISOString().slice(0, 10), courier: 'Blue Dart', docket: 'BD123' });
 ok(r.status === 200 && /^BATCH-\d{6}$/.test(r.data.batch.batch_code) && r.data.tickets[0].status === 'DISPATCHED_TO_OEM', 'batch created, ticket dispatched');
+const bcode = r.data.batch.batch_code;
+r = await owner('POST', `/api/batches/${bcode}/challan`, JPEG, { headers: { 'X-File-Name': 'c.jpg' } });
+ok(r.status === 422, 'batch challan must be a PDF');
+r = await owner('POST', `/api/batches/${bcode}/challan`, PDF, { headers: { 'X-File-Name': 'oem-challan.pdf' } });
+ok(r.status === 200, 'batch challan attached', r.data);
+r = await owner('GET', `/api/batches/${bcode}`);
+ok(r.data.challan?.name === 'oem-challan.pdf', 'batch shows challan', r.data?.challan);
+res = await owner('GET', `/api/batches/${bcode}/challan`, undefined, { raw: true });
+ok(res.status === 200 && res.headers.get('content-type') === 'application/pdf', 'batch challan download');
+r = await owner('GET', `/api/rma/${t1.id}`);
+ok(r.data.batchChallan?.name === 'oem-challan.pdf', 'RMA shows its batch challan', r.data?.batchChallan);
 r = await owner('DELETE', `/api/rma/${t1.id}`);
 ok(r.status === 409, 'cannot delete after OEM dispatch');
 r = await owner('POST', `/api/rma/${t1.id}/action`, { action: 'goods_received', data: {} });
@@ -719,7 +735,6 @@ r = await mig('POST', '/api/migrate/carepacks', { rows: [{ invoice_number: 'IS-G
 ok(r.status === 200 && r.data.created === 1 && r.data.devices === 2, 'old care pack invoice with serials moved');
 r = await owner('GET', '/api/carepack/serial?sn=PTX990011');
 ok(r.data.device && r.data.device.warranty_end === '2031-04-10', 'cover end worked out from care pack type when missing');
-const PDF = new TextEncoder().encode('%PDF-1.4\n%%EOF\n');
 r = await mig('POST', '/api/migrate/carepack-pdf', PDF, { 'Content-Type': 'application/pdf', 'X-Invoice': 'IS-GST-2425-0100', 'X-Set': '1', 'X-File-Name': 'PTX-INV-1.pdf' });
 ok(r.status === 200 && r.data.ok, 'old OEM invoice PDF moved');
 r = await mig('POST', '/api/migrate/tickets', { rows: [oldRows[0]] }, {}, migKey.slice(0, -2) + 'xx');

@@ -138,6 +138,17 @@ export class Zoho {
     const list = d.contacts || [];
     return list.find((c) => String(c.contact_name).toUpperCase() === name.toUpperCase()) || null;
   }
+  // Delivery challan as a PDF (attached to the RMA after it is made in Zoho).
+  async deliveryChallanPdf(id, retried = false) {
+    const url = new URL(`${this.api}/books/v3/deliverychallans/${encodeURIComponent(id)}`);
+    url.searchParams.set('organization_id', this.orgId);
+    url.searchParams.set('accept', 'pdf');
+    const res = await fetch(url, { headers: { Authorization: `Zoho-oauthtoken ${await this.token(retried)}` } });
+    if (res.status === 401 && !retried) { this.cache.set(null); return this.deliveryChallanPdf(id, true); }
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    return new Uint8Array(buf.slice(0, 4))[0] === 0x25 ? buf : null; // starts with %PDF
+  }
   async createDeliveryChallan(body) {
     const d = await this.call('POST', 'deliverychallans', { body });
     const c = d.deliverychallan || d.delivery_challan || {};

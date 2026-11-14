@@ -124,6 +124,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
   if (!data) return <Skeleton rows={6} />;
   const { ticket: t, photos, events, sameMachine } = data;
   const inbound = photos.filter((p) => p.direction === 'INBOUND');
+  const inboundImages = inbound.filter((p) => p.mime !== 'application/pdf');
   const outbound = photos.filter((p) => p.direction === 'OUTBOUND');
   const editable = can.edit(user);
   const cat = (boot?.masters?.categories || []).find((c) => c.id === t.category_id);
@@ -133,7 +134,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
   async function excel(mode) {
     setBusy('excel');
     try {
-      const { blob, fileName, embedded, missingTokens } = await buildOemExcel(t.id, inbound);
+      const { blob, fileName, embedded, missingTokens } = await buildOemExcel(t.id, inboundImages);
       if (mode === 'share' && await shareFile(blob, fileName, t.ticket_no)) { /* shared */ } else downloadBlob(blob, fileName);
       await after(`OEM Excel ready${embedded ? ` with ${embedded} photo${embedded === 1 ? '' : 's'}` : ''}`);
       if (missingTokens.length) toast(`Template has fields this app doesn't fill: ${missingTokens.join(', ')}`, true);
@@ -269,8 +270,12 @@ export default function RmaDetail({ user, boot, id, onChange }) {
 
       {tab === 'photos' && (
         <div className="grid2">
-          <PhotoSet title="Inbound — from customer" hint="The first five go into the OEM Excel." direction="INBOUND" list={inbound} ticket={t} user={user} after={after} numbered />
-          <PhotoSet title="Outbound — back from OEM" direction="OUTBOUND" list={outbound} ticket={t} user={user} after={after} />
+          <PhotoSet title="Inbound — from customer" hint="Photos or PDFs. The first five photos go into the OEM Excel." direction="INBOUND" list={inbound} ticket={t} user={user} after={after} numbered />
+          <PhotoSet title="Outbound — back from OEM" hint="Photos or PDFs, e.g. delivery challans." direction="OUTBOUND" list={outbound} ticket={t} user={user} after={after}
+            extra={data.batchChallan && (
+              <a className="photo pdf" href={`/api/batches/${t.batch_code}/challan`} target="_blank" rel="noopener" title={data.batchChallan.name}>
+                <Icon name="file" size={30} /><span className="pname">OEM challan · {t.batch_code}</span><span className="cap">{fmtMs(data.batchChallan.updated_at)}</span>
+              </a>)} />
         </div>
       )}
 
@@ -304,7 +309,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
       )}
 
       {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} settings={user.company.modules?.includes('zoho') ? boot?.settings : null} onClose={() => setDlg(null)} after={after} />}
-      {dlg === 'email' && <EmailDialog ticket={t} inbound={inbound} onClose={() => setDlg(null)} after={after} />}
+      {dlg === 'email' && <EmailDialog ticket={t} inbound={inboundImages} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'draft' && <DraftDialog ticket={t} onClose={() => setDlg(null)} />}
       {dlg === 'track' && <TrackEmailDialog ticket={t} onClose={() => setDlg(null)} after={after} />}
       <Dialog open={dlg === 'delete'} onClose={() => setDlg(null)} title={`Delete ${t.ticket_no}?`}>
@@ -329,7 +334,7 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
     try {
       const r = await post(`/api/rma/${ticket.id}/challan`);
       if (r.autoDispatch) setD((x) => ({ ...x, challan_number: r.number, challan_date: todayISO() }));
-      toast(`Delivery challan ${r.number} created in Zoho Books${r.autoDispatch ? ' and filled in' : ''}.`);
+      toast(`Delivery challan ${r.number} created in Zoho Books${r.autoDispatch ? ' and filled in' : ''}${r.pdf ? '; PDF attached to the RMA' : ''}.`);
     } catch (e) {
       toast(e.message, true);
     } finally { setChallanBusy(false); }
@@ -339,6 +344,7 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
     dispatch_to_customer_date: todayISO(), challan_number: '', challan_date: todayISO(), dispatch_docket: '', closure_remarks: '',
   });
   const [errors, setErrors] = useState({});
+  const [challanPdf, setChallanPdf] = useState(null);
   const [confirmSame, setConfirmSame] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value });
@@ -349,8 +355,13 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
     setBusy(true);
     try {
       await post(`/api/rma/${ticket.id}/action`, { action, data: { ...d, allowSame: confirmSame } });
+      let note = '';
+      if (challanPdf) {
+        try { await uploadPhoto(ticket.id, challanPdf, 'OUTBOUND', { kind: 'challan' }); note = ' with challan PDF'; }
+        catch (x) { toast(`Saved, but the challan PDF was not attached: ${x.message}`, true); }
+      }
       onClose();
-      await after(`${ACTIONS[action].label} — saved`);
+      await after(`${ACTIONS[action].label} — saved${note}`);
     } catch (err) {
       if (err.data?.code === 'oem_rma_used') setConfirmSame(false);
       setErrors({ form: err.message, ...(err.fields || {}) });
@@ -386,7 +397,11 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
             <Field label="Delivery challan number" hint="From Zoho Books or your challan book"><input type="text" value={d.challan_number} onChange={set('challan_number')} /></Field>
             <Field label="Challan date"><input type="date" max={todayISO()} value={d.challan_date} onChange={set('challan_date')} /></Field>
           </div>
-          {challanOk && <div><button type="button" className="btn ghost small" disabled={challanBusy} onClick={makeChallan}><Icon name="file" size={16} /> {challanBusy ? 'Creating…' : 'Create delivery challan in Zoho Books'}</button></div>}
+          {challanOk && <div><button type="button" className="btn ghost small" disabled={challanBusy} onClick={makeChallan}><Icon name="file" size={16} /> {challanBusy ? 'Creating…' : 'Create delivery challan in Zoho Books'}</button>
+            <p className="muted small" style={{ marginTop: 4 }}>The Zoho challan PDF is attached to this RMA automatically.</p></div>}
+          <Field label="Delivery challan PDF" hint={challanPdf ? `${challanPdf.name} · attached when you save` : 'Optional: attach the signed or printed challan (PDF, up to 10 MB)'}>
+            <input type="file" accept="application/pdf,.pdf" onChange={(e) => setChallanPdf(e.target.files[0] || null)} />
+          </Field>
           <Field label="Courier / docket number"><input type="text" value={d.dispatch_docket} onChange={set('dispatch_docket')} /></Field>
         </>}
         {(action === 'close' || action === 'close_returned') && <>
@@ -471,8 +486,10 @@ function DraftDialog({ ticket, onClose }) {
   );
 }
 
-function PhotoSet({ title, hint, direction, list, ticket, user, after, numbered }) {
+function PhotoSet({ title, hint, direction, list, ticket, user, after, numbered, extra }) {
   const toast = useToast();
+  const imgIndex = new Map(list.filter((p) => p.mime !== 'application/pdf').map((p, i) => [p.id, i]));
+  const pdfs = list.filter((p) => p.mime === 'application/pdf');
   const ref = useRef(null);
   const [busy, setBusy] = useState(0);
   const [view, setView] = useState(null);
@@ -485,7 +502,7 @@ function PhotoSet({ title, hint, direction, list, ticket, user, after, numbered 
       setBusy((n) => n - 1);
     }
     setBusy(0);
-    if (ok) await after(`${ok} photo${ok === 1 ? '' : 's'} added${direction === 'INBOUND' && ticket.excel_generated_at ? ' — download the OEM Excel again to include them' : ''}`);
+    if (ok) await after(`${ok} file${ok === 1 ? '' : 's'} added${direction === 'INBOUND' && ticket.excel_generated_at ? ' — download the OEM Excel again to include new photos' : ''}`);
   }
   async function remove(p) {
     try {
@@ -505,20 +522,27 @@ function PhotoSet({ title, hint, direction, list, ticket, user, after, numbered 
           <button className="btn ghost small" disabled={!!busy} onClick={() => { ref.current.setAttribute('capture', 'environment'); ref.current.click(); }}><Icon name="camera" size={16} /> Take photo</button>
           <button className="btn ghost small" disabled={!!busy} onClick={() => { ref.current.removeAttribute('capture'); ref.current.click(); }}><Icon name="upload" size={16} /> Choose</button>
           {busy > 0 && <span className="muted small">Uploading {busy}…</span>}
-          <input ref={ref} type="file" accept="image/*" multiple hidden onChange={(e) => { add([...e.target.files]); e.target.value = ''; }} />
+          <input ref={ref} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => { add([...e.target.files]); e.target.value = ''; }} />
         </div>
       )}
-      {list.length ? (
+      {list.length || extra ? (
         <div className="photos">
-          {list.map((p, i) => (
+          {list.map((p) => p.mime === 'application/pdf' ? (
+            <a key={p.id} className="photo pdf" href={`/api/photos/${p.id}`} target="_blank" rel="noopener" title={p.name}>
+              <Icon name="file" size={30} /><span className="pname">{p.notes === 'Delivery challan' ? 'Challan · ' : ''}{p.name}</span>
+              <span className="cap">{fmtMs(p.captured_at)}</span>
+            </a>
+          ) : (
             <button key={p.id} className="photo" onClick={() => setView(p)} aria-label={`Open photo ${p.name}`}>
               <img src={`/api/photos/${p.id}`} alt="" loading="lazy" />
-              {numbered && i < 5 && <span className="n">{i + 1}</span>}
+              {numbered && imgIndex.get(p.id) < 5 && <span className="n">{imgIndex.get(p.id) + 1}</span>}
               <span className="cap">{fmtMs(p.captured_at)}</span>
             </button>
           ))}
+          {extra}
         </div>
-      ) : <p className="muted small">No photos yet.</p>}
+      ) : <p className="muted small">No photos or PDFs yet.</p>}
+      {pdfs.length > 0 && editable && <p className="muted small row wrap" style={{ marginTop: 8, gap: '4px 12px' }}><span>Remove a PDF:</span>{pdfs.map((p) => <button key={p.id} type="button" className="linkbtn" onClick={() => { if (confirm(`Remove ${p.name}?`)) remove(p); }}>{p.name}</button>)}</p>}
       <Dialog open={!!view} onClose={() => setView(null)} title={view?.name || 'Photo'} wide>
         {view && <div className="viewer stack">
           <img src={`/api/photos/${view.id}`} alt={view.name} />

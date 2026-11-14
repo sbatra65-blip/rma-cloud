@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { downloadBlob, get, post } from '../api.js';
+import { api, del, downloadBlob, get, isPdf, post } from '../api.js';
 import { writeTable } from '../excel.js';
 import { Empty, ErrorPanel, Field, Icon, Link, Skeleton, Status, can, fmtDate, fmtMs, navigate, todayISO, useLoad, useToast } from '../ui.jsx';
 
@@ -29,6 +29,7 @@ function BatchList({ user, onChange }) {
   const [f, setF] = useState({ dispatch_date: todayISO(), courier: '', docket: '', remarks: '' });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
+  const [challan, setChallan] = useState(null);
   if (error && !data) return <ErrorPanel error={error} retry={reload} />;
   if (!data) return <Skeleton rows={5} />;
   const all = data.candidates.length > 0 && picked.size === data.candidates.length;
@@ -39,7 +40,11 @@ function BatchList({ user, onChange }) {
     setBusy(true);
     setErrors({});
     try {
+      if (challan && (!isPdf(challan) || challan.size > 10 * 1024 * 1024)) { setBusy(false); return setErrors({ challan: 'Choose a PDF up to 10 MB' }); }
       const r = await post('/api/batches', { ...f, ticketIds: [...picked] });
+      if (challan) {
+        try { await uploadChallan(r.batch.batch_code, challan); } catch (x) { toast(`Batch created, but the challan PDF was not attached: ${x.message}`, true); }
+      }
       onChange?.();
       toast(`${r.batch.batch_code} created — ${r.tickets.length} RMA${r.tickets.length === 1 ? '' : 's'} dispatched to OEM`);
       await packingList(r.batch, r.tickets, user.company.name).catch(() => {});
@@ -79,6 +84,9 @@ function BatchList({ user, onChange }) {
                   <Field label="Courier"><input type="text" value={f.courier} onChange={(e) => setF({ ...f, courier: e.target.value })} /></Field>
                   <Field label="Docket / AWB number"><input type="text" value={f.docket} onChange={(e) => setF({ ...f, docket: e.target.value })} /></Field>
                   <Field label="Remarks"><input type="text" value={f.remarks} onChange={(e) => setF({ ...f, remarks: e.target.value })} /></Field>
+                  <Field label="Delivery challan PDF" error={errors.challan} hint="Optional. Shown on the batch and on every RMA in it">
+                    <input type="file" accept="application/pdf,.pdf" onChange={(e) => setChallan(e.target.files[0] || null)} />
+                  </Field>
                 </div>
                 <button className="btn primary block" disabled={busy || !picked.size}><Icon name="truck" size={18} />
                   {busy ? 'Creating…' : `Dispatch ${picked.size || ''} to OEM and download packing list`}</button>
@@ -104,9 +112,24 @@ function BatchList({ user, onChange }) {
   );
 }
 
+function uploadChallan(code, file) {
+  return api('POST', `/api/batches/${code}/challan`, file, { headers: { 'Content-Type': 'application/pdf', 'X-File-Name': encodeURIComponent(file.name) } });
+}
+
 function BatchDetail({ code, user }) {
   const toast = useToast();
   const [data, reload, error] = useLoad(() => get(`/api/batches/${code}`), [code]);
+  const [busy, setBusy] = useState(false);
+  async function attach(file) {
+    if (!file) return;
+    if (!isPdf(file) || file.size > 10 * 1024 * 1024) return toast('Choose a PDF up to 10 MB', true);
+    setBusy(true);
+    try { await uploadChallan(code, file); toast('Challan PDF attached to the batch and its RMAs'); reload(); } catch (x) { toast(x.message, true); } finally { setBusy(false); }
+  }
+  async function removeChallan() {
+    if (!confirm('Remove the challan PDF from this batch?')) return;
+    try { await del(`/api/batches/${code}/challan`); toast('Challan PDF removed'); reload(); } catch (x) { toast(x.message, true); }
+  }
   if (error && !data) return <ErrorPanel error={error} retry={reload} />;
   if (!data) return <Skeleton rows={4} />;
   const { batch: b, tickets } = data;
@@ -122,6 +145,18 @@ function BatchDetail({ code, user }) {
         <button className="btn primary" onClick={() => packingList(b, tickets, user.company.name).catch((e) => toast(e.message, true))}>
           <Icon name="download" size={18} /> Packing list</button>
       </div>
+      <section className="panel" style={{ marginBottom: 14 }}>
+        <div className="row wrap spread">
+          <div><h2 style={{ margin: 0 }}>Delivery challan</h2>
+            <p className="muted small">{data.challan ? `${data.challan.name} · added ${fmtMs(data.challan.updated_at)} by ${data.challan.updated_by}` : 'No challan PDF attached yet.'}</p></div>
+          <div className="row wrap">
+            {data.challan && <a className="btn ghost small" href={`/api/batches/${code}/challan`} target="_blank" rel="noopener"><Icon name="file" size={16} /> Open PDF</a>}
+            {can.edit(user) && <label className="btn ghost small" style={{ cursor: 'pointer' }}><Icon name="upload" size={16} /> {busy ? 'Uploading…' : data.challan ? 'Replace PDF' : 'Attach PDF'}
+              <input type="file" accept="application/pdf,.pdf" hidden disabled={busy} onChange={(e) => { attach(e.target.files[0]); e.target.value = ''; }} /></label>}
+            {can.edit(user) && data.challan && <button className="btn ghost small" onClick={removeChallan}><Icon name="trash" size={16} /> Remove</button>}
+          </div>
+        </div>
+      </section>
       {!tickets.length ? <Empty title="No RMAs in this batch" /> : (
         <div className="tablewrap">
           <table className="data">

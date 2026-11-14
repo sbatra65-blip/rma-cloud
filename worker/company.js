@@ -278,7 +278,7 @@ export class Company extends DurableObject {
       listMasters: 'read', importLog: 'read',
       // edit: everyone except Viewer
       createTicket: 'edit', updateTicket: 'edit', deleteTicket: 'edit', ticketAction: 'edit', markExcel: 'edit', recordOemEmail: 'edit',
-      putPhoto: 'edit', deletePhoto: 'edit', createBatch: 'edit',
+      putPhoto: 'edit', deletePhoto: 'edit', createBatch: 'edit', putBatchChallan: 'edit', deleteBatchChallan: 'edit', getBatchChallan: 'read',
       // customer status page
       trackLink: 'read', trackLinkMail: 'edit', takeCustomerNotices: 'read', customerNoticeResults: 'read',
       // backups
@@ -690,6 +690,7 @@ export class Company extends DurableObject {
     return {
       ticket: { ...t, status_label: label(t.status) }, photos, events, sameMachine, otherTicketsOnPrinter: history, cover,
       canDelete: del.ok, deleteHint: del.reason, nextActions: this.nextActions(t),
+      batchChallan: t.batch_code ? this.one('SELECT name, size, updated_at FROM files WHERE id = ?', `batch_challan_${t.batch_code}`) || null : null,
     };
   }
 
@@ -1019,17 +1020,19 @@ export class Company extends DurableObject {
     return out.buffer;
   }
 
-  putPhoto(user, { ticketId, direction, name, mime, bytes, notes, r2Id }) {
+  putPhoto(user, { ticketId, direction, name, mime, bytes, notes, r2Id, kind }) {
     const t = this.ticketRow(ticketId);
     if (!['INBOUND', 'OUTBOUND'].includes(direction)) throw new ValidationError({ direction: 'Choose inbound or outbound' });
     const count = this.one('SELECT COUNT(*) AS n FROM photos WHERE ticket_id = ?', t.id).n;
-    if (count >= 40) throw new ValidationError({ file: 'This RMA already has 40 photos. Delete some first.' });
+    if (count >= 40) throw new ValidationError({ file: 'This RMA already has 40 photos and documents. Delete some first.' });
+    if (kind === 'challan' && !notes) notes = 'Delivery challan';
     const id = r2Id || uuid();
     const size = typeof bytes === 'number' ? bytes : bytes.byteLength;
     this.sql.exec('INSERT INTO photos (id, ticket_id, direction, name, mime, size, store, notes, captured_at, captured_by) VALUES (?,?,?,?,?,?,?,?,?,?)',
       id, t.id, direction, name, mime, size, r2Id ? 'r2' : 'db', notes ? String(notes).slice(0, 300) : null, Date.now(), user.name);
     if (!r2Id) this.storeBytes(id, bytes);
-    this.event(t.id, user, `${direction === 'INBOUND' ? 'Inbound' : 'Outbound'} photo added`, name);
+    const what = kind === 'challan' ? 'delivery challan' : mime === 'application/pdf' ? 'PDF' : 'photo';
+    this.event(t.id, user, `${direction === 'INBOUND' ? 'Inbound' : 'Outbound'} ${what} added`, name);
     return { id, direction, name, mime, size };
   }
 
@@ -1128,7 +1131,31 @@ export class Company extends DurableObject {
     const tickets = this.all(`SELECT id, ticket_no, status, oem_rma_number, printer_model, printer_sn, faulty_part, faulty_part_sn,
       failure_description, customer_company, created_at FROM tickets WHERE batch_code = ? ORDER BY ticket_no`, code)
       .map((r) => ({ ...r, status_label: label(r.status) }));
-    return { batch: b, tickets };
+    const f = this.one('SELECT name, size, updated_at, updated_by FROM files WHERE id = ?', `batch_challan_${code}`);
+    return { batch: b, tickets, challan: f || null };
+  }
+  // Delivery challan PDF for an OEM batch: stored once, shown on the batch and on every RMA in it.
+  putBatchChallan(user, { code, bytes, name }) {
+    const b = this.one('SELECT batch_code FROM batches WHERE batch_code = ?', code);
+    if (!b) throw httpError(404, 'Batch not found');
+    const id = `batch_challan_${code}`;
+    this.sql.exec('DELETE FROM file_chunks WHERE file_id = ?', id);
+    this.storeBytes(id, bytes);
+    this.sql.exec('INSERT OR REPLACE INTO files (id, name, mime, size, updated_at, updated_by) VALUES (?,?,?,?,?,?)', id, name || `Challan ${code}.pdf`, 'application/pdf', bytes.byteLength, Date.now(), user.name);
+    for (const t of this.all('SELECT id FROM tickets WHERE batch_code = ?', code)) this.event(t.id, user, 'OEM dispatch challan attached', `${name} (batch ${code})`);
+    this.audit(user, 'upload', 'batch_challan', code, { size: bytes.byteLength });
+    return this.getBatch(user, { code });
+  }
+  getBatchChallan(user, { code }) {
+    const f = this.one('SELECT * FROM files WHERE id = ?', `batch_challan_${code}`);
+    return f ? { name: f.name, bytes: this.readBytes(f.id, f.size) } : null;
+  }
+  deleteBatchChallan(user, { code }) {
+    const id = `batch_challan_${code}`;
+    this.sql.exec('DELETE FROM file_chunks WHERE file_id = ?', id);
+    this.sql.exec('DELETE FROM files WHERE id = ?', id);
+    this.audit(user, 'delete', 'batch_challan', code, null);
+    return this.getBatch(user, { code });
   }
 
   // ---------- Import from the old Excel sheet / SQL Server export (ImportService) ----------

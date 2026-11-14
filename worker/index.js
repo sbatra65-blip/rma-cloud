@@ -102,6 +102,7 @@ function sniff(bytes) {
   if (b[0] === 0x89 && ascii(1, 3) === 'PNG') return 'image/png';
   if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return 'image/webp';
   if (b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return 'application/zip';
+  if (ascii(0, 5) === '%PDF-') return 'application/pdf';
   return null;
 }
 
@@ -591,10 +592,11 @@ async function handle(request, env, ctx) {
     if (!bytes.byteLength) throw new ValidationError({ file: 'Photo is empty' });
     if (bytes.byteLength > MAX_PHOTO) throw new ValidationError({ file: 'Photo is larger than 10 MB' });
     const mime = sniff(bytes);
-    if (!mime || !mime.startsWith('image/')) throw new ValidationError({ file: 'Only JPG, PNG or WEBP photos can be uploaded' });
+    if (!mime || !(mime.startsWith('image/') || mime === 'application/pdf')) throw new ValidationError({ file: 'Only photos (JPG, PNG, WEBP) or PDF files can be uploaded' });
     const direction = request.headers.get('X-Direction') === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND';
     const name = decodeURIComponent(request.headers.get('X-File-Name') || 'photo').replace(/[^\w .()-]/g, '_').slice(0, 120);
-    const args = { ticketId: m[1], direction, name, mime, bytes };
+    const kind = request.headers.get('X-Kind') === 'challan' ? 'challan' : undefined;
+    const args = { ticketId: m[1], direction, name, mime, bytes, kind };
     if (env.FILES) {
       const id = uuid();
       const key = `co/${user.companyId}/photo/${id}`;
@@ -621,7 +623,7 @@ async function handle(request, env, ctx) {
     return raw(data, {
       'Content-Type': r.meta.mime,
       'Content-Disposition': `inline; filename="${r.meta.name.replace(/"/g, '')}"`,
-      'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
+      'Content-Security-Policy': r.meta.mime === 'application/pdf' ? "default-src 'none'; frame-ancestors 'self'" : "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
       'Cache-Control': 'private, max-age=3600',
     });
   }
@@ -673,6 +675,20 @@ async function handle(request, env, ctx) {
   }
   m = path.match(/^\/api\/batches\/(BATCH-[0-9]{6}(?:-[0-9]{1,3})?)$/);
   if (m && method === 'GET') return respond(await ccall(env, user, 'getBatch', { code: m[1] }));
+  m = path.match(/^\/api\/batches\/(BATCH-[0-9]{6}(?:-[0-9]{1,3})?)\/challan$/);
+  if (m && method === 'POST') {
+    const bytes = await request.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > MAX_PHOTO) throw new ValidationError({ file: 'Choose a PDF up to 10 MB' });
+    if (sniff(bytes) !== 'application/pdf') throw new ValidationError({ file: 'The challan must be a PDF file' });
+    const name = decodeURIComponent(request.headers.get('X-File-Name') || 'challan.pdf').replace(/[^\w .()-]/g, '_').slice(0, 120);
+    return respond(await ccall(env, user, 'putBatchChallan', { code: m[1], bytes, name }));
+  }
+  if (m && method === 'GET') {
+    const f = await ccall(env, user, 'getBatchChallan', { code: m[1] });
+    if (!f) return err(404, 'No challan for this batch');
+    return raw(f.bytes, { 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${f.name.replace(/"/g, '')}"`, 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'", 'Cache-Control': 'private, no-store' });
+  }
+  if (m && method === 'DELETE') return respond(await ccall(env, user, 'deleteBatchChallan', { code: m[1] }));
 
   // Import
   if (path === '/api/import/rma' && method === 'POST') {

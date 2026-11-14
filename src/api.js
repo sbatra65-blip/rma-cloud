@@ -57,9 +57,18 @@ export async function compressImage(file) {
   return new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.84));
 }
 
-export async function uploadPhoto(ticketId, file, direction) {
+export const isPdf = (file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+
+// Photos are shrunk to JPEG first; PDFs (challans, invoices, reports) go up as they are, up to 10 MB.
+export async function uploadPhoto(ticketId, file, direction, { kind } = {}) {
+  if (isPdf(file)) {
+    if (file.size > 10 * 1024 * 1024) throw new ApiError(422, { error: `${file.name} is larger than 10 MB` });
+    return api('POST', `/api/rma/${ticketId}/photos`, file, {
+      headers: { 'X-Direction': direction, 'X-File-Name': encodeURIComponent(file.name), 'Content-Type': 'application/pdf', ...(kind ? { 'X-Kind': kind } : {}) },
+    });
+  }
   if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) {
-    throw new ApiError(422, { error: `${file.name}: only photos can be uploaded` });
+    throw new ApiError(422, { error: `${file.name}: only photos or PDF files can be uploaded` });
   }
   if (file.size > 25 * 1024 * 1024) throw new ApiError(422, { error: `${file.name} is larger than 25 MB` });
   const blob = await compressImage(file);
