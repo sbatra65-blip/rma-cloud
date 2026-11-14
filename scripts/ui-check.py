@@ -534,6 +534,17 @@ with sync_playwright() as p:
     names = zipfile.ZipFile(path).namelist()
     ok('data.json' in names and 'tables/tickets.csv' in names and any(n.startswith('photos/') for n in names), 'console: company data downloads as ZIP with tables and photos')
     c4.screenshot(path=f'{OUT}/44-console-download.png', full_page=True)
+    c4.goto(BASE + '/console/backup')
+    c4.wait_for_selector('h1:has-text("Offsite backup")')
+    ok(c4.locator('text=Not set up yet').count() == 1 or c4.locator('text=Last complete copy').count() == 1, 'console: offsite backup page')
+    c4.screenshot(path=f'{OUT}/45-console-offsite.png', full_page=True)
+    d3.goto(BASE + '/settings#backups')
+    d3.wait_for_selector('text=Include PDFs')
+    d3.uncheck('label:has-text("Include photos") >> input')
+    with d3.expect_download(timeout=60000) as dl:
+        d3.click('button:has-text("Download full backup")')
+    names = zipfile.ZipFile(dl.value.path()).namelist()
+    ok(any(n.startswith('pdfs/care-packs/') and n.endswith('.pdf') for n in names) and not any(n.startswith('photos/') for n in names), 'settings: backup with PDFs but no photos')
     browser.close()
 
 bad = [e for e in errors if 'favicon' not in e and '401' not in e and 'Failed to load resource' not in e]

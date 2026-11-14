@@ -192,6 +192,7 @@ export class Directory extends DurableObject {
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
       'signup', 'securityGet', 'securitySet', 'billingInfo', 'billingCreate', 'billingApply', 'billingFailed', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'offsiteCompanies', 'offsiteExport', 'offsiteStatusGet', 'offsiteStatusSave',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1339,6 +1340,34 @@ export class Directory extends DurableObject {
   }
   companiesByPrefix({ prefix }) {
     return this.all('SELECT id, name FROM companies WHERE active = 1 AND upper(ticket_prefix) = upper(?) LIMIT 5', String(prefix || ''));
+  }
+
+  // ---------- Offsite backup ----------
+  offsiteCompanies() {
+    return this.all('SELECT id, code, name, active FROM companies ORDER BY created_at');
+  }
+  // Everything needed to rebuild the directory after a disaster, minus anything secret: passwords, 2FA secrets,
+  // recovery codes and sessions stay out (people set a new password and 2FA after a restore).
+  offsiteExport() {
+    const SECRET = /^(pass_|totp_|recovery$|token|prev_hash)|secret|_enc$/i;
+    const strip = (rows) => rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SECRET.test(k))));
+    const t = (sql) => { try { return strip(this.all(sql)); } catch { return []; } };
+    return {
+      companies: t('SELECT * FROM companies'),
+      users: t('SELECT * FROM users'),
+      console_users: t('SELECT * FROM console_users'),
+      payments: t('SELECT * FROM payments'),
+      meta: t('SELECT * FROM meta').filter((r) => !/secret|token|key|offsite/i.test(r.key)),
+      console_log: t('SELECT * FROM console_log ORDER BY id DESC LIMIT 5000'),
+    };
+  }
+  offsiteStatusGet() {
+    try { return JSON.parse(this.one("SELECT value FROM meta WHERE key = 'offsite:status'")?.value || 'null'); } catch { return null; }
+  }
+  offsiteStatusSave({ status, op = null, ip = null }) {
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('offsite:status', ?)", JSON.stringify(status).slice(0, 20000));
+    if (op) this.cLog(op, 'offsite_backup', { detail: `${status.uploaded} files uploaded, ${status.pending} waiting, ${status.errors.length} errors`, ip });
+    return status;
   }
 
   // Who hears about sign-ups, buying signals and trials ending: active console operators with 2FA set up,

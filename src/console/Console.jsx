@@ -63,10 +63,11 @@ function Shell() {
   else if (route === '/console/operators') page = <Operators />;
   else if (route === '/console/payment') page = <PaymentSettings />;
   else if (route === '/console/log') page = <ActivityLog />;
+  else if (route === '/console/backup') page = <OffsiteBackup />;
   else if (route === '/console/profile') page = <ConsoleProfile op={state.op} onLogout={() => signOut('logout')} />;
   else page = <div className="panel"><h1>Page not found</h1><p className="muted"><Link to="/console">Back to companies</Link></p></div>;
 
-  const nav = [['/console', 'building', 'Companies'], ['/console/payment', 'shield', 'Payment details'], ['/console/operators', 'users', 'Operators'], ['/console/log', 'history', 'Activity log']];
+  const nav = [['/console', 'building', 'Companies'], ['/console/payment', 'shield', 'Payment details'], ['/console/operators', 'users', 'Operators'], ['/console/backup', 'database', 'Offsite backup'], ['/console/log', 'history', 'Activity log']];
   const cur = (to) => (to === '/console' ? route === '/console' || route.startsWith('/console/companies') : route.startsWith(to));
   return (
     <div className="app">
@@ -921,6 +922,69 @@ function PaymentSettings() {
       </section>
       <div className="savebar"><button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Save payment details'}</button></div>
     </form>
+  );
+}
+
+// Offsite backup: a nightly copy of every company to storage outside Cloudflare. Set up with OFFSITE_* settings.
+function OffsiteBackup() {
+  const toast = useToast();
+  const [data, reload, error] = useLoad(() => get('/api/console/offsite'));
+  const [busy, setBusy] = useState(false);
+  if (error && !data) return <ErrorPanel error={error} retry={reload} />;
+  if (!data) return <Skeleton rows={4} />;
+  const st = data.status;
+  const mb = (n) => `${(n / 1048576).toFixed(n < 1048576 ? 2 : 1)} MB`;
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await post('/api/console/offsite/run', {});
+      const s = r.status;
+      toast(s.errors.length ? `Finished with ${s.errors.length} error(s)` : s.pending ? `${s.uploaded} files copied; ${s.pending} still waiting — run again or leave it to tonight` : 'Offsite backup is up to date', !!s.errors.length);
+      await reload();
+    } catch (x) { toast(x.message, true); } finally { setBusy(false); }
+  }
+  return (
+    <div className="stack">
+      <div className="page-head">
+        <div><h1>Offsite backup</h1><p className="muted">Every night (2–5 am IST) a copy of every company — data, photos and PDFs — goes to storage outside Cloudflare.</p></div>
+        {data.ready && <button className="btn primary" disabled={busy} onClick={run}><Icon name="upload" size={18} /> {busy ? 'Running… (up to a minute)' : 'Run now'}</button>}
+      </div>
+      {!data.ready ? (
+        <section className="panel">
+          <h2>Not set up yet</h2>
+          <p className="small">Create a bucket with Backblaze B2, Amazon S3, Wasabi or Cloudflare R2 <b>in a different account</b>, make an access key for that bucket only, then add these in Cloudflare → Workers → rma-cloud → Settings → Variables and Secrets:</p>
+          <div className="tablewrap"><table className="data"><thead><tr><th>Name</th><th>Type</th><th>Example</th></tr></thead><tbody>
+            <tr><td className="mono">OFFSITE_ENDPOINT</td><td>Text</td><td className="mono small">https://s3.us-east-005.backblazeb2.com</td></tr>
+            <tr><td className="mono">OFFSITE_BUCKET</td><td>Text</td><td className="mono small">trackmyrma-backup</td></tr>
+            <tr><td className="mono">OFFSITE_REGION</td><td>Text</td><td className="mono small">us-east-005 (R2: auto)</td></tr>
+            <tr><td className="mono">OFFSITE_KEY_ID</td><td><b>Secret</b></td><td className="small">access key ID</td></tr>
+            <tr><td className="mono">OFFSITE_SECRET</td><td><b>Secret</b></td><td className="small">secret access key</td></tr>
+            <tr><td className="mono">OFFSITE_PASSPHRASE</td><td><b>Secret</b></td><td className="small">long passphrase; encrypts every file. Keep a copy offline — without it the backup can't be read.</td></tr>
+          </tbody></table></div>
+        </section>
+      ) : (
+        <>
+          <section className="panel billing-now">
+            <div><span className="muted small">Storage</span><b className="mono small">{data.target}</b></div>
+            <div><span className="muted small">Encryption</span><b>{data.encrypted ? 'On (AES-256)' : 'Off'}</b>{!data.encrypted && <span className="warntext small"> · add OFFSITE_PASSPHRASE</span>}</div>
+            <div><span className="muted small">Last complete copy</span><b>{st?.lastCompleteAt ? fmtMs(st.lastCompleteAt, true) : '—'}</b></div>
+          </section>
+          {!st ? <Empty icon="database" title="No run yet">The first run is tonight, or press Run now.</Empty> : (
+            <section className="panel">
+              <h2>Last run</h2>
+              {st.errors.length > 0 && <div className="formerror" role="alert"><b>{st.errors.length} error(s)</b><ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{st.errors.slice(0, 8).map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
+              <dl className="track-facts">
+                <dt>When</dt><dd>{fmtMs(st.at, true)} · {st.how} · {Math.round(st.ms / 1000)} s</dd>
+                <dt>Companies</dt><dd>{st.snapshots} of {st.companies} with today's data snapshot{st.day !== data.today ? ` (on ${st.day})` : ''}</dd>
+                <dt>Photos and files</dt><dd>{st.uploaded} copied this run · {mb(st.bytes)}{st.pending ? <span className="warntext"> · {st.pending} still waiting</span> : ' · all copied'}</dd>
+                <dt>Logins and companies</dt><dd>{st.directoryDay === data.today ? 'Copied today' : st.directoryDay ? `Last copied ${st.directoryDay}` : 'Not copied yet'}</dd>
+              </dl>
+              <p className="muted small" style={{ marginTop: 10 }}>Data snapshots: last 30 days plus one a month for 12 months. Photos and PDFs are copied once and never deleted offsite. Passwords and 2FA secrets are not copied; after a restore everyone sets them again. Problems are emailed to the operators.</p>
+            </section>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

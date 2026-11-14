@@ -840,5 +840,36 @@ console.log('Plan & billing (online payment)');
   ok(x.status === 429, 'fourth sign-up from one network is limited', x.status);
 }
 
+console.log('Offsite backup');
+{
+  let x = await opc('GET', '/api/console/offsite');
+  ok(x.status === 200 && typeof x.data.ready === 'boolean', 'console shows offsite backup status');
+  const S3 = process.env.S3_MOCK || '';
+  if (!x.data.ready) {
+    x = await opc('POST', '/api/console/offsite/run', {});
+    ok(x.status === 409, 'run refused until storage is set up');
+  } else if (S3) {
+    await fetch(`${S3}/__dump`, { method: 'DELETE' });
+    ok(x.data.encrypted, 'offsite: encryption on');
+    x = await owner('GET', '/api/rma');
+    x = await opc('POST', '/api/console/offsite/run', {});
+    const st = x.data.status;
+    ok(x.status === 200 && st.ok && st.snapshots === st.companies && st.companies >= 2 && st.uploaded >= 3 && st.pending === 0, 'offsite run: every company + photos and PDFs copied', JSON.stringify(st).slice(0, 400));
+    const keys = await (await fetch(`${S3}/__dump`)).json();
+    ok(keys.some((k) => /^directory\/\d{4}-\d{2}-\d{2}\.json\.gz\.enc$/.test(k.key)) && keys.some((k) => /\/data\/.*\.json\.gz\.enc$/.test(k.key)) && keys.some((k) => /\/photos\/[\w-]+\.jpg\.enc$/.test(k.key)) && keys.some((k) => /\/photos\/[\w-]+\.pdf\.enc$/.test(k.key)) && keys.some((k) => /\/files\/batch_challan_/.test(k.key)) && keys.some((k) => /\/files\/cp-oem-\d+\.pdf\.enc$/.test(k.key)), 'offsite layout: directory, data, photos, PDFs, files — all encrypted', keys.map((k) => k.key).slice(0, 12));
+    ok(keys.every((k) => k.type === 'application/octet-stream'), 'nothing readable without the passphrase');
+    const before = keys.length;
+    x = await opc('POST', '/api/console/offsite/run', {});
+    ok(x.data.status.uploaded === 0 && (await (await fetch(`${S3}/__dump`)).json()).length === before, 'second run the same day uploads nothing again');
+    await fetch(`${S3}/__dump`, { method: 'DELETE' });
+    x = await opc('POST', '/api/console/offsite/run', {});
+    ok(/missing from the bucket/.test(x.data.status.errors[0] || '') && (await (await fetch(`${S3}/__dump`)).json()).length === before, 'emptied bucket noticed and everything uploaded again', x.data.status.errors);
+    x = await opc('GET', '/api/console/offsite');
+    ok(x.data.status.lastCompleteAt && x.data.target.endsWith('/test-bucket'), 'status shows last complete copy');
+    x = await opc('GET', '/api/console/log');
+    ok(JSON.stringify(x.data).includes('offsite_backup'), 'console log records the run');
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

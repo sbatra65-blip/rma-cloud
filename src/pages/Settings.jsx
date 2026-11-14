@@ -358,6 +358,7 @@ function BackupPanel({ user, f, set, errors }) {
   const [busy, setBusy] = useState('');
   const [step, setStep] = useState('');
   const [photos, setPhotos] = useState(true);
+  const [pdfs, setPdfs] = useState(true);
   const load = () => get('/api/backup').then(setSt).catch(() => {});
   useEffect(() => { load(); }, []);
   async function emailNow() {
@@ -368,7 +369,7 @@ function BackupPanel({ user, f, set, errors }) {
   async function download() {
     setBusy('download');
     try {
-      const r = await buildBackupZip({ dataUrl: '/api/backup/data', fileUrl: (kind, id) => `/api/backup/${kind}/${encodeURIComponent(id)}`, photos, onStep: setStep });
+      const r = await buildBackupZip({ dataUrl: '/api/backup/data', fileUrl: (kind, id) => `/api/backup/${kind}/${encodeURIComponent(id)}`, photos, pdfs, onStep: setStep });
       downloadBlob(r.blob, `${user.company.code}_full_backup_${todayISO()}.zip`);
       toast(r.missing.length ? `Downloaded; ${r.missing.length} file(s) could not be read` : 'Full backup downloaded');
       load();
@@ -402,9 +403,10 @@ function BackupPanel({ user, f, set, errors }) {
           <button type="button" className="btn ghost small" disabled={!!busy} onClick={emailNow}><Icon name="mail" size={16} /> {busy === 'email' ? 'Sending…' : `Email me a backup now (${user.email})`}</button>
           <button type="button" className="btn ghost small" disabled={!!busy} onClick={download}><Icon name="download" size={16} /> {busy === 'download' ? 'Working…' : 'Download full backup'}</button>
           <label className="check small"><input type="checkbox" checked={photos} disabled={!!busy} onChange={(e) => setPhotos(e.target.checked)} />Include photos</label>
+          <label className="check small"><input type="checkbox" checked={pdfs} disabled={!!busy} onChange={(e) => setPdfs(e.target.checked)} />Include PDFs</label>
         </div>
         {step && <p className="small" role="status">{step}</p>}
-        <p className="muted small">Emailed backups have every RMA, customer, care pack, batch and setting, but not photos or PDFs; the full download includes them. Zoho keys and passwords are never included.</p>
+        <p className="muted small">Emailed backups have every RMA, customer, care pack, batch and setting, but not photos or PDFs; the full download includes them (PDFs: RMA PDFs and challans, care pack OEM invoices, OEM batch challans). Zoho keys and passwords are never included.</p>
       </div>
     </section>
   );

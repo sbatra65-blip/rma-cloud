@@ -141,7 +141,7 @@ export class Company extends DurableObject {
   exportTables() {
     const SECRET = /(secret|token|refresh|_enc$|password)/i;
     const names = this.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")
-      .map((r) => r.name).filter((n) => n !== 'file_chunks');
+      .map((r) => r.name).filter((n) => n !== 'file_chunks' && n !== 'offsite_sent');
     const tables = {};
     for (const n of names) {
       let rows = this.all(`SELECT * FROM ${n}`);
@@ -152,6 +152,8 @@ export class Company extends DurableObject {
     const photos = this.all('SELECT p.id, p.ticket_id, t.ticket_no, p.direction, p.name, p.mime, p.size, p.store FROM photos p LEFT JOIN tickets t ON t.id = p.ticket_id ORDER BY p.ticket_id');
     let files = [];
     try { files = this.all('SELECT id, name, mime, size FROM files ORDER BY id'); } catch { /* none */ }
+    // Care pack OEM invoice PDFs are kept beside their care pack, not in the files table.
+    try { files = files.concat(this.cpPdfFiles()); } catch { /* no care packs */ }
     return { tables, photos, files };
   }
   backupFile(user, args) { return this.exportFile(args); }
@@ -161,8 +163,66 @@ export class Company extends DurableObject {
       if (!p) return null;
       return { mime: p.mime, store: p.store, bytes: p.store === 'db' ? this.readBytes(p.id, p.size) : null };
     }
+    const cp = String(id).match(/^cp-oem-(\d+)$/);
+    if (cp) {
+      const b = this.one('SELECT oem_pdf_size FROM cp_batches WHERE id = ? AND oem_pdf_name IS NOT NULL', Number(cp[1]));
+      return b ? { mime: 'application/pdf', store: 'db', bytes: this.readBytes(id, b.oem_pdf_size) } : null;
+    }
     const f = this.one('SELECT * FROM files WHERE id = ?', id);
     return f ? { mime: f.mime || 'application/octet-stream', store: 'db', bytes: this.readBytes(f.id, f.size) } : null;
+  }
+  cpPdfFiles() {
+    return this.all("SELECT 'cp-oem-' || id AS id, oem_pdf_name AS name, 'application/pdf' AS mime, oem_pdf_size AS size FROM cp_batches WHERE oem_pdf_name IS NOT NULL ORDER BY id");
+  }
+
+  // ---------- Offsite backup (provider; called straight from the Worker, never from the app) ----------
+  // Remembers which photos / files are already in the offsite bucket, so each is uploaded once.
+  offsiteReset(target) {
+    this.sql.exec('CREATE TABLE IF NOT EXISTS offsite_sent (key TEXT PRIMARY KEY, sig TEXT, at INTEGER)');
+    const cur = this.one("SELECT value FROM meta WHERE key = 'offsite:target'")?.value;
+    if (cur !== target) {
+      this.sql.exec('DELETE FROM offsite_sent');
+      this.sql.exec("DELETE FROM meta WHERE key = 'offsite:data'");
+      this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('offsite:target', ?)", target);
+    }
+  }
+  // The bucket lost its copies (emptied or replaced): forget what was sent so everything is uploaded again.
+  offsiteForget() {
+    this.sql.exec("DELETE FROM meta WHERE key IN ('offsite:target', 'offsite:data')");
+    try { this.sql.exec('DELETE FROM offsite_sent'); } catch { /* none yet */ }
+    return { ok: true };
+  }
+  offsiteData({ target, day }) {
+    this.offsiteReset(target);
+    if (this.one("SELECT value FROM meta WHERE key = 'offsite:data'")?.value === day) return { done: true };
+    return { done: false, data: this.exportTables() };
+  }
+  offsiteDataDone({ day }) {
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('offsite:data', ?)", day);
+  }
+  offsitePending({ target, limit = 100 }) {
+    this.offsiteReset(target);
+    const photos = this.all(`SELECT 'photo' AS kind, p.id, p.mime, p.store, p.size || '' AS sig FROM photos p
+      WHERE NOT EXISTS (SELECT 1 FROM offsite_sent s WHERE s.key = 'photo:' || p.id) ORDER BY p.id`);
+    let files = [];
+    try {
+      files = this.all(`SELECT 'file' AS kind, f.id, f.mime, 'db' AS store, COALESCE(f.size, '') || ':' || COALESCE(f.updated_at, '') AS sig FROM files f
+        WHERE NOT EXISTS (SELECT 1 FROM offsite_sent s WHERE s.key = 'file:' || f.id AND s.sig = COALESCE(f.size, '') || ':' || COALESCE(f.updated_at, '')) ORDER BY f.id`);
+    } catch { /* no files table */ }
+    try {
+      for (const f of this.cpPdfFiles()) {
+        const sig = `${f.size}:${f.name}`;
+        if (this.one('SELECT 1 FROM offsite_sent WHERE key = ? AND sig = ?', `file:${f.id}`, sig)) continue;
+        files.push({ kind: 'file', id: f.id, mime: 'application/pdf', store: 'db', sig });
+      }
+    } catch { /* no care packs */ }
+    const all = [...files, ...photos];
+    return { total: all.length, items: all.slice(0, Math.max(0, limit)) };
+  }
+  offsiteMark({ items }) {
+    const now = Date.now();
+    for (const i of items || []) this.sql.exec('INSERT OR REPLACE INTO offsite_sent (key, sig, at) VALUES (?, ?, ?)', `${i.kind}:${i.id}`, String(i.sig), now);
+    return { ok: true };
   }
 
   // Console "Delete company": removes every table, photo and setting of this company. Not reachable from the app.

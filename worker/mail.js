@@ -300,3 +300,14 @@ export function accessEmail({ appName, appUrl, kind, company, info, payment, rec
     <p><a href="${esc(appUrl)}" style="color:#303090;font-weight:700">Open ${esc(appName)}</a></p>`;
   return { subject, html: shell(appName, subject, body, host) };
 }
+
+// Service provider: the nightly offsite backup failed or has not finished for a while.
+export function offsiteAlertEmail({ appName, consoleUrl, st }) {
+  const subject = `Offsite backup problem: ${st.errors.length ? `${st.errors.length} error(s)` : 'not finished'} (${st.day})`;
+  const body = `<p>The offsite backup run at ${esc(new Date(st.at).toISOString().replace('T', ' ').slice(0, 16))} UTC needs a look.</p>
+    ${st.errors.length ? `<ul style="padding-left:18px">${st.errors.slice(0, 15).map((e) => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+    <p style="color:#5f6278;font-size:13px">Companies: ${st.companies} · data snapshots today: ${st.snapshots} · files uploaded: ${st.uploaded} · files still waiting: ${st.pending}</p>
+    <p>Check the storage keys and bucket in Cloudflare, then run it again from the console.</p>
+    <p><a href="${esc(consoleUrl)}/backup" style="color:#303090;font-weight:700">Open offsite backup in the console</a></p>`;
+  return { subject, html: shell(`${appName} Console`, subject, body, new URL(consoleUrl).host) };
+}

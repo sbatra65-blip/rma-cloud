@@ -34,8 +34,9 @@
   // Without it, photos are stored inside each company's own database.
   // "r2_buckets": [{ "binding": "FILES", "bucket_name": "rma-photos" }],
 
-  // Daily RMA reminder email at 09:00 IST (03:30 UTC).
-  "triggers": { "crons": ["30 3 * * *"] },
+  // 09:00 IST (03:30 UTC): reminder emails and emailed backups.
+  // 02:00, 03:00, 04:00, 05:00 IST (20:30-23:30 UTC): offsite backup runs (only when OFFSITE_* is set).
+  "triggers": { "crons": ["30 3 * * *", "30 20-23 * * *"] },
 
   "vars": {
     "APP_NAME": "TrackMyRMA",
@@ -52,6 +53,8 @@
     //                 pages opened on any other domain attached to this Worker (old address,
     //                 .in / .co.in, www) are redirected here. /api keeps working on every domain.
     //   CONSOLE_SETUP_KEY (secret) — needed once to create the first console operator
+    //   Offsite backup (see worker/offsite.js): OFFSITE_ENDPOINT, OFFSITE_BUCKET, OFFSITE_REGION (text);
+    //   OFFSITE_KEY_ID, OFFSITE_SECRET, OFFSITE_PASSPHRASE (secrets)
   },
 
   "keep_vars": true,

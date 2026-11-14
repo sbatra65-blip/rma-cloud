@@ -4,8 +4,9 @@ import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
 import { companyFromToken } from './track.js';
 import { BACKUP_KEEP, backupCounts, base64, buildDataZip } from './backup.js';
+import { Offsite, istDay, offsiteConfig } from './offsite.js';
 import { GST_PCT, PERIODS, PLANS, checkPaymentSignature, checkWebhookSignature, createOrder, onlineReady, quote } from './billing.js';
-import { backupEmail, paymentAlertEmail, paymentReceiptEmail, accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
+import { backupEmail, offsiteAlertEmail, paymentAlertEmail, paymentReceiptEmail, accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -914,6 +915,8 @@ async function sendBackup(env, user, appUrl, to, how) {
   return result;
 }
 
+const DAILY_CRON = '30 3 * * *';
+
 async function runBackups(env, appUrl) {
   const companies = await dcall(env, 'reminderRecipients', {});
   const report = [];
@@ -931,6 +934,109 @@ async function runBackups(env, appUrl) {
   }
   if (report.length) console.log('backups', JSON.stringify(report));
   return report;
+}
+
+// Offsite backup of every company to S3-compatible storage (see worker/offsite.js). Runs every night from cron
+// (several runs, so a big first upload carries on) and on demand from the console. Each company's data snapshot is
+// taken once per day; photos and files are uploaded once and remembered.
+const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx', 'image/svg+xml': '.svg' };
+async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, budget = Number(env.OFFSITE_BUDGET) || 700, op = null, ip = null } = {}) {
+  const cfg = offsiteConfig(env);
+  if (!cfg.ready) return { ready: false };
+  const start = Date.now();
+  const day = istDay(start);
+  const off = new Offsite(env);
+  const prev = (await dcall(env, 'offsiteStatusGet', {})) || {};
+  let rpc = 0;
+  const spent = () => off.requests + rpc;
+  const timeLeft = () => Date.now() - start < maxMs && spent() < budget;
+  const errors = [];
+  let snapshots = 0;
+  let uploaded = 0;
+  let pending = 0;
+  let directory = prev.directoryDay === day && prev.target === cfg.target;
+  const companies = await dcall(env, 'offsiteCompanies', {});
+  try {
+    // If earlier copies have vanished from the bucket (emptied or replaced), start the upload over.
+    if (prev.target === cfg.target && prev.directoryDay && !(await off.list('directory/')).length) {
+      for (const c of companies) { rpc++; await company(env, c.id).offsiteForget(); }
+      errors.push('Earlier copies were missing from the bucket; uploading everything again.');
+      directory = false;
+    }
+    if (!directory) {
+      await off.snapshot('directory/', day, { exportedAt: new Date().toISOString(), ...(await dcall(env, 'offsiteExport', {})) });
+      directory = true;
+    }
+  } catch (e) { errors.push(`Directory: ${e.message}`); }
+  // 1) today's data snapshot of every company (small; done first so every company is covered each night)
+  for (const c of companies) {
+    if (!timeLeft()) break;
+    try {
+      const stub = company(env, c.id);
+      rpc++;
+      const d = await stub.offsiteData({ target: cfg.target, day });
+      if (!d.done) {
+        await off.snapshot(`companies/${c.id}/data/`, day, { company: { id: c.id, code: c.code, name: c.name, active: c.active }, exportedAt: new Date().toISOString(), ...d.data });
+        rpc++;
+        await stub.offsiteDataDone({ day });
+      }
+      snapshots++;
+    } catch (e) { errors.push(`${c.code} data: ${e.message}`); }
+  }
+  // 2) new photos and files, as far as time and request budget allow; the rest carries on in the next run
+  for (const c of companies) {
+    const stub = company(env, c.id);
+    try {
+      rpc++;
+      const p = await stub.offsitePending({ target: cfg.target, limit: timeLeft() ? Math.max(0, Math.floor((budget - spent()) / 3)) : 0 });
+      pending += p.total;
+      const done = [];
+      for (const it of p.items) {
+        if (!timeLeft()) break;
+        try {
+          let bytes = null;
+          if (it.store === 'r2') {
+            rpc++;
+            const o = env.FILES ? await env.FILES.get(`co/${c.id}/photo/${it.id}`) : null;
+            if (o) bytes = await o.arrayBuffer();
+          } else {
+            rpc++;
+            const f = await stub.exportFile({ kind: it.kind, id: it.id });
+            bytes = f?.bytes || null;
+          }
+          if (!bytes) { done.push(it); continue; } // gone since; nothing to copy
+          await off.put(`companies/${c.id}/${it.kind}s/${it.id}${EXT[it.mime] || ''}`, bytes, it.mime);
+          done.push(it);
+        } catch (e) {
+          errors.push(`${c.code} ${it.kind} ${it.id}: ${e.message}`);
+          if (/^Storage (401|403)/.test(e.message)) break;
+        }
+      }
+      if (done.length) { rpc++; await stub.offsiteMark({ items: done }); }
+      uploaded += done.length;
+      pending -= done.length;
+    } catch (e) { errors.push(`${c.code} files: ${e.message}`); }
+  }
+  const complete = !errors.length && snapshots === companies.length && pending === 0 && directory;
+  const st = {
+    at: start, ms: Date.now() - start, day, how, target: cfg.target, encrypted: cfg.encrypted, ok: !errors.length,
+    companies: companies.length, snapshots, directoryDay: directory ? day : prev.directoryDay || null, uploaded, pending, bytes: off.bytes,
+    errors: errors.slice(0, 30), lastOkAt: !errors.length ? start : prev.lastOkAt || null, lastCompleteAt: complete ? start : prev.lastCompleteAt || null,
+    alertDay: prev.alertDay || null,
+  };
+  if (errors.length && st.alertDay !== day) {
+    st.alertDay = day;
+    try {
+      const appUrl = env.APP_URL || (await dcall(env, 'appUrl', {})) || 'https://rma-cloud.workers.dev';
+      const consoleUrl = env.CONSOLE_HOST ? `https://${env.CONSOLE_HOST}/console` : `${appUrl.replace(/\/+$/, '')}/console`;
+      const mail = offsiteAlertEmail({ appName: env.APP_NAME || 'TrackMyRMA', consoleUrl, st });
+      for (const o of await dcall(env, 'operatorEmails', {})) await sendMail(env, { to: o.email, ...mail });
+    } catch (e) { console.error('offsite alert', e); }
+  }
+  await dcall(env, 'offsiteStatusSave', { status: st, op, ip });
+  console.log('offsite', JSON.stringify({ ...st, errors: st.errors.slice(0, 5) }));
+  return st;
 }
 
 // Sends the customer step emails queued by the last change (customer_updates setting) and records the results.
@@ -1104,6 +1210,15 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
       return respond({ logoAt: r.logoAt });
     }
     if (method === 'DELETE') { const r = await ccall(env, sys, 'deleteLogo'); return respond({ logoAt: r.logoAt }); }
+  }
+  if (path === '/api/console/offsite' && method === 'GET') {
+    const c = offsiteConfig(env);
+    return respond({ ready: c.ready, target: c.ready ? c.target : null, encrypted: c.encrypted, status: await dcall(env, 'offsiteStatusGet', {}), today: istDay() });
+  }
+  if (path === '/api/console/offsite/run' && method === 'POST') {
+    if (!offsiteConfig(env).ready) return err(409, 'Offsite storage is not set up yet. Add the OFFSITE_ settings in Cloudflare first.');
+    const st = await runOffsite(env, { how: `console (${op.name})`, maxMs: 60e3, budget: 400, op, ip: client.ip });
+    return respond({ ready: true, status: st });
   }
   if (path === '/api/console/payment' && method === 'GET') return respond(await dcall(env, 'consolePaymentGet', {}));
   if (path === '/api/console/payment' && method === 'POST') return respond(await dcall(env, 'consolePaymentSave', { op, payment: (await body(request)).payment, ip: client.ip }));
@@ -1293,6 +1408,8 @@ export default {
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
+      // 02:00-05:00 IST: offsite backup runs; 09:00 IST: reminders and emailed backups.
+      if (event.cron && event.cron !== DAILY_CRON) return void (await runOffsite(env, { how: 'scheduled' }));
       const appUrl = env.APP_URL || (await dcall(env, 'appUrl', {})) || 'https://rma-cloud.workers.dev';
       await runReminders(env, appUrl);
       await runBackups(env, appUrl);
