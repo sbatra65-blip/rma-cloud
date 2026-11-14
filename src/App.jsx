@@ -20,8 +20,12 @@ import CarePackRegister from './pages/CarePackRegister.jsx';
 import CarePackDetail from './pages/CarePackDetail.jsx';
 import CarePackPo from './pages/CarePackPo.jsx';
 import DeviceHistory from './pages/DeviceHistory.jsx';
+import Track from './pages/Track.jsx';
 
 export default function App() {
+  // Public pages for customers of a service centre: no login, no app shell.
+  const p = location.pathname;
+  if (p.startsWith('/t/') || p === '/track') return <ToastProvider><Track path={p} /></ToastProvider>;
   return (
     <ToastProvider>
       <Shell />

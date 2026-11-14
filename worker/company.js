@@ -3,12 +3,13 @@
 // original RMASystem.Web services (TicketService, BatchService, ImportService, OemEmailService).
 import { migrateMethods } from './migrate.js';
 import { deviceMethods, isHeadPart, migrateV3, migrateV4 } from './devices.js';
+import { migrateV5, trackMethods } from './track.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
 import { CP_DEFAULTS, carePackMethods, migrateCarePack } from './carepack.js';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const CHUNK = 1_500_000; // bytes per stored file chunk (row limit is 2 MB)
 const TEMPLATE_ID = 'oem-template';
 
@@ -77,6 +78,7 @@ export const DEFAULT_SETTINGS = {
   reminder_extra_to: '',
   awaiting_days: '3',
   head_claim_limit: '2',
+  customer_updates: '1',
 };
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
 
@@ -174,6 +176,7 @@ export class Company extends DurableObject {
     if (v >= 1) {
       if (v < 3) migrateV3(this.sql);
       if (v < 4) migrateV4(this.sql);
+      if (v < 5) migrateV5(this.sql);
       this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
       return;
     }
@@ -234,6 +237,7 @@ export class Company extends DurableObject {
     `);
     migrateV3(this.sql);
     migrateV4(this.sql);
+    migrateV5(this.sql);
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", String(SCHEMA_VERSION));
   }
 
@@ -249,6 +253,17 @@ export class Company extends DurableObject {
       ticketId, Date.now(), user?.name || 'System', action, detail ? String(detail).slice(0, 1000) : null);
   }
 
+  // Public calls (no login): the customer status page. The Worker validates the token and rate-limits first.
+  async publicCall(method, args = {}) {
+    if (!['trackView', 'trackLookup', 'getLogo'].includes(method)) return { error: { status: 400, message: 'Unknown action' } };
+    try {
+      return { data: await this[method](args) };
+    } catch (e) {
+      console.error('company public', method, e);
+      return { error: { status: 500, message: 'Something went wrong on the server.' } };
+    }
+  }
+
   // RPC entry point; returns { data } or { error } so validation details survive.
   async call(method, user, args = {}) {
     const PERMS = {
@@ -260,6 +275,8 @@ export class Company extends DurableObject {
       // edit: everyone except Viewer
       createTicket: 'edit', updateTicket: 'edit', deleteTicket: 'edit', ticketAction: 'edit', markExcel: 'edit', recordOemEmail: 'edit',
       putPhoto: 'edit', deletePhoto: 'edit', createBatch: 'edit',
+      // customer status page
+      trackLink: 'read', trackLinkMail: 'edit', takeCustomerNotices: 'read', customerNoticeResults: 'read',
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only
@@ -322,7 +339,8 @@ export class Company extends DurableObject {
       .text('oem_rma_email_subject', { max: 300, label: 'Subject template' }).text('oem_rma_email_body', { max: 8000, label: 'Body template' })
       .bool('reminder_emails').text('reminder_extra_to', { max: 1000, label: 'Extra reminder recipients' })
       .number('awaiting_days', { min: 1, max: 60, int: true, label: 'Days before chasing OEM' })
-      .number('head_claim_limit', { min: 0, max: 20, int: true, label: 'Print-head RMAs per printer before a reason is needed' });
+      .number('head_claim_limit', { min: 0, max: 20, int: true, label: 'Print-head RMAs per printer before a reason is needed' })
+      .bool('customer_updates');
     const v = c.out;
     for (const k of ['oem_rma_email_to', 'oem_rma_email_cc', 'reminder_extra_to']) {
       const bad = splitEmails(v[k], true).filter((e) => !/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(e));
@@ -611,6 +629,7 @@ export class Company extends DurableObject {
       head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null,
       psn.part_sn_note ? `Part serial differs from last received: ${psn.part_sn_note}` : null].filter(Boolean).join(' · ') || null);
     this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason, headOverride: !!head.head_override_reason });
+    this.queueCustomerNotice(id, STATUS.OPEN);
     return this.getTicket(user, { id });
   }
 
@@ -722,6 +741,7 @@ export class Company extends DurableObject {
     this.sql.exec(`UPDATE tickets SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...cols.map((k) => set[k]), t.id);
     this.event(t.id, user, `status: ${label(set.status)}`, note);
     this.audit(user, action, 'ticket', t.id, { from: t.status, to: set.status });
+    this.queueCustomerNotice(t.id, set.status);
     return this.getTicket(user, { id: t.id });
   }
 
@@ -816,6 +836,7 @@ export class Company extends DurableObject {
       this.sql.exec(`UPDATE tickets SET status = ?, closed_at = ?, closure_type = ?, closure_remarks = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
         toStatus, now, toStatus === STATUS.CLOSED ? 'REPAIRED' : 'RETURNED', why, now, user.name, id);
       this.event(id, user, `status: ${label(toStatus)} (bulk close, was ${label(t.status)})`, why);
+      this.queueCustomerNotice(id, toStatus);
       closed++;
     }
     this.audit(user, 'bulk_close', 'ticket', null, { closed, skipped: skipped.length, to: toStatus });
@@ -1073,6 +1094,7 @@ export class Company extends DurableObject {
       this.sql.exec('UPDATE tickets SET status = ?, oem_dispatch_date = ?, batch_code = ?, updated_at = ?, updated_by = ? WHERE id = ?',
         STATUS.DISPATCHED_OEM, v.dispatch_date, code, now, user.name, id);
       this.event(id, user, 'status: Dispatched to OEM', `Batch ${code}`);
+      this.queueCustomerNotice(id, STATUS.DISPATCHED_OEM);
     }
     this.audit(user, 'create', 'batch', code, { tickets: ids.length });
     return this.getBatch(user, { code });
@@ -1272,4 +1294,4 @@ export function parseLooseDate(v) {
   return { date, ms };
 }
 
-Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods);
+Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods, trackMethods);

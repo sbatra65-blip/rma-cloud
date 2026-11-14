@@ -136,6 +136,32 @@ r = await owner('POST', '/api/rma', { ticket: { ...base, faulty_part_sn: 'H-1001
 ok(r.status === 200 && r.data.ticket.dup_reason?.includes('Customer sent'), 'Admin override with reason stamped');
 const t3 = r.data.ticket;
 
+console.log('Customer status page');
+r = await owner('GET', `/api/rma/${t1.id}/track`);
+ok(r.status === 200 && /\/t\/[A-Za-z0-9_-]{37,38}$/.test(r.data.url), 'RMA has a private status link', r.data?.url);
+const trackToken = r.data.token;
+r = await owner('GET', `/api/rma/${t1.id}/track`);
+ok(r.data.token === trackToken, 'status link stays the same');
+{
+  const pub = client('Customer phone');
+  let x = await pub('GET', `/api/track/${trackToken}`);
+  ok(x.status === 200 && x.data.ticketNo === t1.ticket_no && x.data.steps.length === 5 && x.data.step === 0 && x.data.centre.name, 'customer sees status without logging in', JSON.stringify(x.data).slice(0, 160));
+  ok(!JSON.stringify(x.data).includes('failure_description') && !('tph_mileage' in x.data), 'status page shows no internal fields');
+  x = await pub('GET', `/api/track/${trackToken.slice(0, -3)}AAA`);
+  ok(x.status === 404, 'wrong status link → 404');
+  x = await pub('GET', '/api/track/not-a-token');
+  ok(x.status === 404, 'malformed status link → 404');
+  x = await pub('POST', '/api/track/lookup', { rma: t1.ticket_no });
+  ok(x.status === 200 && /If this RMA number is right/.test(x.data.message), 'check by RMA number answers generically');
+  const generic = x.data.message;
+  x = await pub('POST', '/api/track/lookup', { rma: 'INF-RMA-209901-9999' });
+  ok(x.status === 200 && x.data.message === generic, 'unknown RMA number gets the same answer');
+  x = await pub('POST', '/api/track/lookup', { rma: '' });
+  ok(x.status === 422, 'empty RMA number refused');
+}
+r = await owner('POST', `/api/rma/${t1.id}/track/email`, {});
+ok(r.status === 422, 'emailing the link needs a customer email on the RMA');
+
 r = await owner('GET', '/api/rma?q=TEBT25370458');
 ok(r.data.rows.length === 3, 'search by serial');
 r = await owner('POST', `/api/rma/${t1.id}/action`, { action: 'goods_received' });

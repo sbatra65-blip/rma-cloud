@@ -48,6 +48,7 @@ export class Directory extends DurableObject {
     this.sql = ctx.storage.sql;
     this.ipHits = new Map();
     this.signupHits = new Map();
+    this.trackHits = new Map();
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
@@ -178,7 +179,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'signup', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'signup', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1256,6 +1257,24 @@ export class Directory extends DurableObject {
       if (people.length) out.push({ kind, company: { name: c.name, code: c.code }, people, info: this.accessInfo(c) });
     }
     return { notices: out, payment: this.paymentInfo() };
+  }
+
+  // ---------- Customer status page (public) ----------
+  trackLimit({ ip, max = 30 }) {
+    const now = Date.now();
+    const hits = (this.trackHits.get(ip || '-') || []).filter((t) => now - t < 60 * MIN);
+    if (hits.length >= max) throw new AuthError(429, 'Too many checks from this network. Please try again in an hour.');
+    hits.push(now);
+    this.trackHits.set(ip || '-', hits);
+    if (this.trackHits.size > 5000) this.trackHits.clear();
+    return { ok: true };
+  }
+  companyPublic({ id }) {
+    const c = this.one('SELECT id, name, active FROM companies WHERE id = ?', id);
+    return c && c.active ? { id: c.id, name: c.name } : null;
+  }
+  companiesByPrefix({ prefix }) {
+    return this.all('SELECT id, name FROM companies WHERE active = 1 AND upper(ticket_prefix) = upper(?) LIMIT 5', String(prefix || ''));
   }
 
   // Who hears about sign-ups, buying signals and trials ending: active console operators with 2FA set up,

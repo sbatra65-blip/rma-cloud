@@ -778,3 +778,28 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 @media (prefers-color-scheme: dark) { :root[data-theme='system'] .wordmark b { color: #f08ad0; } }
 .signup-cta { display: grid; gap: 8px; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: 0.9rem; }
 .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+/* ---------- Customer status page (public) ---------- */
+.trackpage { min-height: 100vh; background: var(--ink); padding: 32px 16px; display: grid; justify-items: center; align-content: start; gap: 18px; }
+.track-card { width: 100%; max-width: 560px; background: var(--surface); color: var(--text); border-radius: 22px; padding: 28px; box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.6); }
+.track-foot { color: #c9c8e6; font-size: 0.85rem; text-align: center; }
+.track-foot a { color: #fff; text-decoration: none; }
+.track-foot .wordmark b { color: #f08ad0; }
+.track-centre { display: flex; align-items: center; gap: 12px; }
+.track-centre img { border-radius: 10px; max-width: 160px; object-fit: contain; }
+.track-h { font-size: 1.6rem; line-height: 1.2; margin-top: 4px; }
+.track-msg { color: var(--muted); margin-top: 6px; }
+.track-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.track-steps li { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 12px; padding: 9px 0; position: relative; color: var(--muted); }
+.track-steps li:not(:last-child)::after { content: ''; position: absolute; left: 10px; top: 30px; bottom: -8px; width: 2px; background: var(--line); }
+.track-steps li.done:not(:last-child)::after { background: var(--accent); }
+.track-steps .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); box-sizing: border-box; }
+.track-steps li.done .dot { background: var(--accent); border-color: var(--accent); }
+.track-steps li.now .dot { border-color: var(--accent); box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent); }
+.track-steps li.done, .track-steps li.now { color: var(--text); font-weight: 600; }
+.track-steps .date { font-size: 0.85rem; color: var(--muted); font-weight: 400; }
+.track-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; padding: 14px 16px; background: var(--bg); border-radius: 14px; font-size: 0.92rem; }
+.track-facts dt { color: var(--muted); }
+.track-facts dd { margin: 0; overflow-wrap: anywhere; }
+.track-contact { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+.track-share { display: grid; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }

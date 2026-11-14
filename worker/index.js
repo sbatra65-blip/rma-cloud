@@ -2,7 +2,8 @@
 import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
-import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
+import { companyFromToken } from './track.js';
+import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -218,6 +219,42 @@ async function handle(request, env, ctx) {
       200, { 'Set-Cookie': sessionCookie(data.token) });
   }
 
+  // ---------- Customer status page (public, no login) ----------
+  const tm = path.match(/^\/api\/track\/([A-Za-z0-9_-]{37,38})(\/logo)?$/);
+  if (tm && method === 'GET') {
+    await dcall(env, 'trackLimit', { ip: client.ip, max: 240 });
+    const companyId = companyFromToken(tm[1]);
+    const co = companyId && (await dcall(env, 'companyPublic', { id: companyId }));
+    if (!co) return err(404, 'This status link is not valid.');
+    if (tm[2]) {
+      const l = (await company(env, co.id).publicCall('getLogo', {})).data;
+      if (!l) return err(404, 'No logo');
+      return new Response(l.bytes, { headers: { ...SECURITY_HEADERS, 'Content-Type': l.mime, 'Cache-Control': 'public, max-age=3600' } });
+    }
+    const r = await company(env, co.id).publicCall('trackView', { token: tm[1], companyName: co.name });
+    if (r.error || !r.data) return err(404, 'This status link is not valid.');
+    return json(r.data, 200, { 'Cache-Control': 'no-store' });
+  }
+  if (path.startsWith('/api/track/') && method === 'GET') return err(404, 'This status link is not valid.');
+  if (path === '/api/track/lookup' && method === 'POST') {
+    const b = await body(request);
+    const no = String(b.rma || '').trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9/_-]{3,40}$/.test(no)) throw new ValidationError({ rma: 'Enter the RMA number as shown on your receipt, e.g. ABC-RMA-202611-0001' });
+    await dcall(env, 'trackLimit', { ip: client.ip, max: 10 });
+    const prefix = no.split('-')[0];
+    for (const co of await dcall(env, 'companiesByPrefix', { prefix })) {
+      const d = (await company(env, co.id).publicCall('trackLookup', { rmaNumber: no, companyId: co.id, companyName: co.name })).data;
+      if (!d) continue;
+      if (d.to) {
+        const app = await appOrigin(env, url);
+        ctx.waitUntil(sendMail(env, { to: d.to, ...customerStatusEmail({ appUrl: app, centre: d.centre, view: d.view, token: d.token, contact: d.contact, kind: 'link' }) }));
+      }
+      break;
+    }
+    // Same answer whether or not the RMA exists, so the form can't be used to find RMA numbers or emails.
+    return json({ ok: true, message: 'If this RMA number is right and has an email address on file, we have emailed the status link to it. It can take a few minutes; check spam too.' });
+  }
+
   // ---------- Self sign-up: new company on the free trial ----------
   if (path === '/api/signup' && method === 'POST') {
     if (env.SIGNUP_OFF === '1') return err(403, 'New sign-ups are paused. Contact us to start a trial.');
@@ -334,13 +371,19 @@ async function handle(request, env, ctx) {
   if (path === '/api/dashboard' && method === 'GET') return respond(await ccall(env, user, 'dashboard', { show: url.searchParams.get('show') || '' }));
   { const rp = path.match(/^\/api\/rma\/(\d+)\/received-part$/);
     if (rp && method === 'POST') return respond(await ccall(env, user, 'setReceivedPart', { ...(await body(request)), id: rp[1] })); }
-  if (path === '/api/rma/bulk-close' && method === 'POST') return respond(await ccall(env, user, 'bulkClose', await body(request)));
+  if (path === '/api/rma/bulk-close' && method === 'POST') {
+    const r = await ccall(env, user, 'bulkClose', await body(request));
+    ctx.waitUntil(flushCustomerNotices(env, user, url));
+    return respond(r);
+  }
   if (path === '/api/reminders' && method === 'GET') return respond(await ccall(env, user, 'reminders'));
 
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
-    return respond(await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote }));
+    const r = await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote });
+    ctx.waitUntil(flushCustomerNotices(env, user, url));
+    return respond(r);
   }
   if (path === '/api/devices' && method === 'GET') return respond(await ccall(env, user, 'searchDevices', { q: url.searchParams.get('q') }));
   if (path === '/api/devices/history' && method === 'GET') return respond(await ccall(env, user, 'deviceHistory', { sn: url.searchParams.get('sn') }));
@@ -364,7 +407,24 @@ async function handle(request, env, ctx) {
   m = path.match(/^\/api\/rma\/(\d{1,12})\/action$/);
   if (m && method === 'POST') {
     const b = await body(request);
-    return respond(await ccall(env, user, 'ticketAction', { id: m[1], action: String(b.action || ''), data: b.data || {} }));
+    const r = await ccall(env, user, 'ticketAction', { id: m[1], action: String(b.action || ''), data: b.data || {} });
+    ctx.waitUntil(flushCustomerNotices(env, user, url));
+    return respond(r);
+  }
+
+  // Customer status link for one RMA: get it, or email it to the customer.
+  m = path.match(/^\/api\/rma\/(\d{1,12})\/track$/);
+  if (m && method === 'GET') {
+    const r = await ccall(env, user, 'trackLink', { id: m[1] });
+    return respond({ ...r, url: `${await appOrigin(env, url)}/t/${r.token}` });
+  }
+  m = path.match(/^\/api\/rma\/(\d{1,12})\/track\/email$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    const d = await ccall(env, user, 'trackLinkMail', { id: m[1], to: b.to });
+    const sent = await sendMail(env, { to: d.to, ...customerStatusEmail({ appUrl: await appOrigin(env, url), centre: d.centre, view: d.view, token: d.token, contact: d.contact, kind: 'link' }) });
+    if (!sent.ok) return respond({ error: `Could not send: ${sent.error}` }, 502);
+    return respond({ ok: true, to: d.to });
   }
   m = path.match(/^\/api\/rma\/(\d{1,12})\/excel$/);
   if (m && method === 'POST') return respond(await ccall(env, user, 'markExcel', { id: m[1] }));
@@ -525,7 +585,11 @@ async function handle(request, env, ctx) {
 
   // Batches
   if (path === '/api/batches' && method === 'GET') return respond({ batches: await ccall(env, user, 'listBatches'), candidates: await ccall(env, user, 'batchCandidates') });
-  if (path === '/api/batches' && method === 'POST') return respond(await ccall(env, user, 'createBatch', await body(request)));
+  if (path === '/api/batches' && method === 'POST') {
+    const r = await ccall(env, user, 'createBatch', await body(request));
+    ctx.waitUntil(flushCustomerNotices(env, user, url));
+    return respond(r);
+  }
   m = path.match(/^\/api\/batches\/(BATCH-[0-9]{6}(?:-[0-9]{1,3})?)$/);
   if (m && method === 'GET') return respond(await ccall(env, user, 'getBatch', { code: m[1] }));
 
@@ -703,6 +767,23 @@ function companyData(b, creating) {
   try { c.done(); } catch (e) { Object.assign(errs, e.fields || {}); }
   if (Object.keys(errs).length) throw new ValidationError(errs);
   return v;
+}
+
+// Sends the customer step emails queued by the last change (customer_updates setting) and records the results.
+async function flushCustomerNotices(env, user, url) {
+  try {
+    const r = await ccall(env, user, 'takeCustomerNotices', {});
+    if (!r.items?.length) return;
+    const app = await appOrigin(env, url);
+    const results = [];
+    for (const n of r.items) {
+      const s = await sendMail(env, { to: n.to, ...customerStatusEmail({ appUrl: app, centre: r.centre, view: n.view, token: n.token, contact: n.contact }) });
+      results.push({ noticeId: n.noticeId, to: n.to, ok: s.ok, error: s.error });
+    }
+    await ccall(env, user, 'customerNoticeResults', { results });
+  } catch (e) {
+    console.error('customer notices', e);
+  }
 }
 
 async function appOrigin(env, url) {

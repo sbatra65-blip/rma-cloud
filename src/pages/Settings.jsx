@@ -15,7 +15,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
     oem_rma_email_to: s0.oem_rma_email_to, oem_rma_email_cc: s0.oem_rma_email_cc,
     oem_rma_email_subject: s0.oem_rma_email_subject, oem_rma_email_body: s0.oem_rma_email_body,
     reminder_emails: s0.reminder_emails !== '0', reminder_extra_to: s0.reminder_extra_to, awaiting_days: s0.awaiting_days,
-    head_claim_limit: s0.head_claim_limit ?? '2',
+    head_claim_limit: s0.head_claim_limit ?? '2', customer_updates: s0.customer_updates !== '0',
   });
   const [tpl, setTpl] = useState(s0.template);
   const [errors, setErrors] = useState({});
@@ -131,6 +131,14 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
             hint="From the next one, the person raising the RMA sees a warning and must give a reason. 0 turns it off. Only for device categories with a print head.">
             <input type="number" min="0" max="20" value={f.head_claim_limit} onChange={set('head_claim_limit')} />
           </Field>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Customer status updates</h2>
+        <div className="stack">
+          <label className="check"><input type="checkbox" checked={f.customer_updates} onChange={set('customer_updates')} />Email customers a status link when an RMA is raised, sent to the OEM, back from the OEM, dispatched and closed</label>
+          <p className="muted small">Uses the customer email on each RMA. Emails show your company name, and replies come to your company email above. Customers can also check any time at <b>{location.origin}/track</b> with the RMA number.</p>
         </div>
       </section>
 

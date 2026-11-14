@@ -6,6 +6,41 @@ import {
 } from '../ui.jsx';
 import { CoverNote } from './CarePackLink.jsx';
 
+// Private status page for the customer: copy the link or email it to them.
+function CustomerStatusLink({ ticket, editable, onSent }) {
+  const toast = useToast();
+  const [link, setLink] = useState(null);
+  const [busy, setBusy] = useState('');
+  async function load() {
+    if (link) return link;
+    const r = await get(`/api/rma/${ticket.id}/track`);
+    setLink(r);
+    return r;
+  }
+  async function copy() {
+    setBusy('copy');
+    try { const r = await load(); await copyText(r.url); toast('Status link copied'); } catch (e) { toast(e.message); } finally { setBusy(''); }
+  }
+  async function email() {
+    setBusy('email');
+    try { const r = await post(`/api/rma/${ticket.id}/track/email`, {}); toast(`Status link emailed to ${r.to}`); onSent?.(); } catch (e) { toast(e.data?.error || e.message); } finally { setBusy(''); }
+  }
+  const to = ticket.customer_email || ticket.ship_to_email;
+  return (
+    <div className="track-share">
+      <div>
+        <b>Customer status page</b>
+        <p className="muted small">A private link where the customer sees where this RMA is. {to ? 'They also get an email at each main step if customer updates are on in Settings.' : 'Add a customer email to send it by email.'}</p>
+      </div>
+      <div className="row wrap">
+        <button className="btn ghost small" onClick={copy} disabled={!!busy}><Icon name="link" />{busy === 'copy' ? 'Copying…' : 'Copy link'}</button>
+        {link && <a className="btn ghost small" href={link.url} target="_blank" rel="noopener">Open</a>}
+        {editable && to && <button className="btn ghost small" onClick={email} disabled={!!busy}><Icon name="mail" />{busy === 'email' ? 'Sending…' : `Email to ${to}`}</button>}
+      </div>
+    </div>
+  );
+}
+
 // What happens next, in words, for the pinned card at the top of an RMA.
 function nextStep(t) {
   const since = (d) => (d ? Math.max(0, Math.round((Date.now() - Date.parse(`${d}T00:00:00+05:30`)) / 86400000)) : null);
@@ -189,6 +224,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
                 <dt>Ship to</dt><dd>{[t.ship_to_company, t.ship_to_contact_name, t.ship_to_phone, t.ship_to_address].filter(Boolean).join('\n')}</dd>
               </>}
             </dl>
+            <CustomerStatusLink ticket={t} editable={editable} onSent={() => after()} />
           </section>
         </div>
       )}

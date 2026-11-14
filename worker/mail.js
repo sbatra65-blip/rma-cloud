@@ -1,11 +1,17 @@
 // Email through Resend (https://resend.com). Needs the RESEND_API_KEY secret.
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export async function sendMail(env, { to, cc, replyTo, subject, html, text, attachments }) {
+export async function sendMail(env, { to, cc, replyTo, subject, html, text, attachments, fromName }) {
   if (!env.RESEND_API_KEY) return { ok: false, error: 'Email is not set up yet: the RESEND_API_KEY secret is missing.' };
   const toList = Array.isArray(to) ? to : [to];
   // Every email carries a plain-text part too: HTML-only mail scores worse with spam filters.
-  const payload = { from: env.MAIL_FROM || 'TrackMyRMA <onboarding@resend.dev>', to: toList, subject, html, text: text || htmlToText(html) };
+  let from = env.MAIL_FROM || 'TrackMyRMA <onboarding@resend.dev>';
+  // Emails sent on behalf of a service centre show its name: "Acme Service via TrackMyRMA <hello@…>".
+  if (fromName) {
+    const addr = (from.match(/<([^>]+)>/) || [null, from])[1];
+    from = `${String(fromName).replace(/[<>"\r\n]/g, '').slice(0, 60)} via ${env.APP_NAME || 'TrackMyRMA'} <${addr}>`;
+  }
+  const payload = { from, to: toList, subject, html, text: text || htmlToText(html) };
   if (cc && cc.length) payload.cc = cc;
   // Replies go to a real mailbox (MAIL_REPLY_TO) unless the email sets its own, e.g. OEM emails reply to the company.
   const reply = replyTo || env.MAIL_REPLY_TO;
@@ -200,6 +206,32 @@ function paymentHtml(p) {
 const dmyMail = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
 
 // Trial / access reminders: 7 and 1 days before the access date, and when read-only starts.
+// To the service centre's customer: where their RMA is, with the private status link.
+export function customerStatusEmail({ appUrl, centre, view, token, contact, kind = 'update' }) {
+  const link = `${appUrl.replace(/\/+$/, '')}/t/${token}`;
+  const host = new URL(appUrl).host;
+  const head = kind === 'link' ? `Status of RMA ${view.ticketNo}` : `${view.steps[Math.min(view.step, 4)].label}: RMA ${view.ticketNo}`;
+  const steps = view.steps.map((s, i) => {
+    const on = i <= view.step;
+    return `<tr><td style="padding:5px 10px 5px 0;vertical-align:top"><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${on ? '#303090' : '#dcdbe8'}"></span></td>
+      <td style="padding:4px 0;font-size:14px;${on ? 'font-weight:700;color:#1e1b4b' : 'color:#8a8ca3'}">${esc(s.label)}${s.date ? ` <span style="font-weight:400;color:#5f6278">· ${dmyMail(s.date)}</span>` : ''}</td></tr>`;
+  }).join('');
+  const body = `<p>Hello${contact ? ` ${esc(contact)}` : ''},</p>
+    <p>${esc(view.message)}</p>
+    <table style="font-size:14px;background:#f6f5fa;border-radius:10px;padding:10px 14px;margin:12px 0;width:100%">
+      <tr><td style="color:#5f6278;padding:2px 12px 2px 0">RMA number</td><td style="font-weight:700">${esc(view.ticketNo)}</td></tr>
+      ${view.item ? `<tr><td style="color:#5f6278;padding:2px 12px 2px 0">Item</td><td>${esc(view.item)}</td></tr>` : ''}
+      ${view.serial ? `<tr><td style="color:#5f6278;padding:2px 12px 2px 0">Serial</td><td style="font-family:Consolas,monospace">${esc(view.serial)}</td></tr>` : ''}
+      ${view.docket ? `<tr><td style="color:#5f6278;padding:2px 12px 2px 0">Courier / docket</td><td>${esc(view.docket)}</td></tr>` : ''}
+    </table>
+    <table role="presentation" style="margin:8px 0 4px">${steps}</table>
+    ${button(link, 'See live status')}
+    <p style="color:#5f6278;font-size:13px">Questions? Reply to this email or contact ${esc(centre.name)}${centre.phone ? ` on ${esc(centre.phone)}` : ''}.</p>`;
+  const html = shell(centre.name || 'RMA status', head, body, host);
+  const text = `Hello${contact ? ` ${contact}` : ''},\n\n${view.message}\nRMA ${view.ticketNo}${view.item ? ` · ${view.item}` : ''}${view.serial ? ` · SN ${view.serial}` : ''}${view.docket ? `\nCourier / docket: ${view.docket}` : ''}\n\nLive status: ${link}\n\n${centre.name}${centre.phone ? ` · ${centre.phone}` : ''}`;
+  return { subject: `${centre.name ? `${centre.name}: ` : ''}${head}`, html, text, replyTo: centre.email || undefined, fromName: centre.name || undefined };
+}
+
 export function accessEmail({ appName, appUrl, kind, company, info, payment, recipientName }) {
   const host = new URL(appUrl).host;
   const trial = info.plan === 'trial';
