@@ -6,6 +6,43 @@ import {
 } from '../ui.jsx';
 import { CoverNote } from './CarePackLink.jsx';
 
+// "Send tracking email": the customer gets the RMA's status and a link to the live status page.
+function TrackEmailDialog({ ticket, onClose, after }) {
+  const toast = useToast();
+  const [to, setTo] = useState(ticket.customer_email || ticket.ship_to_email || '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function send(e) {
+    e.preventDefault();
+    if (!/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(to.trim())) return setError('Enter a valid email address');
+    setBusy(true);
+    try {
+      const r = await post(`/api/rma/${ticket.id}/track/email`, { to: to.trim() });
+      toast(`Tracking email sent to ${r.to}`);
+      onClose();
+      after?.();
+    } catch (x) {
+      setError(x.data?.error || x.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog open onClose={onClose} title="Send tracking email">
+      <form className="stack" onSubmit={send} noValidate>
+        <p className="muted small">The customer gets the current status of <b>{ticket.ticket_no}</b> and a private link to follow it live, without logging in. Replies come to your company email.</p>
+        <Field label="Customer email" htmlFor="tr-to" error={error} hint={ticket.customer_email ? 'From this RMA. You can change it for this email.' : 'This RMA has no customer email yet; this address is used only for this email.'}>
+          <input id="tr-to" type="email" inputMode="email" autoComplete="email" value={to} onChange={(e) => { setTo(e.target.value); setError(''); }} />
+        </Field>
+        <div className="row end">
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy}><Icon name="mail" size={16} /> {busy ? 'Sending…' : 'Send email'}</button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 // Private status page for the customer: copy the link or email it to them.
 function CustomerStatusLink({ ticket, editable, onSent }) {
   const toast = useToast();
@@ -136,6 +173,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
         <div className="row noprint">
           {t.printer_sn && <Link to={`/devices/${encodeURIComponent(t.printer_sn)}`} className="btn ghost small"><Icon name="history" size={16} /> Device history</Link>}
           {editable && <Link to={`/rma/new?from=${t.id}`} className="btn ghost small" title="Same device, another faulty part"><Icon name="plus" size={16} /> Another part, same device</Link>}
+          {editable && <button className="btn ghost small" onClick={() => setDlg('track')} title="Email the customer a link to this RMA's live status"><Icon name="mail" size={16} /> Send tracking email</button>}
           {editable && <Link to={`/rma/${t.id}/edit`} className="btn ghost small"><Icon name="edit" size={16} /> Edit</Link>}
           {data.canDelete && <button className="btn danger small" onClick={() => setDlg('delete')}><Icon name="trash" size={16} /> Delete</button>}
         </div>
@@ -268,6 +306,7 @@ export default function RmaDetail({ user, boot, id, onChange }) {
       {Object.keys(ACTIONS).includes(dlg) && <ActionDialog action={dlg} ticket={t} settings={user.company.modules?.includes('zoho') ? boot?.settings : null} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'email' && <EmailDialog ticket={t} inbound={inbound} onClose={() => setDlg(null)} after={after} />}
       {dlg === 'draft' && <DraftDialog ticket={t} onClose={() => setDlg(null)} />}
+      {dlg === 'track' && <TrackEmailDialog ticket={t} onClose={() => setDlg(null)} after={after} />}
       <Dialog open={dlg === 'delete'} onClose={() => setDlg(null)} title={`Delete ${t.ticket_no}?`}>
         <p>{data.deleteHint}</p>
         <p className="muted small">The RMA, its photos and history are removed for good.</p>

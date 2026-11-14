@@ -884,6 +884,13 @@ export class Company extends DurableObject {
       batchReady: counts.OEM_RMA_RECEIVED,
       lastWeekOfMonth: Number(today().slice(8, 10)) >= lastDay - 6,
       total: Object.values(counts).reduce((a, b) => a + b, 0),
+      customers: {
+        total: this.one('SELECT COUNT(*) AS n FROM customers WHERE active = 1').n,
+        withOpen: this.one(`SELECT COUNT(DISTINCT t.customer_id) AS n FROM tickets t JOIN customers c ON c.id = t.customer_id
+          WHERE c.active = 1 AND t.status NOT IN ('CLOSED','CLOSED_RETURNED')`).n,
+        newThisMonth: this.one('SELECT COUNT(*) AS n FROM customers WHERE active = 1 AND created_at >= ?', monthStart).n,
+        printers: this.one("SELECT COUNT(DISTINCT UPPER(TRIM(printer_sn))) AS n FROM tickets WHERE TRIM(COALESCE(printer_sn, '')) != ''").n,
+      },
     };
   }
 

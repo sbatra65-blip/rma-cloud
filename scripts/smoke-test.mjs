@@ -161,6 +161,10 @@ ok(r.data.token === trackToken, 'status link stays the same');
 }
 r = await owner('POST', `/api/rma/${t1.id}/track/email`, {});
 ok(r.status === 422, 'emailing the link needs a customer email on the RMA');
+r = await owner('POST', `/api/rma/${t1.id}/track/email`, { to: 'buyer@example.com' });
+ok(r.status === 502 && /Could not send/.test(r.data.error || ''), 'tracking email can go to an address typed for this send', JSON.stringify(r.data));
+r = await owner('GET', '/api/dashboard');
+ok(r.status === 200 && r.data.customers && r.data.customers.total >= 1 && r.data.customers.printers >= 1, 'dashboard shows customer and printer totals', JSON.stringify(r.data.customers));
 
 r = await owner('GET', '/api/rma?q=TEBT25370458');
 ok(r.data.rows.length === 3, 'search by serial');

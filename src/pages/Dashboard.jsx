@@ -91,6 +91,17 @@ export default function Dashboard({ user, boot }) {
         </div>
 
         <div className="side stagger">
+          {d.customers && (
+            <section className="panel">
+              <div className="spread"><h2>Customers</h2><Link to="/masters" className="small">{d.customers.total} customer{d.customers.total === 1 ? '' : 's'}</Link></div>
+              <div style={{ marginTop: 8 }}>
+                <Link to="/masters" className="linkrow"><span>Total customers</span><span className="pill">{d.customers.total}</span></Link>
+                <Link to="/masters" className="linkrow"><span>New this month</span><span className="pill">{d.customers.newThisMonth}</span></Link>
+                <Link to="/rma" className="linkrow"><span>Customers with open RMAs</span><span className="pill">{d.customers.withOpen}</span></Link>
+                <Link to="/devices" className="linkrow"><span>Printers serviced</span><span className="pill">{d.customers.printers}</span></Link>
+              </div>
+            </section>
+          )}
           {cpOn && <CarePackBox cp={d.carePack} />}
           <section className="panel">
             <h2>Open RMAs by age</h2>
