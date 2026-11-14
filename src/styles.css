@@ -803,3 +803,5 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .track-facts dd { margin: 0; overflow-wrap: anywhere; }
 .track-contact { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
 .track-share { display: grid; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.backup-last p { margin: 0; }
+.warntext { color: var(--danger, #b42318); }

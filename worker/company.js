@@ -4,6 +4,7 @@
 import { migrateMethods } from './migrate.js';
 import { deviceMethods, isHeadPart, migrateV3, migrateV4 } from './devices.js';
 import { migrateV5, trackMethods } from './track.js';
+import { backupMethods } from './backup.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
@@ -79,6 +80,8 @@ export const DEFAULT_SETTINGS = {
   awaiting_days: '3',
   head_claim_limit: '2',
   customer_updates: '1',
+  backup_email: 'weekly',
+  backup_extra_to: '',
 };
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
 
@@ -151,6 +154,7 @@ export class Company extends DurableObject {
     try { files = this.all('SELECT id, name, mime, size FROM files ORDER BY id'); } catch { /* none */ }
     return { tables, photos, files };
   }
+  backupFile(user, args) { return this.exportFile(args); }
   exportFile({ kind, id }) {
     if (kind === 'photo') {
       const p = this.one('SELECT * FROM photos WHERE id = ?', id);
@@ -277,6 +281,8 @@ export class Company extends DurableObject {
       putPhoto: 'edit', deletePhoto: 'edit', createBatch: 'edit',
       // customer status page
       trackLink: 'read', trackLinkMail: 'edit', takeCustomerNotices: 'read', customerNoticeResults: 'read',
+      // backups
+      backupStatus: 'admin', backupData: 'admin', backupRecord: 'admin', backupDue: 'system', backupFile: 'admin',
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only
@@ -299,7 +305,7 @@ export class Company extends DurableObject {
     const ok = need === 'read' ? !!role
       : need === 'edit' ? ['Admin', 'Manager', 'Technician'].includes(role)
       : need === 'manage' ? ['Admin', 'Manager'].includes(role)
-      : need === 'admin' ? role === 'Admin'
+      : need === 'admin' ? role === 'Admin' || (role === 'System' && ['backupData', 'backupRecord'].includes(method))
       : need === 'system' ? role === 'System' : false;
     if (!ok) {
       const msg = need === 'edit' ? 'Your role can only view records.'
@@ -340,9 +346,12 @@ export class Company extends DurableObject {
       .bool('reminder_emails').text('reminder_extra_to', { max: 1000, label: 'Extra reminder recipients' })
       .number('awaiting_days', { min: 1, max: 60, int: true, label: 'Days before chasing OEM' })
       .number('head_claim_limit', { min: 0, max: 20, int: true, label: 'Print-head RMAs per printer before a reason is needed' })
-      .bool('customer_updates');
+      .bool('customer_updates')
+      .text('backup_email', { max: 10, label: 'Backup email' }).text('backup_extra_to', { max: 1000, label: 'Also send backups to' });
     const v = c.out;
-    for (const k of ['oem_rma_email_to', 'oem_rma_email_cc', 'reminder_extra_to']) {
+    if (!['off', 'weekly', 'daily'].includes(v.backup_email || 'weekly')) c.fail('backup_email', 'Choose off, weekly or daily');
+    if (!v.backup_email) v.backup_email = 'weekly';
+    for (const k of ['oem_rma_email_to', 'oem_rma_email_cc', 'reminder_extra_to', 'backup_extra_to']) {
       const bad = splitEmails(v[k], true).filter((e) => !/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(e));
       if (bad.length) c.fail(k, `Not a valid email: ${bad[0]}`);
     }
@@ -1294,4 +1303,4 @@ export function parseLooseDate(v) {
   return { date, ms };
 }
 
-Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods, trackMethods);
+Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods, trackMethods, backupMethods);

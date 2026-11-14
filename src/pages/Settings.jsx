@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, del, downloadBlob, get, post } from '../api.js';
-import { CompanyLogo, Field, Icon, copyText, fmtMs, shrinkImage, useToast } from '../ui.jsx';
+import { CompanyLogo, Field, Icon, copyText, fmtMs, shrinkImage, todayISO, useToast } from '../ui.jsx';
+import { buildBackupZip } from '../backupZip.js';
 
 const TOKENS = ['INTERNAL_TICKET', 'CUSTOMER', 'PRINTER_MODEL', 'PRINTER_SERIAL', 'FAULTY_PART', 'FAULTY_PART_SERIAL', 'PART_CODE', 'FAULT_DESCRIPTION',
   'TPH_MILAGE', 'PRINTER_MILAGE', 'FW_VERSION', 'OEM_RMA', 'PO_NUMBER', 'EXCEL_FILE_STEM', 'COMPANY_NAME', 'COMPANY_EMAIL', 'COMPANY_PHONE'];
@@ -16,6 +17,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
     oem_rma_email_subject: s0.oem_rma_email_subject, oem_rma_email_body: s0.oem_rma_email_body,
     reminder_emails: s0.reminder_emails !== '0', reminder_extra_to: s0.reminder_extra_to, awaiting_days: s0.awaiting_days,
     head_claim_limit: s0.head_claim_limit ?? '2', customer_updates: s0.customer_updates !== '0',
+    backup_email: s0.backup_email || 'weekly', backup_extra_to: s0.backup_extra_to || '',
   });
   const [tpl, setTpl] = useState(s0.template);
   const [errors, setErrors] = useState({});
@@ -141,6 +143,8 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
           <p className="muted small">Uses the customer email on each RMA. Emails show your company name, and replies come to your company email above. Customers can also check any time at <b>{location.origin}/track</b> with the RMA number.</p>
         </div>
       </section>
+
+      <BackupPanel user={user} f={f} set={set} errors={errors} />
 
       <section className="panel">
         <h2>Daily reminder email</h2>
@@ -343,6 +347,65 @@ function LogoPanel({ boot, reloadBoot }) {
         {has && <button type="button" className="btn ghost danger-text" disabled={busy} onClick={remove}>Remove</button>}
       </div>
       {error && <p className="small" style={{ color: 'var(--rust)', marginTop: 8 }}>{error}</p>}
+    </section>
+  );
+}
+
+// Backups: scheduled data backup by email (saved with the form), plus "email now" and a full download with photos.
+function BackupPanel({ user, f, set, errors }) {
+  const toast = useToast();
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [step, setStep] = useState('');
+  const [photos, setPhotos] = useState(true);
+  const load = () => get('/api/backup').then(setSt).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function emailNow() {
+    setBusy('email');
+    try { const r = await post('/api/backup/email', {}); toast(`Backup emailed to ${r.to.join(', ')}`); load(); }
+    catch (e) { toast(e.data?.error || e.message); load(); } finally { setBusy(''); }
+  }
+  async function download() {
+    setBusy('download');
+    try {
+      const r = await buildBackupZip({ dataUrl: '/api/backup/data', fileUrl: (kind, id) => `/api/backup/${kind}/${encodeURIComponent(id)}`, photos, onStep: setStep });
+      downloadBlob(r.blob, `${user.company.code}_full_backup_${todayISO()}.zip`);
+      toast(r.missing.length ? `Downloaded; ${r.missing.length} file(s) could not be read` : 'Full backup downloaded');
+      load();
+    } catch (e) { toast(e.message); } finally { setBusy(''); setStep(''); }
+  }
+  const last = st?.last;
+  const mb = (n) => `${(n / 1048576).toFixed(n < 1048576 ? 2 : 1)} MB`;
+  return (
+    <section className="panel" id="backups">
+      <h2>Backups</h2>
+      <div className="stack">
+        <div className="backup-last">
+          {last
+            ? last.ok
+              ? <p><b>Last backup:</b> {fmtMs(last.at, true)} · {mb(last.size)} · emailed to {last.to.join(', ')}{last.stored ? ' · copy kept in cloud storage' : ''}</p>
+              : <p className="warntext"><b>Last backup failed</b> {fmtMs(last.at, true)}: {last.error}</p>
+            : <p className="muted">No backup emailed yet.</p>}
+          {st?.lastDownload && <p className="muted small">Last full download: {fmtMs(st.lastDownload.at, true)} by {st.lastDownload.by}</p>}
+        </div>
+        <div className="fields">
+          <Field label="Email a data backup to Admins" error={errors.backup_email} hint="A ZIP of all your data (opens in Excel), sent at 9 am IST">
+            <select value={f.backup_email} onChange={set('backup_email')}>
+              <option value="weekly">Every Monday</option>
+              <option value="daily">Every day</option>
+              <option value="off">Off</option>
+            </select>
+          </Field>
+          <Field label="Also send backups to" error={errors.backup_extra_to} hint="Optional, separate with commas"><input type="text" value={f.backup_extra_to} onChange={set('backup_extra_to')} /></Field>
+        </div>
+        <div className="row wrap">
+          <button type="button" className="btn ghost small" disabled={!!busy} onClick={emailNow}><Icon name="mail" size={16} /> {busy === 'email' ? 'Sending…' : `Email me a backup now (${user.email})`}</button>
+          <button type="button" className="btn ghost small" disabled={!!busy} onClick={download}><Icon name="download" size={16} /> {busy === 'download' ? 'Working…' : 'Download full backup'}</button>
+          <label className="check small"><input type="checkbox" checked={photos} disabled={!!busy} onChange={(e) => setPhotos(e.target.checked)} />Include photos</label>
+        </div>
+        {step && <p className="small" role="status">{step}</p>}
+        <p className="muted small">Emailed backups have every RMA, customer, care pack, batch and setting, but not photos or PDFs; the full download includes them. Zoho keys and passwords are never included.</p>
+      </div>
     </section>
   );
 }

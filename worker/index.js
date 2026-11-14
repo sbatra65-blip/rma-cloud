@@ -3,7 +3,8 @@ import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
 import { companyFromToken } from './track.js';
-import { accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
+import { BACKUP_KEEP, backupCounts, base64, buildDataZip } from './backup.js';
+import { backupEmail, accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -334,7 +335,7 @@ async function handle(request, env, ctx) {
   const isAdmin = user.role === 'Admin';
 
   // Access date passed: up to 7 days of read-only use (view, export, print). Logging out and own-login changes still work.
-  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping'];
+  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping', '/api/backup/email'];
   if (user.access === 'readonly' && !['GET', 'HEAD'].includes(method) && !READ_ONLY_OK.includes(path)) {
     return json({ error: user.plan === 'trial'
       ? 'Your free trial has ended, so the app is read-only for now. You can still view, print and export. Buy a plan to keep working.'
@@ -410,6 +411,31 @@ async function handle(request, env, ctx) {
     const r = await ccall(env, user, 'ticketAction', { id: m[1], action: String(b.action || ''), data: b.data || {} });
     ctx.waitUntil(flushCustomerNotices(env, user, url));
     return respond(r);
+  }
+
+  // ---------- Backups (Admin) ----------
+  if (path === '/api/backup' && method === 'GET') return respond({ ...(await ccall(env, user, 'backupStatus')), r2: !!env.FILES });
+  if (path === '/api/backup/data' && method === 'GET') {
+    const data = await ccall(env, user, 'backupData', { download: true });
+    return respond({ company: { name: user.companyName, code: user.companyCode }, exportedAt: new Date().toISOString(), ...data });
+  }
+  { const bm = path.match(/^\/api\/backup\/(photo|file)\/([A-Za-z0-9_.:-]{1,80})$/);
+    if (bm && method === 'GET') {
+      const f = await ccall(env, user, 'backupFile', { kind: bm[1], id: bm[2] });
+      if (!f) return err(404, 'Not found');
+      let b = f.bytes;
+      if (f.store === 'r2') {
+        const o = env.FILES ? await env.FILES.get(`co/${user.companyId}/photo/${bm[2]}`) : null;
+        if (!o) return err(404, 'Photo file missing');
+        b = o.body;
+      }
+      return raw(b, { 'Content-Type': f.mime, 'Cache-Control': 'no-store' });
+    }
+  }
+  if (path === '/api/backup/email' && method === 'POST') {
+    const r = await sendBackup(env, user, await appOrigin(env, url), [user.email], 'now');
+    if (!r.ok) return respond({ error: `Backup not sent: ${r.error}` }, 502);
+    return respond({ ok: true, ...r });
   }
 
   // Customer status link for one RMA: get it, or email it to the customer.
@@ -767,6 +793,60 @@ function companyData(b, creating) {
   try { c.done(); } catch (e) { Object.assign(errs, e.fields || {}); }
   if (Object.keys(errs).length) throw new ValidationError(errs);
   return v;
+}
+
+// Builds a company's data backup ZIP, emails it (attached when under 15 MB), keeps a copy in R2 when bound.
+async function sendBackup(env, user, appUrl, to, how) {
+  const at = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const data = await ccall(env, user, 'backupData', {});
+  const company = { name: user.companyName, code: user.companyCode };
+  const zip = buildDataZip({ company, data, at });
+  const counts = backupCounts(data);
+  const fileName = `${company.code}_backup_${at.slice(0, 10)}.zip`;
+  let stored = false;
+  if (env.FILES) {
+    try {
+      const prefix = `co/${user.companyId}/backups/`;
+      await env.FILES.put(`${prefix}${at.slice(0, 10)}.zip`, zip, { httpMetadata: { contentType: 'application/zip' } });
+      stored = true;
+      const list = (await env.FILES.list({ prefix })).objects.map((o) => o.key).sort();
+      for (const k of list.slice(0, Math.max(0, list.length - BACKUP_KEEP))) await env.FILES.delete(k);
+    } catch (e) { console.error('backup r2', e); }
+  }
+  const attached = zip.length < 15 * 1048576;
+  const mail = backupEmail({ appName: env.APP_NAME || 'TrackMyRMA', appUrl, company, at, counts, size: zip.length, attached });
+  const seen = new Set();
+  const sentTo = [];
+  let error = null;
+  for (const email of to) {
+    const k = String(email).toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    const r = await sendMail(env, { to: email, ...mail, attachments: attached ? [{ filename: fileName, content: base64(zip) }] : undefined });
+    if (r.ok) sentTo.push(email); else error = r.error;
+  }
+  const result = { ok: sentTo.length > 0, size: zip.length, to: sentTo, stored, counts, error: sentTo.length ? null : error || 'No one to send to', how };
+  await ccall(env, user, 'backupRecord', { result });
+  return result;
+}
+
+async function runBackups(env, appUrl) {
+  const companies = await dcall(env, 'reminderRecipients', {});
+  const report = [];
+  for (const c of companies) {
+    const sys = { userId: null, name: 'System', role: 'System', companyId: c.companyId, companyName: c.name, companyCode: c.code, ticketPrefix: c.ticketPrefix };
+    try {
+      const d = await ccall(env, sys, 'backupDue');
+      if (!d.due) continue;
+      const to = [...c.people.filter((p) => p.role === 'Admin').map((p) => p.email), ...String(d.extraTo || '').split(/[,;\s]+/).filter(Boolean)];
+      const r = await sendBackup(env, sys, appUrl, to, 'scheduled');
+      report.push({ company: c.code, ok: r.ok, size: r.size, error: r.error });
+    } catch (e) {
+      report.push({ company: c.code, ok: false, error: e.message });
+    }
+  }
+  if (report.length) console.log('backups', JSON.stringify(report));
+  return report;
 }
 
 // Sends the customer step emails queued by the last change (customer_updates setting) and records the results.
@@ -1131,6 +1211,7 @@ export default {
     ctx.waitUntil((async () => {
       const appUrl = env.APP_URL || (await dcall(env, 'appUrl', {})) || 'https://rma-cloud.workers.dev';
       await runReminders(env, appUrl);
+      await runBackups(env, appUrl);
     })());
   },
 };

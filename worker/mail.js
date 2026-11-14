@@ -232,6 +232,23 @@ export function customerStatusEmail({ appUrl, centre, view, token, contact, kind
   return { subject: `${centre.name ? `${centre.name}: ` : ''}${head}`, html, text, replyTo: centre.email || undefined, fromName: centre.name || undefined };
 }
 
+// To a company's Admins: their data backup, attached as a ZIP (or a note when it is too big to attach).
+export function backupEmail({ appName, appUrl, company, at, counts, size, attached }) {
+  const host = new URL(appUrl).host;
+  const mb = (size / 1048576).toFixed(size < 1048576 ? 2 : 1);
+  const body = `<p>Here is the data backup of <b>${esc(company.name)}</b> (${esc(company.code)}) taken on ${esc(at)}.</p>
+    <table style="font-size:14px;background:#f6f5fa;border-radius:10px;padding:10px 14px;margin:12px 0">
+      ${[['RMAs', counts.rmas], ['Customers', counts.customers], ['Care pack batches', counts.carePacks], ['Photos (not attached)', counts.photos], ['Size', `${mb} MB`]]
+        .map(([k, v]) => `<tr><td style="color:#5f6278;padding:2px 14px 2px 0">${k}</td><td style="font-weight:700">${esc(String(v))}</td></tr>`).join('')}
+    </table>
+    ${attached
+      ? '<p>The ZIP is attached: one CSV per table (opens in Excel) and <code>data.json</code>, which can be used to restore. Keep this email, or save the ZIP somewhere safe.</p>'
+      : '<p>The backup is too big to attach. Download it from <b>Settings → Backups</b> in the app.</p>'}
+    <p>For a full backup with photos and PDFs, use <b>Settings → Backups → Download full backup</b>.</p>
+    ${button(`${appUrl.replace(/\/+$/, '')}/settings`, 'Backup settings')}`;
+  return { subject: `${company.name}: data backup ${at.slice(0, 10)}`, html: shell(appName, 'Your data backup', body, host) };
+}
+
 export function accessEmail({ appName, appUrl, kind, company, info, payment, recipientName }) {
   const host = new URL(appUrl).host;
   const trial = info.plan === 'trial';
