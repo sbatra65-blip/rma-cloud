@@ -93,12 +93,13 @@ export default function Dashboard({ user, boot }) {
         <div className="side stagger">
           {d.customers && (
             <section className="panel">
-              <div className="spread"><h2>Customers</h2><Link to="/masters" className="small">{d.customers.total} customer{d.customers.total === 1 ? '' : 's'}</Link></div>
+              <div className="spread"><h2>Stats</h2><Link to="/masters" className="small">{d.customers.total} customer{d.customers.total === 1 ? '' : 's'}</Link></div>
               <div style={{ marginTop: 8 }}>
                 <Link to="/masters" className="linkrow"><span>Total customers</span><span className="pill">{d.customers.total}</span></Link>
                 <Link to="/masters" className="linkrow"><span>New this month</span><span className="pill">{d.customers.newThisMonth}</span></Link>
                 <Link to="/rma" className="linkrow"><span>Customers with open RMAs</span><span className="pill">{d.customers.withOpen}</span></Link>
                 <Link to="/devices" className="linkrow"><span>Printers serviced</span><span className="pill">{d.customers.printers}</span></Link>
+                {cpOn && <Link to="/care-packs" className="linkrow"><span>Printers covered by care packs</span><span className="pill">{d.carePack.devices}</span></Link>}
               </div>
             </section>
           )}
@@ -130,7 +131,7 @@ function CarePackBox({ cp }) {
   ];
   return (
     <section className="panel">
-      <div className="spread"><h2>Care packs</h2><Link to="/care-packs" className="small">{cp.devices} printers covered</Link></div>
+      <div className="spread"><h2>Care packs</h2><Link to="/care-packs" className="small">All care packs</Link></div>
       <form onSubmit={look} style={{ margin: '12px 0 8px', display: 'grid', gap: 6 }}>
         <label htmlFor="cp-sn" className="small" style={{ fontWeight: 650, color: 'var(--text-2)' }}>Is this printer covered?</label>
         <div style={{ display: 'flex', gap: 8 }}>
