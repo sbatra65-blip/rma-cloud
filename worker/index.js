@@ -355,7 +355,7 @@ async function handle(request, env, ctx) {
   const isAdmin = user.role === 'Admin';
 
   // Access date passed: up to 7 days of read-only use (view, export, print). Logging out and own-login changes still work.
-  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping', '/api/backup/email', '/api/billing/order', '/api/billing/verify', '/api/billing/failed'];
+  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping', '/api/backup/email', '/api/billing/order', '/api/billing/verify', '/api/billing/failed', '/api/privacy/support-access'];
   if (user.access === 'readonly' && !['GET', 'HEAD'].includes(method) && !READ_ONLY_OK.includes(path)) {
     return json({ error: user.plan === 'trial'
       ? 'Your free trial has ended, so the app is read-only for now. You can still view, print and export. Buy a plan to keep working.'
@@ -389,7 +389,13 @@ async function handle(request, env, ctx) {
 
   // ---------- RMA data ----------
   if (path === '/api/bootstrap' && method === 'GET') return respond(await ccall(env, user, 'bootstrap'));
-  if (path === '/api/dashboard' && method === 'GET') return respond(await ccall(env, user, 'dashboard', { show: url.searchParams.get('show') || '' }));
+  if (path === '/api/dashboard' && method === 'GET') {
+    const d = await ccall(env, user, 'dashboard', { show: url.searchParams.get('show') || '' });
+    const off = offsiteConfig(env);
+    const sup = await company(env, user.companyId).supportStatus();
+    // Facts for the privacy note: only claims that are true right now are shown.
+    return respond({ ...d, privacy: { offsite: off.ready, encrypted: off.ready && off.encrypted, supportUntil: sup.until } });
+  }
   { const rp = path.match(/^\/api\/rma\/(\d+)\/received-part$/);
     if (rp && method === 'POST') return respond(await ccall(env, user, 'setReceivedPart', { ...(await body(request)), id: rp[1] })); }
   if (path === '/api/rma/bulk-close' && method === 'POST') {
@@ -494,6 +500,10 @@ async function handle(request, env, ctx) {
     if (!r.ok) return respond({ error: `Backup not sent: ${r.error}` }, 502);
     return respond({ ok: true, ...r });
   }
+
+  // Privacy & data (Admin): the support access switch and the list of every copy made of the company's data.
+  if (path === '/api/privacy' && method === 'GET') return respond(await ccall(env, user, 'dataActivity'));
+  if (path === '/api/privacy/support-access' && method === 'POST') return respond(await ccall(env, user, 'supportAccessSet', { hours: (await body(request)).hours }));
 
   // Customer status link for one RMA: get it, or email it to the customer.
   m = path.match(/^\/api\/rma\/(\d{1,12})\/track$/);
@@ -1014,24 +1024,52 @@ async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, op = null
             bytes = f?.bytes || null;
           }
           if (!bytes) { done.push(it); continue; } // gone since; nothing to copy
-          await off.put(`companies/${c.id}/${it.kind}s/${it.id}${EXT[it.mime] || ''}`, bytes, it.mime);
-          done.push(it);
+          const okey = await off.put(`companies/${c.id}/${it.kind}s/${it.id}${EXT[it.mime] || ''}`, bytes, it.mime);
+          done.push({ ...it, okey });
         } catch (e) {
           fail(`${c.code} ${it.kind} ${it.id}`, e);
           if (capped || /^Storage (401|403)/.test(e.message)) break;
         }
       }
-      if (done.length) { rpc++; await stub.offsiteMark({ items: done }); }
+      if (done.length) { rpc++; await stub.offsiteMark({ items: done, day }); }
       uploaded += done.length;
       pending -= done.length;
     } catch (e) { fail(`${c.code} files`, e); }
   }
+  // 3) clean-up: photos / files deleted in the app more than 12 months ago, and every copy of a deleted company
+  for (const c of companies) {
+    if (!timeLeft()) break;
+    try {
+      const stub = company(env, c.id);
+      rpc++;
+      const gone = await stub.offsiteGone({ target: cfg.target, limit: Math.max(1, off.cap - off.requests) });
+      const removed = [];
+      for (const g of gone) {
+        if (!timeLeft()) break;
+        const [kind, id] = [g.key.slice(0, g.key.indexOf(':')), g.key.slice(g.key.indexOf(':') + 1)];
+        const pre = `companies/${c.id}/${kind}s/${id}`;
+        const keys = g.okey ? [g.okey] : (await off.list(pre)).filter((k) => k === pre || k[pre.length] === '.');
+        for (const k of keys) await off.remove(k);
+        removed.push(g.key);
+      }
+      if (removed.length) { rpc++; await stub.offsiteGoneDone({ keys: removed }); }
+    } catch (e) { fail(`${c.code} clean-up`, e); }
+  }
+  let purged = 0;
+  try {
+    for (const p of await dcall(env, 'offsitePurgeList', {})) {
+      if (!timeLeft()) break;
+      const keys = await off.list(`companies/${p.id}/`);
+      for (const k of keys) { if (!timeLeft()) break; await off.remove(k); purged++; }
+      if (timeLeft() && !(await off.list(`companies/${p.id}/`)).length) await dcall(env, 'offsitePurgeDone', { id: p.id });
+    }
+  } catch (e) { fail('Deleted companies', e); }
   const cap = hitAt ? Math.max(5, hitAt - 2) : capped || pending > 0 ? off.cap : prev.cap || null;
   const complete = !errors.length && snapshots === companies.length && pending === 0 && directory;
   const st = {
     at: start, ms: Date.now() - start, day, how, target: cfg.target, encrypted: cfg.encrypted, ok: !errors.length,
     companies: companies.length, snapshots, directoryDay: directory ? day : prev.directoryDay || null, uploaded, pending, bytes: off.bytes,
-    errors: errors.slice(0, 30), cap, limited: pending > 0 && !errors.length, lastOkAt: !errors.length ? start : prev.lastOkAt || null, lastCompleteAt: complete ? start : prev.lastCompleteAt || null,
+    errors: errors.slice(0, 30), purged, cap, limited: pending > 0 && !errors.length, lastOkAt: !errors.length ? start : prev.lastOkAt || null, lastCompleteAt: complete ? start : prev.lastCompleteAt || null,
     alertDay: prev.alertDay || null,
   };
   if (errors.length && st.alertDay !== day) {
@@ -1180,19 +1218,22 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
   let m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})$/);
   if (m && method === 'GET') {
     const d = await dcall(env, 'consoleCompany', { op, id: m[1] });
-    return respond({ ...d, transactions: await company(env, m[1]).transactionCounts() });
+    const stub = company(env, m[1]);
+    return respond({ ...d, transactions: await stub.transactionCounts(), support: await stub.supportStatus() });
   }
   if (m && method === 'POST') return respond(await dcall(env, 'consoleUpdateCompany', { op, id: m[1], data: companyData(await body(request), false), ip: client.ip }));
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/export$/);
   if (m && method === 'GET') {
-    const data = await company(env, m[1]).exportTables();
+    const data = await company(env, m[1]).supportExport({ op });
+    if (data.denied) return err(403, "Support access is off for this company. Its Admin can turn it on for 24 hours: Settings > Privacy & data > Allow support access.", { code: 'support_off' });
     const rows = Object.values(data.tables).reduce((a, t) => a + t.length, 0);
     const co = await dcall(env, 'consoleExportLog', { op, id: m[1], detail: `${rows} rows, ${data.photos.length} photos, ${data.files.length} files`, ip: client.ip });
     return respond({ company: co, exportedAt: new Date().toISOString(), ...data });
   }
   m = path.match(/^\/api\/console\/companies\/([0-9a-f-]{36})\/export\/(photo|file)\/([A-Za-z0-9_.:-]{1,80})$/);
   if (m && method === 'GET') {
-    const f = await company(env, m[1]).exportFile({ kind: m[2], id: m[3] });
+    const f = await company(env, m[1]).supportFile({ kind: m[2], id: m[3] });
+    if (f?.denied) return err(403, "Support access is off for this company. Its Admin can turn it on for 24 hours: Settings > Privacy & data > Allow support access.", { code: 'support_off' });
     if (!f) return err(404, 'Not found');
     let body = f.bytes;
     if (f.store === 'r2') {

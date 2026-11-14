@@ -58,6 +58,7 @@ export default function Auth({ onSignedIn, reason }) {
         {mode === 'invite' && <Invite token={token} onSignedIn={onSignedIn} toLogin={() => setMode('login')} />}
         {mode === 'forgot' && <Forgot toLogin={() => setMode('login')} />}
         {mode === 'reset' && <Reset token={token} toForgot={() => setMode('forgot')} onDone={() => { setNotice('Password changed. Log in with your new password.'); setMode('login'); }} />}
+        <p className="small muted" style={{ textAlign: 'center', margin: '4px 0 0' }}><a href="/privacy" target="_blank" rel="noopener">Privacy</a> · <a href="/terms" target="_blank" rel="noopener">Terms</a></p>
         <VersionLabel />
       </div>
     </div>
@@ -482,6 +483,7 @@ function Signup({ toLogin }) {
       </Field>
       <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" className="hp" value={f.website} onChange={set('website')} />
       <button className="btn primary block" disabled={busy}>{busy ? 'Creating…' : 'Create my company'}</button>
+      <p className="small muted" style={{ textAlign: 'center' }}>By creating a company you agree to the <a href="/terms" target="_blank" rel="noopener">Terms</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy policy</a>.</p>
       <button type="button" className="btn ghost block" onClick={toLogin}>I already have a login</button>
     </form>
   );

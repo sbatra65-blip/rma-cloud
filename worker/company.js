@@ -175,10 +175,59 @@ export class Company extends DurableObject {
     return this.all("SELECT 'cp-oem-' || id AS id, oem_pdf_name AS name, 'application/pdf' AS mime, oem_pdf_size AS size FROM cp_batches WHERE oem_pdf_name IS NOT NULL ORDER BY id");
   }
 
+  // ---------- Privacy: who used this company's data, and the support access switch ----------
+  // data_access lists every time the data left the app as a copy: backups (emailed, downloaded, offsite),
+  // the support access switch, and downloads by TrackMyRMA support. Admins see it under Settings > Privacy & data.
+  dataTable() {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS data_access (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT,
+      kind TEXT NOT NULL, who TEXT, detail TEXT, n INTEGER NOT NULL DEFAULT 0)`);
+  }
+  dataLog(kind, who, detail = null) {
+    this.dataTable();
+    this.sql.exec('INSERT INTO data_access (at, kind, who, detail) VALUES (?,?,?,?)', Date.now(), kind, who || null, detail ? String(detail).slice(0, 500) : null);
+  }
+  supportUntil() {
+    return Number(this.one("SELECT value FROM meta WHERE key = 'support_access_until'")?.value || 0);
+  }
+  supportAccessSet(user, { hours }) {
+    const h = Number(hours);
+    if (h !== 0 && h !== 24) throw httpError(422, 'Choose 24 hours or off');
+    const until = h ? Date.now() + h * 3600e3 : 0;
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('support_access_until', ?)", String(until));
+    this.dataLog(h ? 'support_on' : 'support_off', user.name, h ? `until ${new Date(until).toISOString()}` : null);
+    this.audit(user, h ? 'support_access_on' : 'support_access_off', 'privacy', null, h ? { until } : null);
+    return this.dataActivity(user);
+  }
+  dataActivity() {
+    this.dataTable();
+    const until = this.supportUntil();
+    return {
+      supportUntil: until > Date.now() ? until : null,
+      items: this.all('SELECT id, at, day, kind, who, detail, n FROM data_access ORDER BY at DESC LIMIT 300'),
+    };
+  }
+  // Console (provider) download: only while the company's Admin has support access switched on.
+  supportStatus() {
+    const until = this.supportUntil();
+    return { open: until > Date.now(), until: until > Date.now() ? until : null };
+  }
+  supportExport({ op }) {
+    // Errors don't keep their status across the RPC hop, so a refusal comes back as { denied }.
+    if (!(this.supportUntil() > Date.now())) return { denied: true };
+    const data = this.exportTables();
+    this.dataLog('provider_download', `TrackMyRMA support: ${op?.name || 'operator'}`, `${data.photos.length} photos, ${data.files.length} files`);
+    return data;
+  }
+  supportFile({ kind, id }) {
+    if (!(this.supportUntil() > Date.now())) return { denied: true };
+    return this.exportFile({ kind, id });
+  }
+
   // ---------- Offsite backup (provider; called straight from the Worker, never from the app) ----------
   // Remembers which photos / files are already in the offsite bucket, so each is uploaded once.
   offsiteReset(target) {
     this.sql.exec('CREATE TABLE IF NOT EXISTS offsite_sent (key TEXT PRIMARY KEY, sig TEXT, at INTEGER)');
+    for (const col of ['okey TEXT', 'gone_at INTEGER']) { try { this.sql.exec(`ALTER TABLE offsite_sent ADD COLUMN ${col}`); } catch { /* there */ } }
     const cur = this.one("SELECT value FROM meta WHERE key = 'offsite:target'")?.value;
     if (cur !== target) {
       this.sql.exec('DELETE FROM offsite_sent');
@@ -199,6 +248,7 @@ export class Company extends DurableObject {
   }
   offsiteDataDone({ day }) {
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('offsite:data', ?)", day);
+    this.dataLog('offsite_data', 'Nightly backup', 'Encrypted copy of your data saved to backup storage');
   }
   offsitePending({ target, limit = 100 }) {
     this.offsiteReset(target);
@@ -219,9 +269,44 @@ export class Company extends DurableObject {
     const all = [...files, ...photos];
     return { total: all.length, items: all.slice(0, Math.max(0, limit)) };
   }
-  offsiteMark({ items }) {
+  // Photos and files deleted in the app stay in backup storage for 12 months (so a mistake can be undone), then go.
+  offsiteGone({ target, limit = 50, keepDays = 365 }) {
+    this.offsiteReset(target);
     const now = Date.now();
-    for (const i of items || []) this.sql.exec('INSERT OR REPLACE INTO offsite_sent (key, sig, at) VALUES (?, ?, ?)', `${i.kind}:${i.id}`, String(i.sig), now);
+    let cpIds = [];
+    try { cpIds = this.cpPdfFiles().map((f) => f.id); } catch { /* no care packs */ }
+    const live = (k) => {
+      const [kind, id] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
+      if (kind === 'photo') return !!this.one('SELECT 1 AS x FROM photos WHERE id = ?', id);
+      if (cpIds.includes(id)) return true;
+      try { return !!this.one('SELECT 1 AS x FROM files WHERE id = ?', id); } catch { return false; }
+    };
+    // Full scan once a day is enough.
+    const today = new Date(now + 5.5 * 3600e3).toISOString().slice(0, 10);
+    const scanned = this.one("SELECT value FROM meta WHERE key = 'offsite:gone_scan'")?.value === today;
+    if (!scanned) this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('offsite:gone_scan', ?)", today);
+    for (const r of scanned ? [] : this.all('SELECT key, gone_at FROM offsite_sent')) {
+      const alive = live(r.key);
+      if (!alive && !r.gone_at) this.sql.exec('UPDATE offsite_sent SET gone_at = ? WHERE key = ?', now, r.key);
+      if (alive && r.gone_at) this.sql.exec('UPDATE offsite_sent SET gone_at = NULL WHERE key = ?', r.key);
+    }
+    return this.all('SELECT key, okey FROM offsite_sent WHERE gone_at IS NOT NULL AND gone_at < ? LIMIT ?', now - keepDays * 86400e3, limit);
+  }
+  offsiteGoneDone({ keys }) {
+    for (const k of keys || []) this.sql.exec('DELETE FROM offsite_sent WHERE key = ?', k);
+    return { ok: true };
+  }
+  offsiteMark({ items, day }) {
+    const now = Date.now();
+    for (const i of items || []) this.sql.exec('INSERT OR REPLACE INTO offsite_sent (key, sig, at, okey) VALUES (?, ?, ?, ?)', `${i.kind}:${i.id}`, String(i.sig), now, i.okey || null);
+    // One line per day in the data activity list, however many runs it took.
+    if (items?.length) {
+      this.dataTable();
+      const d = day || new Date(now + 5.5 * 3600e3).toISOString().slice(0, 10);
+      const row = this.one("SELECT id FROM data_access WHERE kind = 'offsite_files' AND day = ?", d);
+      if (row) this.sql.exec('UPDATE data_access SET n = n + ?, at = ? WHERE id = ?', items.length, now, row.id);
+      else this.sql.exec("INSERT INTO data_access (at, day, kind, who, detail, n) VALUES (?, ?, 'offsite_files', 'Nightly backup', 'Encrypted photos and PDFs copied to backup storage', ?)", now, d, items.length);
+    }
     return { ok: true };
   }
 
@@ -343,6 +428,8 @@ export class Company extends DurableObject {
       trackLink: 'read', trackLinkMail: 'edit', takeCustomerNotices: 'read', customerNoticeResults: 'read',
       // backups
       backupStatus: 'admin', backupData: 'admin', backupRecord: 'admin', backupDue: 'system', backupFile: 'admin',
+      // privacy: support access switch and the data activity list (Admins)
+      dataActivity: 'admin', supportAccessSet: 'admin',
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only

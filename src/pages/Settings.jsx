@@ -160,6 +160,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
 
       <div className="savebar"><button className="btn primary" disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
     </form>
+    <PrivacyPanel />
     {user.company.modules?.includes('carepack') && <CarePackSettings s0={s0} reloadBoot={reloadBoot} />}
     {user.company.modules?.includes('zoho') && <ZohoSettings s0={s0} reloadBoot={reloadBoot} />}
     <MigrationPanel />
@@ -407,6 +408,67 @@ function BackupPanel({ user, f, set, errors }) {
         </div>
         {step && <p className="small" role="status">{step}</p>}
         <p className="muted small">Emailed backups have every RMA, customer, care pack, batch and setting, but not photos or PDFs; the full download includes them (PDFs: RMA PDFs and challans, care pack OEM invoices, OEM batch challans). Zoho keys and passwords are never included.</p>
+      </div>
+    </section>
+  );
+}
+
+// Privacy & data: the switch that lets TrackMyRMA support download this company's data (24 hours, off by default),
+// and the list of every copy made of the data: backups (emailed, downloaded, nightly offsite) and support downloads.
+const ACTIVITY = {
+  support_on: ['Support access turned on', 'warn'],
+  support_off: ['Support access turned off', ''],
+  provider_download: ['Data downloaded by TrackMyRMA support', 'warn'],
+  backup_download: ['Full backup downloaded', ''],
+  backup_email: ['Data backup emailed', ''],
+  offsite_data: ['Nightly encrypted backup: data', 'ok'],
+  offsite_files: ['Nightly encrypted backup: photos and PDFs', 'ok'],
+};
+function PrivacyPanel() {
+  const toast = useToast();
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => get('/api/privacy').then(setD).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function setAccess(hours) {
+    setBusy(true);
+    try { setD(await post('/api/privacy/support-access', { hours })); toast(hours ? 'Support access on for 24 hours' : 'Support access turned off'); }
+    catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
+  return (
+    <section className="panel" id="privacy" style={{ marginTop: 16 }}>
+      <h2>Privacy &amp; data</h2>
+      <div className="stack">
+        <div className="privacy-access">
+          <div>
+            <b>TrackMyRMA support access: {d?.supportUntil ? <span style={{ color: 'var(--amber)' }}>on until {fmtMs(d.supportUntil, true)}</span> : 'off'}</b>
+            <p className="small muted">While it is off, TrackMyRMA support cannot download your data from their console. Turn it on only when you ask for help with your data; it switches itself off after 24 hours.</p>
+          </div>
+          {d?.supportUntil
+            ? <button type="button" className="btn ghost small" disabled={busy} onClick={() => setAccess(0)}>Turn off now</button>
+            : <button type="button" className="btn ghost small" disabled={busy || !d} onClick={() => setAccess(24)}>Allow support access for 24 hours</button>}
+        </div>
+        <h3 style={{ margin: '6px 0 0' }}>Data activity</h3>
+        <p className="small muted" style={{ marginTop: -6 }}>Every copy made of your data: your backups, the nightly encrypted backup, and any download by TrackMyRMA support.</p>
+        {!d ? <p className="muted small">Loading…</p> : !d.items.length ? <p className="muted small">Nothing yet.</p> : (
+          <div className="tablewrap"><table className="data">
+            <thead><tr><th>When</th><th>What</th><th>By</th><th>Details</th></tr></thead>
+            <tbody>
+              {d.items.slice(0, 60).map((r) => {
+                const [label, tone] = ACTIVITY[r.kind] || [r.kind, ''];
+                return (
+                  <tr key={r.id}>
+                    <td className="nowrap">{fmtMs(r.at, true)}</td>
+                    <td><span className={`pill ${tone}`}>{label}</span></td>
+                    <td>{r.who || '—'}</td>
+                    <td className="small">{r.kind === 'offsite_files' ? `${r.n} file${r.n === 1 ? '' : 's'} copied` : r.kind === 'support_on' && /^until /.test(r.detail || '') ? `Until ${fmtMs(Date.parse(r.detail.slice(6)), true)}` : r.detail || ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        )}
+        <p className="small"><a href="/privacy" target="_blank" rel="noopener">Privacy policy</a> · <a href="/terms" target="_blank" rel="noopener">Terms of service</a></p>
       </div>
     </section>
   );

@@ -22,11 +22,13 @@ import CarePackPo from './pages/CarePackPo.jsx';
 import DeviceHistory from './pages/DeviceHistory.jsx';
 import Track from './pages/Track.jsx';
 import Billing from './pages/Billing.jsx';
+import Legal from './pages/Legal.jsx';
 
 export default function App() {
   // Public pages for customers of a service centre: no login, no app shell.
   const p = location.pathname;
   if (p.startsWith('/t/') || p === '/track') return <ToastProvider><Track path={p} /></ToastProvider>;
+  if (p === '/privacy' || p === '/terms') return <Legal path={p} />;
   return (
     <ToastProvider>
       <Shell />

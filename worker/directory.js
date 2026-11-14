@@ -192,7 +192,7 @@ export class Directory extends DurableObject {
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
       'signup', 'securityGet', 'securitySet', 'billingInfo', 'billingCreate', 'billingApply', 'billingFailed', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
-      'offsiteCompanies', 'offsiteExport', 'offsiteStatusGet', 'offsiteStatusSave',
+      'offsiteCompanies', 'offsiteExport', 'offsiteStatusGet', 'offsiteStatusSave', 'offsitePurgeList', 'offsitePurgeDone',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1361,6 +1361,14 @@ export class Directory extends DurableObject {
       console_log: t('SELECT * FROM console_log ORDER BY id DESC LIMIT 5000'),
     };
   }
+  offsitePurgeList() {
+    this.sql.exec('CREATE TABLE IF NOT EXISTS offsite_purge (company_id TEXT PRIMARY KEY, at INTEGER NOT NULL)');
+    return this.all('SELECT company_id AS id, at FROM offsite_purge ORDER BY at');
+  }
+  offsitePurgeDone({ id }) {
+    this.sql.exec('DELETE FROM offsite_purge WHERE company_id = ?', String(id));
+    return { ok: true };
+  }
   offsiteStatusGet() {
     try { return JSON.parse(this.one("SELECT value FROM meta WHERE key = 'offsite:status'")?.value || 'null'); } catch { return null; }
   }
@@ -1429,6 +1437,9 @@ export class Directory extends DurableObject {
     this.sql.exec('DELETE FROM auth_log WHERE company_id = ?', id);
     this.sql.exec('DELETE FROM users WHERE company_id = ?', id);
     this.sql.exec('DELETE FROM companies WHERE id = ?', id);
+    // Its offsite backup copies are removed by the next offsite runs.
+    this.sql.exec('CREATE TABLE IF NOT EXISTS offsite_purge (company_id TEXT PRIMARY KEY, at INTEGER NOT NULL)');
+    this.sql.exec('INSERT OR IGNORE INTO offsite_purge (company_id, at) VALUES (?, ?)', id, Date.now());
     this.cLog(op, 'company_deleted', { companyId: id, detail: `${c.name} (${c.code}) deleted with ${users} login${users === 1 ? '' : 's'} and all its data`, ip });
     return { name: c.name, code: c.code, users };
   }

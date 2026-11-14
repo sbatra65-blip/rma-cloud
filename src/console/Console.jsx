@@ -610,6 +610,7 @@ function CompanyPage({ id, appUrl }) {
           <p className="muted">Users {limit(c.users, c.maxUsers)} · signed in now {limit(c.online, c.maxConcurrent)} · {c.validUntil ? `valid until ${fmtDate(c.validUntil)}` : 'no end date'} · created {fmtMs(c.createdAt)}</p>
           {!c.active && c.suspendReason && <p className="small" style={{ marginTop: 4 }}>Reason: {c.suspendReason}</p>}
           {!c.active && data.transactions?.total > 0 && <p className="small muted" style={{ marginTop: 4 }}>Cannot be deleted: {plural(data.transactions.rmas, 'RMA')}, {plural(data.transactions.oemBatches, 'OEM batch', 'OEM batches')} and {plural(data.transactions.carePacks, 'care pack')} recorded. It stays suspended with data kept; use Download data for a copy.</p>}
+          <p className="small muted" style={{ marginTop: 4 }}>Support access: {data.support?.open ? <b style={{ color: 'var(--ok)' }}>on until {fmtMs(data.support.until, true)}</b> : 'off — the company Admin turns it on in Settings > Privacy & data before you can download their data'}</p>
         </div>
         <div className="row">
           <button className="btn ghost small" disabled={!c.online || busy === 'signout'} onClick={() => setDlg('signout')}><Icon name="logout" size={16} /> Sign out everyone</button>
@@ -710,7 +711,7 @@ function CompanyPage({ id, appUrl }) {
       {dlg === 'add' && <AddUser id={id} roles={data.roles} domains={c.emailDomains} onClose={() => setDlg(null)} onDone={(r) => { setDlg(null); setResult(r); reload(); }} />}
       {dlg === 'extend' && <ExtendDialog c={c} onClose={() => setDlg(null)} onDone={async () => { setDlg(null); toast(`Trial extended by ${c.trial.extendDays} days`); setF(null); await reload(); }} />}
       {dlg === 'paid' && <PaidDialog c={c} onClose={() => setDlg(null)} onDone={async () => { setDlg(null); toast('Marked as paid'); setF(null); await reload(); }} />}
-      {dlg === 'export' && <ExportDialog company={c} tx={data.transactions} onClose={() => setDlg(null)} />}
+      {dlg === 'export' && <ExportDialog company={c} tx={data.transactions} support={data.support} onClose={() => setDlg(null)} />}
       {dlg === 'delete' && <DeleteCompanyDialog company={c} users={data.users.length} onClose={() => setDlg(null)}
         onDone={(r) => { toast(`${r.name} (${r.code}) deleted`); navigate('/console', { replace: true }); }} />}
       {dlg === 'suspend' && <SuspendDialog company={c} busy={busy === 'active'} onClose={() => setDlg(null)} onConfirm={(reason) => setActive(false, reason)} />}
@@ -993,7 +994,7 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // Download everything the company has recorded as one ZIP: data.json, a CSV per table, photos and PDFs.
 // Secrets (Zoho keys and tokens) are left out. The download is written to the console log.
-function ExportDialog({ company, tx, onClose }) {
+function ExportDialog({ company, tx, support, onClose }) {
   const [photos, setPhotos] = useState(true);
   const [step, setStep] = useState(null);
   const [error, setError] = useState(null);
@@ -1036,13 +1037,14 @@ function ExportDialog({ company, tx, onClose }) {
       <div className="stack">
         <p>One ZIP with {plural(tx.rmas, 'RMA')}, {plural(tx.oemBatches, 'OEM batch', 'OEM batches')} and {plural(tx.carePacks, 'care pack')}, plus customers, masters, history and settings. Tables open in Excel.</p>
         <label className="check"><input type="checkbox" checked={photos} disabled={running} onChange={(e) => setPhotos(e.target.checked)} />Include RMA photos (bigger, slower)</label>
-        <p className="small muted">Zoho keys and other secrets are left out. This download is recorded in the console log.</p>
+        <p className="small muted">Zoho keys and other secrets are left out. This download is recorded in the console log and shown to the company's Admins under Privacy &amp; data.</p>
+        {!support?.open && <div className="formerror">Support access is off for this company. Its Admin can turn it on for 24 hours in Settings &gt; Privacy &amp; data &gt; Allow support access.</div>}
         {error && <div className="formerror">{error}</div>}
         {running && <p className="small" role="status">{step}</p>}
         {step === 'done' && <p className="small" style={{ color: 'var(--ok)' }} role="status">Downloaded.</p>}
         <div className="row end">
           <button className="btn ghost" disabled={running} onClick={onClose}>{step === 'done' ? 'Close' : 'Cancel'}</button>
-          {step !== 'done' && <button className="btn primary" disabled={running} onClick={go}><Icon name="download" size={18} /> {running ? 'Working…' : 'Download ZIP'}</button>}
+          {step !== 'done' && <button className="btn primary" disabled={running || !support?.open} onClick={go}><Icon name="download" size={18} /> {running ? 'Working…' : 'Download ZIP'}</button>}
         </div>
       </div>
     </Dialog>

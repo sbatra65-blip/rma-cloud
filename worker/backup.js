@@ -62,6 +62,7 @@ export const backupMethods = {
     if (download) {
       this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('backup:download', ?)", JSON.stringify({ at: Date.now(), by: user.name }));
       this.audit(user, 'download', 'backup', null, backupCounts(data));
+      this.dataLog('backup_download', user.name, 'Full backup downloaded from Settings');
     }
     return data;
   },
@@ -83,6 +84,7 @@ export const backupMethods = {
     const r = { at: Date.now(), ok: !!result.ok, size: result.size || 0, to: (result.to || []).slice(0, 10), stored: !!result.stored, counts: result.counts || null, error: result.ok ? null : String(result.error || '').slice(0, 300), how: result.how || 'scheduled' };
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('backup:last', ?)", JSON.stringify(r));
     this.audit(user, r.ok ? 'backup' : 'backup_failed', 'backup', null, { how: r.how, to: r.to, size: r.size, error: r.error });
+    if (r.ok) this.dataLog('backup_email', r.how === 'now' ? user.name : 'Scheduled backup', `Data backup emailed to ${r.to.join(', ')}`);
     return r;
   },
 };

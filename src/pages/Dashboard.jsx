@@ -109,6 +109,7 @@ export default function Dashboard({ user, boot }) {
             <AgeBars ages={d.ages} />
             {d.topParts.length > 0 && <p className="muted small" style={{ marginTop: 14 }}>Most returned part (12 months): <b style={{ color: 'var(--text)' }}>{d.topParts[0].name} ({d.topParts[0].n})</b></p>}
           </section>
+          {d.privacy && <PrivacyNote p={d.privacy} user={user} />}
         </div>
       </div>
     </>
@@ -164,5 +165,24 @@ function AgeBars({ ages }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// Short, plain statement of how the company's data is protected. Every line is backed by how the app works today;
+// lines that depend on server settings (encrypted backup) only show when that setting is on.
+function PrivacyNote({ p, user }) {
+  const admin = can.admin(user);
+  return (
+    <section className="panel privacy-note" aria-labelledby="privacy-h">
+      <h2 id="privacy-h"><Icon name="lock" size={18} /> Your data stays private</h2>
+      <ul>
+        <li><b>Only your team signs in.</b> Your Admin decides who has a login, and every sign-in needs a password and an authenticator code.</li>
+        <li><b>Kept apart from other companies.</b> {user.company.name}'s data is in its own separate database; other companies on TrackMyRMA cannot see it.</li>
+        <li><b>TrackMyRMA support needs your permission.</b> Our support console cannot download your RMAs, customers, photos or PDFs unless your Admin turns on support access, which ends by itself after 24 hours.{p.supportUntil ? <span className="warntext"> Support access is on now, until {new Date(p.supportUntil).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}.</span> : ''}</li>
+        {p.offsite && <li><b>Backups are only for restoring.</b> A copy is saved every night {p.encrypted ? 'and encrypted before it leaves our servers' : 'to separate backup storage'}, so your data can be brought back after a mistake or failure.</li>}
+        <li><b>Nothing is hidden.</b> Every backup and every support download is listed for your Admins{admin ? '' : ' in Settings'}.</li>
+      </ul>
+      <p className="small">{admin && <><Link to="/settings#privacy">See data activity</Link> · </>}<a href="/privacy" target="_blank" rel="noopener">How we handle your data</a></p>
+    </section>
   );
 }
