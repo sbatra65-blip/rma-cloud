@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { del, get, post } from '../api.js';
 import { Dialog, ErrorPanel, Field, Icon, Skeleton, ago, copyText, fmtMs, useLoad, useToast } from '../ui.jsx';
 
@@ -23,6 +23,7 @@ export default function Users({ user }) {
     <>
       <div className="page-head"><div><h1>Users & security</h1>
         <p className="muted">Logins for {user.company.name} ({user.company.code}) only. Each company has its own separate logins and two-step login.</p></div></div>
+      <SignOutSetting />
       <div className="tabs" role="tablist">
         {[['users', 'Users'], ['sessions', 'Signed in now'], ['log', 'Login history'], ['audit', 'Activity']].map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>))}
@@ -213,5 +214,43 @@ function Audit() {
         <tr key={a.id}><td className="nowrap">{fmtMs(a.at, true)}</td><td>{a.by_name}</td><td>{a.action}</td>
           <td>{a.entity}{a.entity_id ? ` ${a.entity_id}` : ''}</td><td className="small mono" style={{ maxWidth: 360, wordBreak: 'break-word' }}>{a.detail || ''}</td></tr>
       ))}</tbody></table></div>
+  );
+}
+
+// Auto sign-out after inactivity, for everyone in this company.
+function SignOutSetting() {
+  const toast = useToast();
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { get('/api/admin/security').then(setD).catch(() => {}); }, []);
+  if (!d) return null;
+  async function change(e) {
+    const idleMinutes = Number(e.target.value);
+    setBusy(true);
+    try {
+      const r = await post('/api/admin/security', { idleMinutes });
+      setD(r);
+      toast(`Auto sign-out set to ${r.effective} minutes. Applies from each person's next sign-in or page refresh.`);
+    } catch (x) { toast(x.message); } finally { setBusy(false); }
+  }
+  const opts = [5, 10, 15, 20, 30, 45, 60];
+  if (d.idleMinutes && !opts.includes(d.idleMinutes)) opts.push(d.idleMinutes);
+  return (
+    <section className="panel" style={{ marginBottom: 14 }}>
+      <div className="row wrap spread">
+        <div>
+          <h2 style={{ margin: 0 }}>Auto sign-out</h2>
+          <p className="muted small">Signs people out after this long without activity, on every device. A warning appears a minute before.</p>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 600, margin: 0 }}>
+          <span className="small">After</span>
+          <select value={d.idleMinutes} onChange={change} disabled={busy} aria-label="Auto sign-out after" style={{ width: 'auto' }}>
+            <option value={0}>{d.defaultMinutes} minutes (default)</option>
+            {opts.sort((a, b) => a - b).filter((m) => m !== d.defaultMinutes || d.idleMinutes === m).map((m) => <option key={m} value={m}>{m} minutes</option>)}
+          </select>
+          <span className="small">without activity</span>
+        </label>
+      </div>
+    </section>
   );
 }

@@ -85,7 +85,7 @@ function Shell() {
 
   useEffect(() => { if (state.phase === 'in') refreshReminders(); }, [path, state.phase, refreshReminders]);
 
-  const { secondsLeft, stay } = useIdle(state.phase === 'in', state.idleMinutes || 5, (why) => signOut(why === 'logout' ? 'logout-remote' : 'idle'));
+  const { secondsLeft, stay } = useIdle(state.phase === 'in', state.idleMinutes || 15, (why) => signOut(why === 'logout' ? 'logout-remote' : 'idle'));
 
   if (state.phase === 'loading') return <div className="loading" style={{ paddingTop: '30vh' }}><BrandLogo height={96} loop /></div>;
   if (state.phase === 'out') {

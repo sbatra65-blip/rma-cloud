@@ -39,7 +39,7 @@
 
   "vars": {
     "APP_NAME": "TrackMyRMA",
-    "IDLE_MINUTES": "5",
+    "IDLE_MINUTES": "15",
     "MAX_SESSION_HOURS": "12",
     "PBKDF2_ITERATIONS": "100000",
     "CONSOLE_IDLE_MINUTES": "15"

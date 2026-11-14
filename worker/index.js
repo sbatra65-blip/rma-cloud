@@ -754,6 +754,11 @@ async function handle(request, env, ctx) {
     return respond(await dcall(env, 'migrateKeyCreate', { actor: user }));
   }
   if (path === '/api/admin/migration-key' && method === 'DELETE') return respond(await dcall(env, 'migrateKeyRevoke', { actor: user }));
+  if (path === '/api/admin/security' && method === 'GET') return respond(await dcall(env, 'securityGet', { actor: user }));
+  if (path === '/api/admin/security' && method === 'POST') {
+    const b = await body(request);
+    return respond(await dcall(env, 'securitySet', { actor: user, idleMinutes: b.idleMinutes, client }));
+  }
   if (path === '/api/admin/sessions' && method === 'GET') return respond(await dcall(env, 'listSessions', { actor: user }));
   m = path.match(/^\/api\/admin\/sessions\/([0-9a-f-]{36})$/);
   if (m && method === 'DELETE') return respond(await dcall(env, 'endSession', { actor: user, id: m[1] }));

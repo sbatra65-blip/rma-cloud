@@ -127,7 +127,7 @@ export class Directory extends DurableObject {
   }
   idleFor(c) {
     const m = Number(c?.idle_minutes) || 0;
-    return (m >= 2 && m <= 60 ? m : Number(this.env.IDLE_MINUTES || 5)) * MIN;
+    return (m >= 2 && m <= 60 ? m : Number(this.env.IDLE_MINUTES || 15)) * MIN;
   }
   // open: normal use. readonly: up to 7 days after the access date (view and export only). ended: locked.
   access(c) {
@@ -191,7 +191,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'signup', 'billingInfo', 'billingCreate', 'billingApply', 'billingFailed', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'signup', 'securityGet', 'securitySet', 'billingInfo', 'billingCreate', 'billingApply', 'billingFailed', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -203,7 +203,7 @@ export class Directory extends DurableObject {
     }
   }
 
-  get idleMs() { return Number(this.env.IDLE_MINUTES || 5) * MIN; }
+  get idleMs() { return Number(this.env.IDLE_MINUTES || 15) * MIN; }
   get maxMs() { return Number(this.env.MAX_SESSION_HOURS || 12) * 60 * MIN; }
   get iterations() { return Number(this.env.PBKDF2_ITERATIONS || 100000); }
   get appName() { return this.env.APP_NAME || 'TrackMyRMA'; }
@@ -823,6 +823,20 @@ export class Directory extends DurableObject {
     this.sql.exec('INSERT INTO pending (token_hash, user_id, purpose, expires) VALUES (?,?,?,?)', await sha256(token), actor.userId, 'migrate', expires);
     this.log('migration_key_created', { companyId: actor.companyId, userId: actor.userId, email: actor.email });
     return { key: token, expires };
+  }
+  // Company Admin: auto sign-out after inactivity (2–60 minutes; 0 = the app default).
+  securityGet({ actor }) {
+    this.requireAdmin(actor);
+    const c = this.one('SELECT idle_minutes FROM companies WHERE id = ?', actor.companyId);
+    return { idleMinutes: c?.idle_minutes || 0, defaultMinutes: Number(this.env.IDLE_MINUTES || 15), effective: this.idleFor(c) / MIN };
+  }
+  securitySet({ actor, idleMinutes, client }) {
+    this.requireAdmin(actor);
+    const m = Number(idleMinutes);
+    if (!Number.isInteger(m) || (m !== 0 && (m < 2 || m > 60))) throw new AuthError(422, 'Choose between 2 and 60 minutes.', { fields: { idleMinutes: 'Choose between 2 and 60 minutes' } });
+    this.sql.exec('UPDATE companies SET idle_minutes = ?, updated_at = ? WHERE id = ?', m, Date.now(), actor.companyId);
+    this.log('security_changed', { companyId: actor.companyId, userId: actor.userId, email: actor.email, detail: `Auto sign-out: ${m ? `${m} minutes` : 'default'}`, client });
+    return this.securityGet({ actor });
   }
   migrateKeyStatus({ actor }) {
     this.requireAdmin(actor);
