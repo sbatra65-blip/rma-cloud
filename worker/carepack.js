@@ -14,7 +14,7 @@ const nz = (s) => (blank(s) ? null : String(s).trim());
 const isAdmin = (u) => u.role === 'Admin';
 const canImport = (u) => ['Admin', 'Manager'].includes(u.role);
 const canEdit = (u) => ['Admin', 'Manager', 'Technician'].includes(u.role);
-const STATUS_LABEL = { IMPORTED: 'Imported', PO_VALIDATED: 'PO Validated', COMPLETE: '100% Verified' };
+const STATUS_LABEL = { IMPORTED: 'Unverified', PO_VALIDATED: 'PO Validated', COMPLETE: '100% Verified' };
 const PDF_ID = (id) => `cp-oem-${id}`;
 export const CP_DEFAULTS = {
   invoice_prefix: 'IS-GST-2627-',
@@ -179,7 +179,7 @@ export const carePackMethods = {
   },
 
   // ---------- registry list ----------
-  cpList(user, { q = '' } = {}) {
+  cpList(user, { q = '', status = '' } = {}) {
     const s = `%${String(q).trim().slice(0, 100)}%`;
     const where = q ? `WHERE b.invoice_number LIKE ?1 OR b.customer_name LIKE ?1 OR b.printer_item_name LIKE ?1 OR b.invoice_item_name LIKE ?1
       OR b.printer_model LIKE ?1 OR b.oem_brand LIKE ?1 OR b.oem_invoice_number LIKE ?1 OR b.care_pack_type LIKE ?1 OR b.po_number LIKE ?1
@@ -190,22 +190,29 @@ export const carePackMethods = {
       (SELECT MAX(warranty_end) FROM cp_devices d WHERE d.batch_id = b.id) AS max_end
       FROM cp_batches b ${where} ORDER BY b.created_at DESC LIMIT 2000`, ...(q ? [s] : []));
     const t = today();
-    return {
-      total: this.one('SELECT COUNT(*) AS n FROM cp_batches').n,
-      rows: rows.map((r) => {
-        const end = r.max_end || (r.invoice_date ? addYears(r.invoice_date, this.yearsFor(r.care_pack_type, r.duration_years)) : null);
-        return { ...r, has_pdf: !!r.has_pdf, status_label: STATUS_LABEL[r.status] || r.status, warranty_end: end, expired: !!(end && end < t) };
-      }),
-    };
+    const all = rows.map((r) => {
+      const end = r.max_end || (r.invoice_date ? addYears(r.invoice_date, this.yearsFor(r.care_pack_type, r.duration_years)) : null);
+      return { ...r, has_pdf: !!r.has_pdf, status_label: STATUS_LABEL[r.status] || r.status, warranty_end: end, expired: !!(end && end < t) };
+    });
+    // Status buttons: counts follow the search box; the chosen button narrows the list.
+    const counts = { all: all.length, IMPORTED: 0, PO_VALIDATED: 0, COMPLETE: 0, expired: 0 };
+    for (const r of all) {
+      if (counts[r.status] !== undefined) counts[r.status]++;
+      if (r.expired) counts.expired++;
+    }
+    const pick = status === 'expired' ? (r) => r.expired : STATUS_LABEL[status] ? (r) => r.status === status : null;
+    return { total: this.one('SELECT COUNT(*) AS n FROM cp_batches').n, counts, rows: pick ? all.filter(pick) : all };
   },
-  cpRegistry(user, { q = '' } = {}) {
-    const rows = this.all(`SELECT b.invoice_number, b.customer_name, COALESCE(b.printer_item_name, b.invoice_item_name, b.printer_model, '') AS product,
+  cpRegistry(user, { q = '', status = '' } = {}) {
+    const rows = this.all(`SELECT b.status AS _status, b.invoice_number, b.customer_name, COALESCE(b.printer_item_name, b.invoice_item_name, b.printer_model, '') AS product,
       COALESCE(d.original_model, b.printer_model) AS model, b.oem_invoice_number, d.serial_number, COALESCE(d.care_pack_type, b.care_pack_type) AS length,
       d.warranty_end FROM cp_batches b LEFT JOIN cp_devices d ON d.batch_id = b.id ORDER BY b.created_at DESC, d.serial_number LIMIT 20000`);
     const t = today();
     const qq = String(q).trim().toLowerCase();
-    return rows.filter((r) => !qq || Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(qq)))
-      .map((r) => ({ ...r, expired: !!(r.warranty_end && r.warranty_end < t) }));
+    return rows.map(({ _status, ...r }) => ({ ...r, _status, expired: !!(r.warranty_end && r.warranty_end < t) }))
+      .filter((r) => (!qq || Object.entries(r).some(([k, v]) => k !== '_status' && String(v ?? '').toLowerCase().includes(qq)))
+        && (status === 'expired' ? r.expired : STATUS_LABEL[status] ? r._status === status : true))
+      .map(({ _status, ...r }) => r);
   },
 
   // ---------- one batch ----------

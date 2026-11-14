@@ -510,6 +510,8 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
 .views a, .views button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--field);
   background: var(--surface); font-size: 0.85rem; font-weight: 600; color: var(--text-2); text-decoration: none; cursor: pointer; font-family: inherit; }
 .views [aria-current='page'], .views [aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.views .count { font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums; padding: 1px 7px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-ink); }
+.views [aria-pressed='true'] .count { background: rgba(255, 255, 255, 0.2); color: #fff; }
 .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
 .timeline li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 12px; padding-bottom: 16px; position: relative; }
 .timeline li::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--s-open)); margin-top: 6px; }

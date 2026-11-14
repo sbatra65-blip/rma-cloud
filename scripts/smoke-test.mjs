@@ -390,6 +390,12 @@ ok(r.data.batch.status === 'PO_VALIDATED' && !r.data.canEditDevices && r.data.ba
 r = await owner('POST', `/api/carepack/${cpId}/oem`, { oem_invoice_number: 'TSC-INV-55', oem_invoice_date: '2026-10-20', oem_amount: 1200, oem_currency: 'USD' });
 r = await owner('POST', `/api/carepack/${cpId}/pdf`, new TextEncoder().encode('%PDF-1.4 fake'), { headers: { 'X-File-Name': 'oem.pdf' } });
 ok(r.status === 200 && r.data.batch.status === 'COMPLETE' && r.data.batch.verified, '100% verified after PO + OEM invoice + PDF');
+r = await owner('GET', '/api/carepack?status=COMPLETE');
+ok(r.status === 200 && r.data.rows.length === 1 && r.data.rows[0].id === cpId && r.data.counts.COMPLETE === 1 && r.data.counts.all > 1, 'status button: 100% verified only', r.data?.counts);
+r = await owner('GET', '/api/carepack?status=IMPORTED');
+ok(r.data.rows.length >= 1 && r.data.rows.every((x) => x.status === 'IMPORTED') && r.data.rows.length === r.data.counts.IMPORTED, 'status button: unverified only');
+r = await owner('GET', '/api/carepack/registry?status=COMPLETE');
+ok(r.data.length >= 1 && r.data.every((x) => x.invoice_number && !('_status' in x)), 'export follows status button');
 r = await owner('POST', `/api/carepack/${cpId}/paid`, { paid: true });
 r = await owner('POST', `/api/carepack/${cpId}/remove`, { kind: 'po', reason: 'wrong', confirmed: true });
 ok(r.status === 409 && /payment is still recorded/.test(r.data.error), 'remove order enforced (payment first)');

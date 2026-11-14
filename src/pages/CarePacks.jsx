@@ -6,11 +6,13 @@ const csvCell = (v) => {
   const s = v === null || v === undefined ? '' : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
+const STATUSES = [['', 'All', 'all'], ['IMPORTED', 'Unverified', 'IMPORTED'], ['PO_VALIDATED', 'PO validated', 'PO_VALIDATED'], ['COMPLETE', '100% verified', 'COMPLETE'], ['expired', 'Expired', 'expired']];
 const dmy = (iso) => (iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '-') : '');
 
 export default function CarePacks({ user }) {
   const toast = useToast();
   const [q, setQ] = useState(query().q || '');
+  const [status, setStatus] = useState(STATUSES.some(([k]) => k && k === query().status) ? query().status : '');
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [picked, setPicked] = useState(new Set());
@@ -18,13 +20,14 @@ export default function CarePacks({ user }) {
   const [n, setN] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => {
-      history.replaceState({}, '', `/care-packs${q ? `?${qs({ q })}` : ''}`);
-      get(`/api/carepack?${qs({ q })}`).then((r) => { setData(r); setError(null); }).catch(setError);
+      const p = qs({ q, status });
+      history.replaceState({}, '', `/care-packs${p ? `?${p}` : ''}`);
+      get(`/api/carepack?${p}`).then((r) => { setData(r); setError(null); }).catch(setError);
     }, q ? 250 : 0);
     return () => clearTimeout(t);
-  }, [q, n]);
+  }, [q, status, n]);
   async function exportCsv() {
-    const rows = await get(`/api/carepack/registry?${qs({ q })}`);
+    const rows = await get(`/api/carepack/registry?${qs({ q, status })}`);
     const head = ['Invoice No', 'Company Name', 'Product', 'Model', 'OEM Invoice No', 'Serial No', 'Care Pack Length', 'Warranty End', 'Expired'];
     const lines = [head.join(','), ...rows.map((r) => [r.invoice_number, r.customer_name, r.product, r.model, r.oem_invoice_number, r.serial_number, r.length, dmy(r.warranty_end), r.expired ? 'Yes' : 'No'].map(csvCell).join(','))];
     downloadBlob(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' }), `CarePack_Registry_${user.company.code}_${new Date().toISOString().slice(0, 10)}.csv`);
@@ -58,11 +61,18 @@ export default function CarePacks({ user }) {
           {admin && <Link to="/care-packs/overrides" className="btn ghost small">Override log</Link>}
         </div>
       </div>
+      <div className="views scroll-sm" role="group" aria-label="Care pack status" style={{ marginBottom: 12 }}>
+        {STATUSES.map(([k, label, c]) => (
+          <button key={k || 'all'} type="button" aria-pressed={status === k} onClick={() => { setStatus(k); setPicked(new Set()); }}>
+            {label}{data?.counts && <span className="count">{data.counts[c]}</span>}
+          </button>
+        ))}
+      </div>
       {error && <ErrorPanel error={error} />}
       {!data ? <Skeleton rows={5} /> : !data.rows.length ? (
-        <Empty icon="shield" title={q ? `No care packs match “${q}”` : 'No care packs yet'}
-          action={!q && can.manage(user) ? <Link to="/care-packs/new" className="btn primary">Register care pack</Link> : null}>
-          {!q && 'Register sales invoices with their printer serials. RMAs then show cover and block expired printers.'}</Empty>
+        <Empty icon="shield" title={q ? `No care packs match “${q}”` : status ? `No ${STATUSES.find(([k]) => k === status)[1].toLowerCase()} care packs` : 'No care packs yet'}
+          action={!q && !status && can.manage(user) ? <Link to="/care-packs/new" className="btn primary">Register care pack</Link> : null}>
+          {!q && !status && 'Register sales invoices with their printer serials. RMAs then show cover and block expired printers.'}</Empty>
       ) : (
         <>
           <div className="tlist mobile-only">
