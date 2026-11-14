@@ -17,7 +17,7 @@ const canEdit = (u) => ['Admin', 'Manager', 'Technician'].includes(u.role);
 const STATUS_LABEL = { IMPORTED: 'Unverified', PO_VALIDATED: 'PO Validated', COMPLETE: '100% Verified' };
 const PDF_ID = (id) => `cp-oem-${id}`;
 export const CP_DEFAULTS = {
-  invoice_prefix: 'IS-GST-2627-',
+  invoice_prefix: '', // hint shown when loading an invoice from Zoho Books, e.g. INV-
   carepack_po_deadline_days: '25',
   carepack_oem_payment_deadline_days: '40',
   zoho_dc: 'in',

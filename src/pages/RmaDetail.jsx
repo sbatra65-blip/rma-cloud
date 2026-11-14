@@ -376,7 +376,7 @@ function ActionDialog({ action, ticket, settings, onClose, after }) {
         {errors.form && !errors.sameAsk && <div className="formerror">{errors.form}</div>}
         {action === 'mark_sent' && <p>Status changes to <b>Awaiting OEM RMA</b>. {ACTIONS.mark_sent.help}</p>}
         {action === 'oem_rma' && <>
-          <Field label="OEM RMA number" required error={errors.oem_rma_number} hint="From the OEM's reply email, e.g. TEBT25160178-RMA">
+          <Field label="OEM RMA number" required error={errors.oem_rma_number} hint="From the OEM's reply email, e.g. RMA-25160178">
             <input type="text" className="upper" autoFocus value={d.oem_rma_number} onChange={set('oem_rma_number')} />
           </Field>
           {errors.sameAsk && <label className="check"><input type="checkbox" checked={confirmSame} onChange={(e) => setConfirmSame(e.target.checked)} />The OEM gave one RMA # for several tickets — use it anyway</label>}

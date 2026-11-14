@@ -23,12 +23,15 @@ import DeviceHistory from './pages/DeviceHistory.jsx';
 import Track from './pages/Track.jsx';
 import Billing from './pages/Billing.jsx';
 import Legal from './pages/Legal.jsx';
+import Guide from './pages/Guide.jsx';
+import { helpFor } from './help.js';
 
 export default function App() {
   // Public pages for customers of a service centre: no login, no app shell.
   const p = location.pathname;
   if (p.startsWith('/t/') || p === '/track') return <ToastProvider><Track path={p} /></ToastProvider>;
   if (p === '/privacy' || p === '/terms') return <Legal path={p} />;
+  if (p === '/help') return <Guide />;
   return (
     <ToastProvider>
       <Shell />
@@ -44,6 +47,7 @@ function Shell() {
   const [state, setState] = useState({ phase: 'loading' }); // loading | out | in
   const [boot, setBoot] = useState(null);
   const [reminderCount, setReminderCount] = useState(0);
+  const [helpOpen, setHelpOpen] = useState(false);
   const phaseRef = useRef('loading');
   phaseRef.current = state.phase;
 
@@ -171,6 +175,7 @@ function Shell() {
           <Link to="/profile" className="navlink" aria-current={route === '/profile' ? 'page' : undefined}><Icon name="user" size={19} />
             <span style={{ display: 'grid', lineHeight: 1.2 }}><b>{user.name}</b><small style={{ opacity: 0.7 }}>{user.role} · {user.company.code}</small></span>
           </Link>
+          <button type="button" className="navlink helplink" onClick={() => setHelpOpen(true)}><Icon name="help" size={19} /> Help on this page</button>
           <button type="button" className="navlink" onClick={() => signOut('logout')}><Icon name="logout" size={19} /> Log out</button>
           <VersionLabel />
         </div>
@@ -178,6 +183,7 @@ function Shell() {
       <header className="topbar">
         <Link to="/" className="brand">{boot.settings?.logoAt ? <CompanyLogo boot={boot} height={34} /> : <BrandLogo height={38} />}<span className="co"><Wordmark /><small>{user.company.name}</small></span></Link>
         <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
+          <button type="button" className="iconbtn" onClick={() => setHelpOpen(true)} aria-label="Help for this screen"><Icon name="help" /></button>
           <Link to="/profile" className="iconbtn" aria-label="My profile"><Icon name="user" /></Link>
           <button type="button" className="iconbtn" onClick={() => signOut('logout')} aria-label="Log out" title="Log out"><Icon name="logout" /></button>
         </div>
@@ -197,6 +203,7 @@ function Shell() {
         <Link to="/more" aria-current={route === '/more' ? 'page' : undefined}><Icon name="more" /><span>More</span></Link>
       </nav>
 
+      <HelpDialog open={helpOpen} route={route} onClose={() => setHelpOpen(false)} />
       <Dialog open={secondsLeft !== null} onClose={stay} title="Still there?">
         <p>For your security you'll be signed out in <b className="num">{secondsLeft}</b> seconds because there has been no activity.</p>
         <div className="row end">
@@ -231,9 +238,34 @@ function More({ user, onLogout }) {
             <Icon name={icon} /><span><h3>{label}</h3><span className="meta">{sub}</span></span>
           </Link>
         ))}
+        <a href="/help" className="tcard" style={{ '--c': 'var(--line)', gridTemplateColumns: 'auto 1fr', display: 'grid', alignItems: 'center', gap: 14 }}>
+          <Icon name="help" /><span><h3>User guide</h3><span className="meta">Every screen explained step by step, with pictures</span></span>
+        </a>
         <button className="btn ghost block" onClick={onLogout}><Icon name="logout" size={18} /> Log out</button>
       </div>
       <VersionLabel />
     </>
+  );
+}
+
+// "?" Help: what this screen is for, the steps, and a link to the matching part of the user guide.
+function HelpDialog({ open, route, onClose }) {
+  const h = helpFor(route);
+  return (
+    <Dialog open={open} onClose={onClose} title={h ? `Help: ${h.title}` : 'Help'}>
+      {h ? (
+        <div className="helpbody">
+          <p>{h.what}</p>
+          <ol>{h.steps.map((x) => <li key={x}>{x}</li>)}</ol>
+          {h.tips.length > 0 && <div className="helptips"><b>Tips</b><ul>{h.tips.map((x) => <li key={x}>{x}</li>)}</ul></div>}
+          <div className="row end">
+            <a className="btn ghost" href={`/help#${h.guide}`} target="_blank" rel="noopener"><Icon name="help" size={18} /> Open the full guide</a>
+            <button className="btn primary" onClick={onClose}>Got it</button>
+          </div>
+        </div>
+      ) : (
+        <div className="helpbody"><p>The user guide explains every screen step by step.</p><div className="row end"><a className="btn primary" href="/help" target="_blank" rel="noopener">Open the user guide</a></div></div>
+      )}
+    </Dialog>
   );
 }

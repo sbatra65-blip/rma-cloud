@@ -150,7 +150,7 @@ export default function CarePackRegister({ user, boot }) {
         {mode === 'zoho' && (
           <div className="row" style={{ alignItems: 'flex-end' }}>
             <Field label="Sales invoice number in Zoho Books" error={errors.zoho} className="wide">
-              <input type="text" value={zohoNo} onChange={(e) => { setZohoNo(e.target.value); touched.current = true; }} placeholder={`${boot.settings?.invoice_prefix || boot.settings?.cpSettings?.invoice_prefix || 'IS-GST-2627-'}0001`} />
+              <input type="text" value={zohoNo} onChange={(e) => { setZohoNo(e.target.value); touched.current = true; }} placeholder={`${boot.settings?.invoice_prefix || boot.settings?.cpSettings?.invoice_prefix || 'INV-'}0001`} />
             </Field>
             <button type="button" className="btn primary" disabled={busy === 'zoho'} onClick={loadZoho}>{busy === 'zoho' ? 'Loading…' : 'Load invoice'}</button>
           </div>

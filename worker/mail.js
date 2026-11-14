@@ -18,7 +18,8 @@ export async function sendMail(env, { to, cc, replyTo, subject, html, text, atta
   if (reply) payload.reply_to = reply;
   if (attachments && attachments.length) payload.attachments = attachments; // [{ filename, content (base64) }]
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    // RESEND_API lets local tests and the guide screenshots point at a stand-in mail server.
+    const res = await fetch(`${env.RESEND_API || 'https://api.resend.com'}/emails`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
