@@ -20,7 +20,8 @@
 import { AwsClient } from 'aws4fetch';
 
 const MAGIC = new TextEncoder().encode('TMRB1');
-const KDF_ITER = 200000;
+// Cloudflare Workers allow at most 100,000 PBKDF2 iterations (local dev does not enforce this).
+const KDF_ITER = 100000;
 const IST = 5.5 * 3600e3;
 export const istDay = (ms = Date.now()) => new Date(ms + IST).toISOString().slice(0, 10);
 
