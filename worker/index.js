@@ -941,17 +941,25 @@ async function runBackups(env, appUrl) {
 // taken once per day; photos and files are uploaded once and remembered.
 const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx', 'image/svg+xml': '.svg' };
-async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, budget = Number(env.OFFSITE_BUDGET) || 700, op = null, ip = null } = {}) {
+async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, op = null, ip = null } = {}) {
   const cfg = offsiteConfig(env);
   if (!cfg.ready) return { ready: false };
   const start = Date.now();
   const day = istDay(start);
   const off = new Offsite(env);
   const prev = (await dcall(env, 'offsiteStatusGet', {})) || {};
+  // Requests to the storage per run: Cloudflare allows 50 on the Free plan and 10,000 on Paid. The limit is learnt
+  // when it is hit, and tried a little higher on each run so an upgrade is picked up by itself.
+  off.cap = Number(env.OFFSITE_MAX_REQUESTS) || (prev.cap ? prev.cap + 5 : 9000);
   let rpc = 0;
-  const spent = () => off.requests + rpc;
-  const timeLeft = () => Date.now() - start < maxMs && spent() < budget;
+  let capped = false;
+  let hitAt = 0;
+  const timeLeft = () => !capped && Date.now() - start < maxMs && off.requests < off.cap && rpc < 900;
   const errors = [];
+  const fail = (label, e) => {
+    if (e.cap) { capped = true; if (e.hit && !hitAt) hitAt = off.requests - 1; return; }
+    errors.push(`${label}: ${e.message}`);
+  };
   let snapshots = 0;
   let uploaded = 0;
   let pending = 0;
@@ -968,7 +976,7 @@ async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, budget = 
       await off.snapshot('directory/', day, { exportedAt: new Date().toISOString(), ...(await dcall(env, 'offsiteExport', {})) });
       directory = true;
     }
-  } catch (e) { errors.push(`Directory: ${e.message}`); }
+  } catch (e) { fail('Directory', e); }
   // 1) today's data snapshot of every company (small; done first so every company is covered each night)
   for (const c of companies) {
     if (!timeLeft()) break;
@@ -982,14 +990,14 @@ async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, budget = 
         await stub.offsiteDataDone({ day });
       }
       snapshots++;
-    } catch (e) { errors.push(`${c.code} data: ${e.message}`); }
+    } catch (e) { fail(`${c.code} data`, e); }
   }
-  // 2) new photos and files, as far as time and request budget allow; the rest carries on in the next run
+  // 2) new photos and files, as far as time and the request limit allow; the rest carries on in the next run
   for (const c of companies) {
     const stub = company(env, c.id);
     try {
       rpc++;
-      const p = await stub.offsitePending({ target: cfg.target, limit: timeLeft() ? Math.max(0, Math.floor((budget - spent()) / 3)) : 0 });
+      const p = await stub.offsitePending({ target: cfg.target, limit: timeLeft() ? Math.max(0, off.cap - off.requests) : 0 });
       pending += p.total;
       const done = [];
       for (const it of p.items) {
@@ -1009,20 +1017,21 @@ async function runOffsite(env, { how = 'scheduled', maxMs = 10 * 60e3, budget = 
           await off.put(`companies/${c.id}/${it.kind}s/${it.id}${EXT[it.mime] || ''}`, bytes, it.mime);
           done.push(it);
         } catch (e) {
-          errors.push(`${c.code} ${it.kind} ${it.id}: ${e.message}`);
-          if (/^Storage (401|403)/.test(e.message)) break;
+          fail(`${c.code} ${it.kind} ${it.id}`, e);
+          if (capped || /^Storage (401|403)/.test(e.message)) break;
         }
       }
       if (done.length) { rpc++; await stub.offsiteMark({ items: done }); }
       uploaded += done.length;
       pending -= done.length;
-    } catch (e) { errors.push(`${c.code} files: ${e.message}`); }
+    } catch (e) { fail(`${c.code} files`, e); }
   }
+  const cap = hitAt ? Math.max(5, hitAt - 2) : capped || pending > 0 ? off.cap : prev.cap || null;
   const complete = !errors.length && snapshots === companies.length && pending === 0 && directory;
   const st = {
     at: start, ms: Date.now() - start, day, how, target: cfg.target, encrypted: cfg.encrypted, ok: !errors.length,
     companies: companies.length, snapshots, directoryDay: directory ? day : prev.directoryDay || null, uploaded, pending, bytes: off.bytes,
-    errors: errors.slice(0, 30), lastOkAt: !errors.length ? start : prev.lastOkAt || null, lastCompleteAt: complete ? start : prev.lastCompleteAt || null,
+    errors: errors.slice(0, 30), cap, limited: pending > 0 && !errors.length, lastOkAt: !errors.length ? start : prev.lastOkAt || null, lastCompleteAt: complete ? start : prev.lastCompleteAt || null,
     alertDay: prev.alertDay || null,
   };
   if (errors.length && st.alertDay !== day) {
@@ -1217,7 +1226,7 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
   }
   if (path === '/api/console/offsite/run' && method === 'POST') {
     if (!offsiteConfig(env).ready) return err(409, 'Offsite storage is not set up yet. Add the OFFSITE_ settings in Cloudflare first.');
-    const st = await runOffsite(env, { how: `console (${op.name})`, maxMs: 60e3, budget: 400, op, ip: client.ip });
+    const st = await runOffsite(env, { how: `console (${op.name})`, maxMs: 60e3, op, ip: client.ip });
     return respond({ ready: true, status: st });
   }
   if (path === '/api/console/payment' && method === 'GET') return respond(await dcall(env, 'consolePaymentGet', {}));

@@ -86,15 +86,23 @@ export class Offsite {
   constructor(env) {
     this.cfg = offsiteConfig(env);
     this.base = `${String(env.OFFSITE_ENDPOINT).replace(/\/+$/, '')}/${encodeURIComponent(this.cfg.bucket)}`;
-    this.aws = new AwsClient({ accessKeyId: env.OFFSITE_KEY_ID, secretAccessKey: env.OFFSITE_SECRET, service: 's3', region: env.OFFSITE_REGION || 'auto', retries: 2 });
+    this.aws = new AwsClient({ accessKeyId: env.OFFSITE_KEY_ID, secretAccessKey: env.OFFSITE_SECRET, service: 's3', region: env.OFFSITE_REGION || 'auto', retries: 0 });
     this.pass = env.OFFSITE_PASSPHRASE || '';
     this.requests = 0;
     this.bytes = 0;
   }
   url(key) { return `${this.base}/${key.split('/').map(encodeURIComponent).join('/')}`; }
   async fetch(url, init) {
+    if (this.cap && this.requests >= this.cap) throw Object.assign(new Error('Request limit for this run reached'), { cap: true });
     this.requests++;
-    const res = await this.aws.fetch(url, init);
+    let res;
+    try {
+      res = await this.aws.fetch(url, init);
+    } catch (e) {
+      // Cloudflare's per-run limit on outside requests (Free plan: 50). Not a failure: the next run carries on.
+      if (/too many subrequests/i.test(e.message)) throw Object.assign(new Error('Request limit for this run reached'), { cap: true, hit: true });
+      throw e;
+    }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
       const code = t.match(/<Code>([^<]+)<\/Code>/)?.[1];

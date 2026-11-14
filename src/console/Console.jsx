@@ -939,14 +939,14 @@ function OffsiteBackup() {
     try {
       const r = await post('/api/console/offsite/run', {});
       const s = r.status;
-      toast(s.errors.length ? `Finished with ${s.errors.length} error(s)` : s.pending ? `${s.uploaded} files copied; ${s.pending} still waiting — run again or leave it to tonight` : 'Offsite backup is up to date', !!s.errors.length);
+      toast(s.errors.length ? `Finished with ${s.errors.length} error(s)` : s.pending ? `${s.uploaded} files copied; ${s.pending} still waiting — press Run now again or leave it to tonight` : 'Offsite backup is up to date', !!s.errors.length);
       await reload();
     } catch (x) { toast(x.message, true); } finally { setBusy(false); }
   }
   return (
     <div className="stack">
       <div className="page-head">
-        <div><h1>Offsite backup</h1><p className="muted">Every night (2–5 am IST) a copy of every company — data, photos and PDFs — goes to storage outside Cloudflare.</p></div>
+        <div><h1>Offsite backup</h1><p className="muted">Every night (1:30–5:30 am IST) a copy of every company — data, photos and PDFs — goes to storage outside Cloudflare.</p></div>
         {data.ready && <button className="btn primary" disabled={busy} onClick={run}><Icon name="upload" size={18} /> {busy ? 'Running… (up to a minute)' : 'Run now'}</button>}
       </div>
       {!data.ready ? (
@@ -977,6 +977,7 @@ function OffsiteBackup() {
                 <dt>When</dt><dd>{fmtMs(st.at, true)} · {st.how} · {Math.round(st.ms / 1000)} s</dd>
                 <dt>Companies</dt><dd>{st.snapshots} of {st.companies} with today's data snapshot{st.day !== data.today ? ` (on ${st.day})` : ''}</dd>
                 <dt>Photos and files</dt><dd>{st.uploaded} copied this run · {mb(st.bytes)}{st.pending ? <span className="warntext"> · {st.pending} still waiting</span> : ' · all copied'}</dd>
+                {st.pending > 0 && st.cap && st.cap < 1000 && <><dt>Pace</dt><dd className="small">About {st.cap} files per run (Cloudflare Free plan limit). Nightly runs every 10 minutes copy roughly {st.cap * 24} a night; press Run now to copy more today. On Workers Paid ($5/month) one run copies thousands.</dd></>}
                 <dt>Logins and companies</dt><dd>{st.directoryDay === data.today ? 'Copied today' : st.directoryDay ? `Last copied ${st.directoryDay}` : 'Not copied yet'}</dd>
               </dl>
               <p className="muted small" style={{ marginTop: 10 }}>Data snapshots: last 30 days plus one a month for 12 months. Photos and PDFs are copied once and never deleted offsite. Passwords and 2FA secrets are not copied; after a restore everyone sets them again. Problems are emailed to the operators.</p>

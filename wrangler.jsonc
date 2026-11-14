@@ -35,8 +35,9 @@
   // "r2_buckets": [{ "binding": "FILES", "bucket_name": "rma-photos" }],
 
   // 09:00 IST (03:30 UTC): reminder emails and emailed backups.
-  // 02:00, 03:00, 04:00, 05:00 IST (20:30-23:30 UTC): offsite backup runs (only when OFFSITE_* is set).
-  "triggers": { "crons": ["30 3 * * *", "30 20-23 * * *"] },
+  // Every 10 minutes from 01:30 to 05:20 IST (20:00-23:50 UTC): offsite backup runs (only when OFFSITE_* is set).
+  // Many short runs, because the Free plan allows 50 storage requests per run.
+  "triggers": { "crons": ["30 3 * * *", "*/10 20-23 * * *"] },
 
   "vars": {
     "APP_NAME": "TrackMyRMA",
