@@ -116,9 +116,11 @@ console.log('RMA tickets');
 r = await owner('POST', '/api/masters/customers', { name: 'Acme Logistics (Gurugram)', city: 'Gurugram' });
 const acmeId = r.data.customers.find((c) => c.name === 'Acme Logistics (Gurugram)').id;
 const base = {
-  customer_id: acmeId, customer_company: 'Typed name is ignored', customer_city: 'Delhi', printer_model: 'TE310', printer_sn: 'teb t25370458',
+  customer_id: acmeId, customer_company: 'Typed name is ignored', customer_city: 'Delhi', customer_email: 'service@acme.example', printer_model: 'TE310', printer_sn: 'teb t25370458',
   faulty_part: 'Head', faulty_part_sn: 'h-1001', failure_description: 'Lines on print', tph_mileage: '12.5',
 };
+r = await owner('POST', '/api/rma', { ticket: { ...base, customer_email: '' } });
+ok(r.status === 422 && r.data.fields?.customer_email, 'new RMA needs a customer email', JSON.stringify(r.data));
 r = await owner('POST', '/api/rma', { ticket: { ...base, customer_id: '' } });
 ok(r.status === 422 && r.data.fields?.customer_company, 'customer must be chosen from the list');
 r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: '' } });
@@ -160,7 +162,7 @@ ok(r.data.token === trackToken, 'status link stays the same');
   ok(x.status === 422, 'empty RMA number refused');
 }
 r = await owner('POST', `/api/rma/${t1.id}/track/email`, {});
-ok(r.status === 422, 'emailing the link needs a customer email on the RMA');
+ok(r.status === 502 && /Could not send/.test(r.data.error || ''), 'tracking email goes to the customer email on the RMA', JSON.stringify(r.data));
 r = await owner('POST', `/api/rma/${t1.id}/track/email`, { to: 'buyer@example.com' });
 ok(r.status === 502 && /Could not send/.test(r.data.error || ''), 'tracking email can go to an address typed for this send', JSON.stringify(r.data));
 r = await owner('GET', '/api/dashboard');
@@ -532,7 +534,7 @@ ok(r.status === 200 && r.data.company.plan === 'trial' && r.data.company.daysLef
   ok(bl.plan === 'trial' && bl.access === 'open' && bl.daysLeft === 30 && bl.trialRmas === 50 && 'payment' in bl, 'trial company sees plan, days left and RMA allowance');
   r = await tara('POST', '/api/masters/customers', { name: 'Trial Customer' });
   const tc = r.data.customers.find((c) => c.name === 'Trial Customer').id;
-  const tb = { customer_id: tc, customer_company: 'x', customer_city: 'Delhi', printer_model: 'TE200', faulty_part: 'Platen', failure_description: 'worn' };
+  const tb = { customer_id: tc, customer_email: 'ops@trial.example', customer_company: 'x', customer_city: 'Delhi', printer_model: 'TE200', faulty_part: 'Platen', failure_description: 'worn' };
   for (let i = 0; i < 50; i++) await tara('POST', '/api/rma', { ticket: { ...tb, printer_sn: `TRL${String(i).padStart(4, '0')}` } });
   r = await tara('GET', '/api/bootstrap');
   ok(r.data.settings.trialRmasUsed === 50, 'trial: RMA count shown');

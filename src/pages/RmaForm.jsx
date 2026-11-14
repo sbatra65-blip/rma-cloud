@@ -141,6 +141,8 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     const errs = {};
     if (!editing && !f.customer_id) errs.customer_company = 'Choose the customer from the list';
     else if (!f.customer_company.trim()) errs.customer_company = 'Customer is required';
+    if (!editing && !f.customer_email.trim()) errs.customer_email = 'Customer email is required (status updates go there)';
+    else if (f.customer_email.trim() && !/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(f.customer_email.trim())) errs.customer_email = 'Enter a valid email address';
     if (!f.printer_model.trim()) errs.printer_model = 'Product model is required';
     if (!f.printer_sn.trim()) errs.printer_sn = 'Product serial number is required';
     parts.forEach((p, i) => {
@@ -289,7 +291,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
           </Field>
           <Field label="Contact name"><input type="text" value={f.customer_contact_name} onChange={set('customer_contact_name')} /></Field>
           <Field label="Phone" error={errors.customer_phone}><input type="tel" value={f.customer_phone} onChange={set('customer_phone')} /></Field>
-          <Field label="Email" error={errors.customer_email}><input type="email" value={f.customer_email} onChange={set('customer_email')} /></Field>
+          <Field label="Email" required={!editing} error={errors.customer_email} hint="Status updates and the tracking link go here"><input type="email" inputMode="email" value={f.customer_email} onChange={set('customer_email')} /></Field>
           <Field label="PO number"><input type="text" value={f.po_number} onChange={set('po_number')} /></Field>
           <Field label="Address" className="wide"><textarea rows={2} style={{ minHeight: 60 }} value={f.customer_address} onChange={set('customer_address')} /></Field>
           <Field label="City"><input type="text" value={f.customer_city} onChange={set('customer_city')} /></Field>

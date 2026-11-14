@@ -612,9 +612,12 @@ export class Company extends DurableObject {
   createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote }) {
     const v = this.checkTicket(ticket);
     // New RMAs: the customer is chosen from the customer list (dropdown), so names stay consistent for reports.
-    const cust = v.customer_id ? this.one('SELECT id, name, active FROM customers WHERE id = ?', v.customer_id) : null;
+    const cust = v.customer_id ? this.one('SELECT id, name, active, email FROM customers WHERE id = ?', v.customer_id) : null;
     if (!cust || !cust.active) throw new ValidationError({ customer_company: 'Choose the customer from the list. An Admin or Manager can add a new customer.' });
     v.customer_company = cust.name;
+    // A customer email is required: it is where status updates and the tracking link go.
+    if (!v.customer_email && /@/.test(cust.email || '')) v.customer_email = String(cust.email).split(/[,;\s]+/)[0];
+    if (!v.customer_email) throw new ValidationError({ customer_email: 'Customer email is required. Status updates and the tracking link go there.' });
     const device = this.cpEnsureEligible(v.printer_sn);
     const dup = this.applyDuplicateGate(user, v, overrideReason, 0);
     // Free trial: up to 50 new RMAs (old records brought in by import or migration do not count).

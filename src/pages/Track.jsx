@@ -22,7 +22,7 @@ export default function Track({ path }) {
       <main className="track-card" id="main">
         {token ? <Status token={token} /> : <Lookup />}
       </main>
-      <p className="track-foot"><a href="/track">Check another RMA</a> · Powered by <a href="https://trackmyrma.com"><Wordmark /></a></p>
+      <p className="track-foot">Powered by <a href="https://trackmyrma.com"><Wordmark /></a></p>
     </div>
   );
 }
@@ -38,7 +38,7 @@ function Status({ token }) {
       <div className="stack">
         <h1 className="track-h">Link not found</h1>
         <p className="muted">{error}</p>
-        <a className="btn primary block" href="/track">Check by RMA number</a>
+        <p className="muted small">Please contact your service centre for a new link.</p>
       </div>
     );
   }
@@ -107,7 +107,6 @@ function Lookup() {
       <div className="stack">
         <h1 className="track-h">Check your email</h1>
         <p className="track-msg">{done}</p>
-        <button className="btn ghost block" onClick={() => { setDone(''); setRma(''); }}>Check another RMA</button>
       </div>
     );
   }
