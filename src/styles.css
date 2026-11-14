@@ -514,6 +514,10 @@ dialog[open] { animation: dlg-in 0.28s var(--ease-out); }
 .timeline li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 12px; padding-bottom: 16px; position: relative; }
 .timeline li::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--s-open)); margin-top: 6px; }
 .timeline li:not(:last-child)::after { content: ''; position: absolute; left: 4px; top: 20px; bottom: 0; width: 2px; background: var(--line); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.kpis div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 2px; }
+.kpis b { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpis span { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 @media print {
   .sidenav, .topbar, .bottomnav, .noprint { display: none !important; }
   .app { display: block; } main { padding: 0; max-width: none; }
@@ -818,8 +822,3 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .plan-sum dd { margin: 0; text-align: right; }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
 .plan-grid > .plan-card { margin: 0; }
-.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
-.kpis a { display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--bg); text-decoration: none; color: var(--text); }
-.kpis a:hover { background: var(--mist); }
-.kpis b { font-size: 1.4rem; letter-spacing: -0.02em; }
-.kpis span { font-size: 0.78rem; color: var(--text-2); line-height: 1.25; }
