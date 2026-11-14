@@ -249,6 +249,32 @@ export function backupEmail({ appName, appUrl, company, at, counts, size, attach
   return { subject: `${company.name}: data backup ${at.slice(0, 10)}`, html: shell(appName, 'Your data backup', body, host) };
 }
 
+const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+function paymentTable(p, planName) {
+  const rows = [['Plan', `${planName} · ${p.period === 'year' ? '1 year' : '1 month'}`], ['Plan price', inr(p.base)],
+    ...(p.credit ? [['Advance adjusted', `− ${inr(p.credit)}`]] : []), ['GST', inr(p.gst)], ['Total paid', inr(p.total)],
+    ['Access until', dmyMail(p.valid_until)], ['Payment ID', p.payment_id]];
+  return `<table style="font-size:14px;background:#f6f5fa;border-radius:10px;padding:10px 14px;margin:12px 0">${rows.map(([k, v]) => `<tr><td style="color:#5f6278;padding:2px 14px 2px 0">${k}</td><td style="font-weight:700">${esc(v)}</td></tr>`).join('')}</table>`;
+}
+// To the company's Admins after an online payment.
+export function paymentReceiptEmail({ appName, appUrl, r, name }) {
+  const p = r.payment;
+  const body = `<p>Hello${name ? ` ${esc(name)}` : ''},</p>
+    <p>Thank you! We have received your payment for <b>${esc(r.company.name)}</b> and your ${esc(appName)} access is extended.</p>
+    ${paymentTable(p, r.planName)}
+    <p>A GST tax invoice will be sent to you separately.</p>
+    ${button(appUrl, `Open ${appName}`)}`;
+  return { subject: `${appName}: payment received — access until ${dmyMail(p.valid_until)}`, html: shell(appName, 'Payment received', body, new URL(appUrl).host) };
+}
+// To the service provider: a company paid online (raise the GST invoice).
+export function paymentAlertEmail({ appName, consoleUrl, r }) {
+  const p = r.payment;
+  const body = `<p><b>${esc(r.company.name)}</b> (${esc(r.company.code)}) paid online.</p>${paymentTable(p, r.planName)}
+    <p>Paid by ${esc(p.user_email || '')}${r.company.gstin ? ` · GSTIN ${esc(r.company.gstin)}` : ''}. Access is already extended; please raise the GST invoice.</p>
+    <p><a href="${esc(consoleUrl)}" style="color:#303090;font-weight:700">Open the console</a></p>`;
+  return { subject: `Payment received: ${r.company.name} ${inr(p.total)}`, html: shell(`${appName} Console`, 'Online payment received', body, new URL(consoleUrl).host) };
+}
+
 export function accessEmail({ appName, appUrl, kind, company, info, payment, recipientName }) {
   const host = new URL(appUrl).host;
   const trial = info.plan === 'trial';

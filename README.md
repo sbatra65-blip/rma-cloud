@@ -101,6 +101,8 @@ existing numbers. Do the same with `Customers` → **Import → Customers**. Pho
 | `APP_URL` | — | main app address (e.g. `https://trackmyrma.com`): email links, and other attached domains redirect here |
 | `MAX_SESSION_HOURS` | 12 | longest session |
 | `PBKDF2_ITERATIONS` | 100000 | lower it if login shows "exceeded resource limits" on the free plan |
+| `RAZORPAY_KEY_ID` (Text) / `RAZORPAY_KEY_SECRET` (Secret) | — | online payments on Plan & billing (Razorpay) |
+| `RAZORPAY_WEBHOOK_SECRET` (Secret) | — | Razorpay webhook to `/api/billing/webhook` (events `order.paid`, `payment.captured`) |
 | `SIGNUP_OFF` | — | set to `1` to pause self sign-up (Start free trial) on the login page |
 | `MAIL_FROM` | Resend test sender | verified sender address |
 | `MAIL_REPLY_TO` | — | where replies go (e.g. `support@trackmyrma.com`); OEM emails still reply to the company |

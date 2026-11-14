@@ -25,12 +25,18 @@ const COMPANY_COLS = [
   ['max_users', 'INTEGER NOT NULL DEFAULT 0'], ['max_concurrent', 'INTEGER NOT NULL DEFAULT 0'], ['valid_until', 'TEXT'], ['modules', 'TEXT'],
   ['idle_minutes', 'INTEGER NOT NULL DEFAULT 0'], ['email_domains', 'TEXT'], ['suspend_reason', 'TEXT'], ['updated_at', 'INTEGER'],
   // Plans: 'trial' (30 days, all modules, 3 users, 50 RMAs) or 'paid'. Existing companies count as paid.
-  ['plan', "TEXT NOT NULL DEFAULT 'paid'"], ['trial_started', 'TEXT'], ['extended_at', 'INTEGER'], ['advance_amount', 'INTEGER'],
+  ['plan', "TEXT NOT NULL DEFAULT 'paid'"], ['trial_started', 'TEXT'], ['extended_at', 'INTEGER'], ['advance_amount', 'INTEGER'], ['plan_id', 'TEXT'],
   ['advance_ref', 'TEXT'], ['paid_at', 'INTEGER'], ['import_signal_at', 'INTEGER'], ['import_rows', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 // Trial and access rules (days are calendar days in IST).
 export const TRIAL = { days: 30, rmas: 50, users: 3, graceDays: 7, retainDays: 60, extendDays: 15, advancePct: 25 };
 const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const addMonths = (iso, n) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), Math.min(d, last))).toISOString().slice(0, 10);
+};
 const todayIST = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 const dmy = (iso) => (iso ? iso.split('-').reverse().join('-') : '');
 
@@ -100,6 +106,12 @@ export class Directory extends DurableObject {
       CREATE TABLE IF NOT EXISTS console_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, op_email TEXT, action TEXT NOT NULL, company_id TEXT, detail TEXT, ip TEXT
       );
+      CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL UNIQUE, company_id TEXT NOT NULL, user_email TEXT,
+        plan TEXT NOT NULL, period TEXT NOT NULL, base INTEGER NOT NULL, credit INTEGER NOT NULL DEFAULT 0, gst INTEGER NOT NULL, total INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created', payment_id TEXT, created_at INTEGER NOT NULL, paid_at INTEGER, valid_from TEXT, valid_until TEXT, via TEXT
+      );
+      CREATE INDEX IF NOT EXISTS payments_company ON payments(company_id, created_at);
     `);
     for (const [c, def] of COMPANY_COLS) {
       try { this.sql.exec(`ALTER TABLE companies ADD COLUMN ${c} ${def}`); } catch { /* already there */ }
@@ -179,7 +191,7 @@ export class Directory extends DurableObject {
       'consoleNeedsSetup', 'consoleSetupStart', 'consoleEnrollFinish', 'consoleLogin', 'consoleVerify', 'consoleTouch', 'consoleLogout',
       'consoleMe', 'consoleChangePassword', 'consoleRecoveryCodes', 'consoleOperators', 'consoleInviteOperator', 'consoleInviteCheck',
       'consoleInviteStart', 'consoleUpdateOperator', 'consoleResetOperator', 'consoleLogView', 'consoleCompanies', 'consoleCompany',
-      'signup', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
+      'signup', 'billingInfo', 'billingCreate', 'billingApply', 'billingFailed', 'trackLimit', 'companyPublic', 'companiesByPrefix', 'operatorEmails', 'providerDigest', 'consoleRemindInfo', 'consoleCreateCompany', 'consoleUpdateCompany', 'consoleDeleteCheck', 'consoleDeleteFinish', 'consoleExportLog', 'consoleExtendTrial', 'consoleMarkPaid', 'consolePaymentGet', 'consolePaymentSave', 'importSignal', 'accessNotices', 'consoleSignOutAll', 'consoleAct',
     ];
     if (!allowed.includes(method)) return { error: { status: 400, message: 'Unknown action' } };
     try {
@@ -1257,6 +1269,44 @@ export class Directory extends DurableObject {
       if (people.length) out.push({ kind, company: { name: c.name, code: c.code }, people, info: this.accessInfo(c) });
     }
     return { notices: out, payment: this.paymentInfo() };
+  }
+
+  // ---------- Online payments (Razorpay) ----------
+  billingInfo({ companyId }) {
+    const c = this.one('SELECT * FROM companies WHERE id = ?', companyId);
+    if (!c) throw new AuthError(404, 'Company not found.');
+    const history = this.all("SELECT order_id, plan, period, base, credit, gst, total, status, payment_id, created_at, paid_at, valid_from, valid_until FROM payments WHERE company_id = ? AND status = 'paid' ORDER BY id DESC LIMIT 50", companyId);
+    return { access: this.accessInfo(c), planId: c.plan_id || null, maxUsers: c.max_users || 0, credit: c.advance_amount || 0, company: { name: c.name, code: c.code, gstin: c.gstin || '' }, history, payment: this.paymentInfo() };
+  }
+  billingCreate({ companyId, email, q, orderId }) {
+    this.sql.exec('INSERT INTO payments (order_id, company_id, user_email, plan, period, base, credit, gst, total, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      orderId, companyId, email, q.plan, q.period, q.base, q.credit, q.gst, q.total, Date.now());
+    return { ok: true };
+  }
+  billingFailed({ orderId }) {
+    this.sql.exec("UPDATE payments SET status = 'failed' WHERE order_id = ? AND status = 'created'", orderId);
+    return { ok: true };
+  }
+  // Payment confirmed (signature or webhook): extend access. Safe to call twice for the same order.
+  billingApply({ orderId, paymentId, via, plans }) {
+    const p = this.one('SELECT * FROM payments WHERE order_id = ?', orderId);
+    if (!p) throw new AuthError(404, 'Payment not found.');
+    const c = this.one('SELECT * FROM companies WHERE id = ?', p.company_id);
+    if (p.status === 'paid') return { already: true, payment: p, company: { id: c.id, name: c.name, code: c.code, validUntil: c.valid_until } };
+    const plan = (plans || []).find((x) => x.id === p.plan) || { users: c.max_users, name: p.plan };
+    const months = p.period === 'year' ? 12 : 1;
+    const today = todayIST();
+    const from = c.valid_until && c.valid_until > today ? c.valid_until : today;
+    const until = addMonths(from, months);
+    const now = Date.now();
+    this.sql.exec("UPDATE payments SET status = 'paid', payment_id = ?, paid_at = ?, valid_from = ?, valid_until = ?, via = ? WHERE order_id = ?", paymentId, now, from, until, via, orderId);
+    this.sql.exec(`UPDATE companies SET plan = 'paid', plan_id = ?, paid_at = ?, valid_until = ?, active = 1, suspend_reason = NULL, max_users = ?,
+      advance_amount = CASE WHEN ? > 0 THEN 0 ELSE advance_amount END, updated_at = ? WHERE id = ?`, p.plan, now, until, plan.users || 0, p.credit, now, c.id);
+    const detail = `${c.name} (${c.code}): paid online ₹${p.total.toLocaleString('en-IN')} (${plan.name}, ${p.period === 'year' ? '1 year' : '1 month'}${p.credit ? `, advance ₹${p.credit.toLocaleString('en-IN')} adjusted` : ''}); access until ${dmy(until)}; Razorpay ${paymentId}`;
+    this.cLog({ email: p.user_email || 'online payment' }, 'company_paid_online', { companyId: c.id, detail });
+    this.log('payment', { companyId: c.id, email: p.user_email, detail });
+    const admins = this.all("SELECT email, name FROM users WHERE company_id = ? AND role = 'Admin' AND disabled = 0", c.id);
+    return { payment: { ...p, status: 'paid', payment_id: paymentId, valid_from: from, valid_until: until }, company: { id: c.id, name: c.name, code: c.code, gstin: c.gstin || '', validUntil: until }, planName: plan.name, admins, operators: this.operatorEmails() };
   }
 
   // ---------- Customer status page (public) ----------

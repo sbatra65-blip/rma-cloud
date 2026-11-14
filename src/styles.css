@@ -805,3 +805,20 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .track-share { display: grid; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .backup-last p { margin: 0; }
 .warntext { color: var(--danger, #b42318); }
+
+/* ---------- Plan & billing ---------- */
+.billing-now { display: flex; flex-wrap: wrap; gap: 18px 40px; }
+.billing-now > div { display: grid; gap: 2px; }
+.billing-now b { font-size: 1.15rem; }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.plan-card { position: relative; display: flex; flex-direction: column; gap: 10px; margin: 0; }
+.plan-card.pop { border: 2px solid var(--accent); }
+.plan-card h3 { font-size: 1.2rem; margin: 0; }
+.plan-tag { position: absolute; top: -11px; left: 16px; background: #c03a96; color: #fff; font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+.plan-price b { font-size: 1.7rem; letter-spacing: -0.02em; }
+.plan-feat { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 0.92rem; }
+.plan-feat li { display: flex; gap: 8px; align-items: center; }
+.plan-sum { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: auto 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 0.92rem; }
+.plan-sum dd { margin: 0; text-align: right; }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12); }
+.plan-grid > .plan-card { margin: 0; }

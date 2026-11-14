@@ -4,7 +4,8 @@ import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
 import { companyFromToken } from './track.js';
 import { BACKUP_KEEP, backupCounts, base64, buildDataZip } from './backup.js';
-import { backupEmail, accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
+import { GST_PCT, PERIODS, PLANS, checkPaymentSignature, checkWebhookSignature, createOrder, onlineReady, quote } from './billing.js';
+import { backupEmail, paymentAlertEmail, paymentReceiptEmail, accessEmail, consoleInviteEmail, inviteEmail, inviteLink, oemEmailHtml, passwordChangedEmail, customerStatusEmail, providerDigestEmail, reminderEmail, resetEmail, sendMail, signupAlertEmail, signupEmail } from './mail.js';
 import { timingSafeEqual, uuid } from './crypto.js';
 import defaultTemplate from './default-template.xlsx';
 
@@ -146,6 +147,23 @@ async function handle(request, env, ctx) {
   if (path.startsWith('/api/migrate/')) {
     if (env.CONSOLE_HOST && url.hostname === env.CONSOLE_HOST) return err(404, 'Not found');
     return handleMigrate(request, env, url, path, method);
+  }
+
+  // Razorpay webhook (server to server, signed): confirms payments even if the browser closed early.
+  if (path === '/api/billing/webhook' && method === 'POST') {
+    const text = await request.text();
+    if (!(await checkWebhookSignature(env, text, request.headers.get('X-Razorpay-Signature')))) return err(400, 'Bad signature');
+    let ev = {};
+    try { ev = JSON.parse(text); } catch { return err(400, 'Bad JSON'); }
+    const pay = ev?.payload?.payment?.entity;
+    const orderId = ev?.payload?.order?.entity?.id || pay?.order_id;
+    if (['order.paid', 'payment.captured'].includes(ev.event) && orderId && pay?.id) {
+      try {
+        const r = await dcall(env, 'billingApply', { orderId, paymentId: pay.id, via: 'webhook', plans: PLANS });
+        if (!r.already) ctx.waitUntil(paymentEmails(env, await appOrigin(env, url), r));
+      } catch (e) { if (e.status !== 404) throw e; }
+    }
+    return json({ ok: true });
   }
 
   // Block cross-site writes: every non-GET must come from this site's own pages.
@@ -335,7 +353,7 @@ async function handle(request, env, ctx) {
   const isAdmin = user.role === 'Admin';
 
   // Access date passed: up to 7 days of read-only use (view, export, print). Logging out and own-login changes still work.
-  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping', '/api/backup/email'];
+  const READ_ONLY_OK = ['/api/auth/logout', '/api/auth/change-password', '/api/auth/recovery-codes', '/api/session/ping', '/api/backup/email', '/api/billing/order', '/api/billing/verify', '/api/billing/failed'];
   if (user.access === 'readonly' && !['GET', 'HEAD'].includes(method) && !READ_ONLY_OK.includes(path)) {
     return json({ error: user.plan === 'trial'
       ? 'Your free trial has ended, so the app is read-only for now. You can still view, print and export. Buy a plan to keep working.'
@@ -411,6 +429,43 @@ async function handle(request, env, ctx) {
     const r = await ccall(env, user, 'ticketAction', { id: m[1], action: String(b.action || ''), data: b.data || {} });
     ctx.waitUntil(flushCustomerNotices(env, user, url));
     return respond(r);
+  }
+
+  // ---------- Plan & billing (Admin): pay online ----------
+  if (path.startsWith('/api/billing/') || path === '/api/billing') {
+    if (!isAdmin) return err(403, 'Only an Admin can buy or renew the plan.');
+    if (path === '/api/billing' && method === 'GET') {
+      const info = await dcall(env, 'billingInfo', { companyId: user.companyId });
+      const options = PLANS.flatMap((p) => Object.keys(PERIODS).map((per) => quote(p.id, per, info.credit)));
+      return respond({ ...info, online: onlineReady(env), plans: PLANS, periods: PERIODS, gstPct: GST_PCT, options });
+    }
+    if (path === '/api/billing/order' && method === 'POST') {
+      if (!onlineReady(env)) return err(503, 'Online payment is not set up yet. Use the bank / UPI details instead.');
+      const b = await body(request);
+      const info = await dcall(env, 'billingInfo', { companyId: user.companyId });
+      const q = quote(String(b.plan || ''), String(b.period || ''), info.credit);
+      if (!q) throw new ValidationError({ plan: 'Choose a plan and period' });
+      const order = await createOrder(env, { amountPaise: q.total * 100, receipt: `${user.companyCode}-${Date.now().toString(36)}`.slice(0, 40),
+        notes: { company: user.companyCode, plan: q.plan, period: q.period } });
+      await dcall(env, 'billingCreate', { companyId: user.companyId, email: user.email, q, orderId: order.id });
+      return respond({ keyId: env.RAZORPAY_KEY_ID, orderId: order.id, amount: order.amount, currency: order.currency, quote: q,
+        name: env.APP_NAME || 'TrackMyRMA', description: `${q.planName} plan · ${q.periodLabel} · ${user.companyName}`, prefill: { name: user.name, email: user.email } });
+    }
+    if (path === '/api/billing/verify' && method === 'POST') {
+      const b = await body(request);
+      const orderId = String(b.razorpay_order_id || '');
+      const paymentId = String(b.razorpay_payment_id || '');
+      if (!(await checkPaymentSignature(env, { orderId, paymentId, signature: b.razorpay_signature }))) return err(400, 'We could not confirm this payment. If money was taken, it will be confirmed automatically within a few minutes; otherwise contact us.');
+      const r = await dcall(env, 'billingApply', { orderId, paymentId, via: 'checkout', plans: PLANS });
+      if (r.company.id !== user.companyId) return err(403, 'This payment belongs to another company.');
+      if (!r.already) ctx.waitUntil(paymentEmails(env, await appOrigin(env, url), r));
+      return respond({ ok: true, validUntil: r.company.validUntil });
+    }
+    if (path === '/api/billing/failed' && method === 'POST') {
+      const b = await body(request);
+      await dcall(env, 'billingFailed', { orderId: String(b.orderId || '') });
+      return respond({ ok: true });
+    }
   }
 
   // ---------- Backups (Admin) ----------
@@ -793,6 +848,14 @@ function companyData(b, creating) {
   try { c.done(); } catch (e) { Object.assign(errs, e.fields || {}); }
   if (Object.keys(errs).length) throw new ValidationError(errs);
   return v;
+}
+
+// Receipt to the company's Admins, alert to the service provider.
+async function paymentEmails(env, appUrl, r) {
+  const appName = env.APP_NAME || 'TrackMyRMA';
+  for (const a of r.admins || []) await sendMail(env, { to: a.email, ...paymentReceiptEmail({ appName, appUrl, r, name: a.name }) });
+  const consoleUrl = env.CONSOLE_HOST ? `https://${env.CONSOLE_HOST}/console` : `${appUrl}/console`;
+  for (const o of r.operators || []) await sendMail(env, { to: o.email, ...paymentAlertEmail({ appName, consoleUrl, r }) });
 }
 
 // Builds a company's data backup ZIP, emails it (attached when under 15 MB), keeps a copy in R2 when bound.

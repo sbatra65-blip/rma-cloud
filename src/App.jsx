@@ -21,6 +21,7 @@ import CarePackDetail from './pages/CarePackDetail.jsx';
 import CarePackPo from './pages/CarePackPo.jsx';
 import DeviceHistory from './pages/DeviceHistory.jsx';
 import Track from './pages/Track.jsx';
+import Billing from './pages/Billing.jsx';
 
 export default function App() {
   // Public pages for customers of a service centre: no login, no app shell.
@@ -127,6 +128,7 @@ function Shell() {
   else if (route === '/masters') page = <Masters {...common} />;
   else if (route === '/settings' && can.admin(user)) page = <Settings {...common} onUserChange={(u) => setState((s) => ({ ...s, user: u }))} />;
   else if (route === '/users' && can.admin(user)) page = <Users {...common} />;
+  else if (route === '/billing' && can.admin(user)) page = <Billing {...common} />;
   else if (route === '/profile') page = <Profile {...common} idleMinutes={state.idleMinutes} onLogout={() => signOut('logout')} />;
   else if (route === '/more') page = <More user={user} onLogout={() => signOut('logout')} />;
   else page = <div className="panel"><h1>Page not found</h1><p className="muted" style={{ marginTop: 8 }}><Link to="/">Go to the dashboard</Link></p></div>;
@@ -145,6 +147,7 @@ function Shell() {
     can.admin(user) && { group: 'Admin' },
     can.admin(user) && { to: '/users', icon: 'users', label: 'Users & security' },
     can.admin(user) && { to: '/settings', icon: 'gear', label: 'Company settings' },
+    can.admin(user) && { to: '/billing', icon: 'card', label: 'Plan & billing' },
   ].filter(Boolean);
   const current = (to) => (to === '/' ? route === '/' : route === to || (route.startsWith(to + '/') && route !== '/rma/new'));
 
@@ -214,6 +217,7 @@ function More({ user, onLogout }) {
     can.manage(user) && has('import') && ['/import', 'upload', 'Import', 'Bring in RMAs and customers from Excel'],
     can.admin(user) && ['/users', 'users', 'Users & security', 'Logins, roles, sessions, login history'],
     can.admin(user) && ['/settings', 'gear', 'Company settings', 'Company details, OEM email, Excel template, care packs, Zoho Books'],
+    can.admin(user) && ['/billing', 'card', 'Plan & billing', 'Buy or renew your plan online, payments'],
     ['/profile', 'user', 'My profile', 'Password, recovery codes'],
   ].filter(Boolean);
   return (

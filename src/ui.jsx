@@ -126,6 +126,7 @@ const paths = {
   trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6',
   x: 'M18 6L6 18M6 6l12 12',
   check: 'M20 6L9 17l-5-5',
+  card: 'M3 5h18a2 2 0 012 2v10a2 2 0 01-2 2H3a2 2 0 01-2-2V7a2 2 0 012-2zM1 10h22M5 15h4',
   shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
   lock: 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4',
   logout: 'M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9',
@@ -502,6 +503,7 @@ export function TrialBar({ user, boot }) {
         <Dialog open onClose={() => setOpen(false)} title={trial ? 'Buy TrackMyRMA' : 'Renew TrackMyRMA'}>
           <div className="stack">
             <p>{trial ? 'Everything you have entered during the trial stays as it is when you buy.' : 'Your data and settings carry on as they are.'} After payment, your service provider switches the plan on, usually the same day.</p>
+            {user.role === 'Admin' && <a className="btn primary block" href="/billing" onClick={(e) => { e.preventDefault(); setOpen(false); navigate('/billing'); }}><Icon name="card" size={18} /> Buy or renew online (UPI, card)</a>}
             <PaymentBox p={b.payment} />
             {trial && !b.extended && <div className="notice small">Need more time? Pay a {b.trial.advancePct}% advance and the trial is extended by {b.trial.extendDays} days. The advance is adjusted against your purchase.</div>}
             <div className="row end"><button className="btn ghost" onClick={() => setOpen(false)}>Close</button></div>

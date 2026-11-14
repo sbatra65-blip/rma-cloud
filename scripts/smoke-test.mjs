@@ -759,6 +759,44 @@ console.log('Self sign-up (new company on the free trial)');
   ok(x.status === 200 && x.data.user.role === 'Admin', 'person who signed up is the Admin with 2FA');
   x = await sign('GET', '/api/auth/me');
   ok(x.data.user?.company?.billing?.plan === 'trial', 'new company is on the free trial', JSON.stringify(x.data).slice(0, 300));
+console.log('Plan & billing (online payment)');
+  {
+  const RZP_SECRET = process.env.RZP_SECRET || '';
+  const RZP_WEBHOOK = process.env.RZP_WEBHOOK || '';
+  let x = await sign('GET', '/api/billing');
+  ok(x.status === 200 && x.data.plans.length === 3 && x.data.options.length === 6, 'billing lists 3 plans × month/year', JSON.stringify(x.data).slice(0, 200));
+  const biz = x.data.options.find((o) => o.plan === 'business' && o.period === 'year');
+  ok(biz.base === 39990 && biz.gst === 7198 && biz.total === 47188, 'yearly = 10 months, plus 18% GST', JSON.stringify(biz));
+    if (!RZP_SECRET) {
+    ok(x && (await sign('GET', '/api/billing')).data.online === false, 'without Razorpay keys, billing shows bank / UPI details');
+    x = await sign('POST', '/api/billing/order', { plan: 'business', period: 'year' });
+    ok(x.status === 503, 'no online order without Razorpay keys');
+  } else {
+    x = await sign('POST', '/api/billing/order', { plan: 'nope', period: 'year' });
+    ok(x.status === 422, 'unknown plan refused');
+    x = await sign('POST', '/api/billing/order', { plan: 'business', period: 'year' });
+    ok(x.status === 200 && x.data.orderId && x.data.amount === 4718800 && x.data.keyId, 'order created for the GST-inclusive amount', JSON.stringify(x.data));
+    const orderId = x.data.orderId;
+    x = await sign('POST', '/api/billing/verify', { razorpay_order_id: orderId, razorpay_payment_id: 'pay_TEST1', razorpay_signature: 'bad' });
+    ok(x.status === 400, 'payment with a wrong signature is refused');
+    const sig = createHmac('sha256', RZP_SECRET).update(`${orderId}|pay_TEST1`).digest('hex');
+    x = await sign('POST', '/api/billing/verify', { razorpay_order_id: orderId, razorpay_payment_id: 'pay_TEST1', razorpay_signature: sig });
+    ok(x.status === 200 && x.data.validUntil > new Date(Date.now() + 360 * 86400e3).toISOString().slice(0, 10), 'verified payment extends access by a year', JSON.stringify(x.data));
+    x = await sign('GET', '/api/billing');
+    ok(x.data.history.length === 1 && x.data.planId === 'business' && x.data.maxUsers === 10 && x.data.access.plan === 'paid', 'payment recorded; plan and login limit set', JSON.stringify(x.data).slice(0, 300));
+    const hook = JSON.stringify({ event: 'order.paid', payload: { payment: { entity: { id: 'pay_TEST1', order_id: orderId } }, order: { entity: { id: orderId } } } });
+    const anon2 = client('Razorpay');
+    x = await anon2('POST', '/api/billing/webhook', JSON.parse(hook), { headers: { 'X-Razorpay-Signature': 'bad' } });
+    ok(x.status === 400, 'webhook with a wrong signature is refused');
+    const wsig = createHmac('sha256', RZP_WEBHOOK).update(hook).digest('hex');
+    const res = await fetch(`${BASE}/api/billing/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Razorpay-Signature': wsig }, body: hook });
+    ok(res.status === 200, 'signed webhook accepted');
+    x = await sign('GET', '/api/billing');
+    ok(x.data.history.length === 1, 'webhook for an already-confirmed payment changes nothing');
+    x = await opc('GET', '/api/console/log');
+    ok(JSON.stringify(x.data).includes('company_paid_online'), 'online payment shows in the console log');
+  }
+}
   x = await sign('POST', '/api/signup', { companyName: 'Third Co', name: 'T', email: 't@example.com' });
   ok(x.status === 429, 'fourth sign-up from one network is limited', x.status);
 }
