@@ -227,14 +227,24 @@ for s in timeline:
 
 parts, chapter_times = [], []
 clock = 0.0
-def add(name, gen, dur):
+# Voice-over (optional): VOICE=<dir from voice.py>. Each scene lasts at least as long as its narration.
+VOICE = os.environ.get('VOICE')
+vlen = json.load(open(os.path.join(VOICE, 'lengths.json'))) if VOICE else {}
+cues = []  # (start seconds, wav path)
+LEAD = 0.45
+def vdur(key, base, tail=0.9):
+    if key in vlen:
+        cues.append((clock + LEAD, os.path.join(VOICE, key + '.wav')))
+        return max(base, LEAD + vlen[key] + tail)
+    return base
+def add(name, gen_fn, dur):
     global clock
-    path, last = encode(name, gen)
+    path, last = encode(name, gen_fn(dur))
     parts.append(path); clock += int(dur * FPS) / FPS
     return last
 
-last = add('000-title', render_still(card_title(), None, 5.0), 5.0)
-last = add('001-agenda', render_still(card_agenda(chapters), last, 7.0), 7.0)
+d = vdur('intro', 5.0, 1.2); last = add('000-title', lambda d: render_still(card_title(), None, d), d)
+d = vdur('agenda', 7.0); last = add('001-agenda', lambda d: render_still(card_agenda(chapters), last, d), d)
 n = 2
 current = None
 for i, s in enumerate(timeline):
@@ -242,14 +252,14 @@ for i, s in enumerate(timeline):
         current = s['chapter']
         chapter_times.append((clock, current))
         k = chapters.index(current) + 1
-        last = add(f'{n:03d}-ch', render_still(card_chapter(k, current), last, 2.4), 2.4); n += 1
+        d = vdur(f'ch-{k}', 2.4, 0.6); last = add(f'{n:03d}-ch', lambda d: render_still(card_chapter(k, current), last, d), d); n += 1
     words = len(s['caption'].split())
-    dur = max(s.get('hold', 3.2), 1.6 + words / 2.7)
-    last = add(f'{n:03d}-s', render_step(s, last, dur), dur); n += 1
+    d = vdur(f'step-{i:03d}', max(s.get('hold', 3.2), 1.6 + words / 2.7))
+    last = add(f'{n:03d}-s', lambda d: render_step(s, last, d), d); n += 1
     print(f'{i + 1}/{len(timeline)}', flush=True)
 chapter_times.append((clock, 'Why TrackMyRMA'))
-last = add(f'{n:03d}-feat', render_still(card_features(), last, 9.0), 9.0); n += 1
-last = add(f'{n:03d}-end', render_still(card_end(), last, 6.0, fade_out=True), 6.0)
+d = vdur('features', 9.0); last = add(f'{n:03d}-feat', lambda d: render_still(card_features(), last, d), d); n += 1
+d = vdur('end', 6.0, 1.6); last = add(f'{n:03d}-end', lambda d: render_still(card_end(), last, d, fade_out=True), d)
 
 lst = os.path.join(WORK, 'list.txt')
 open(lst, 'w').write(''.join(f"file '{p}'\n" for p in parts))
@@ -257,8 +267,28 @@ silent = os.path.join(WORK, 'silent.mp4')
 subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', lst, '-c', 'copy', silent], check=True)
 music = os.path.join(WORK, 'music.wav')
 subprocess.run([sys.executable, os.path.join(ROOT, 'scripts/guide/music.py'), str(clock + 1), music], check=True)
+audio = music
+if cues:
+    # Mix: voice on top, music ducked to about a third while someone is speaking.
+    import numpy as np, wave
+    with wave.open(music) as w:
+        sr = w.getframerate(); m = np.frombuffer(w.readframes(w.getnframes()), np.int16).reshape(-1, 2).astype(np.float32) / 32768
+    voice = np.zeros(len(m), np.float32)
+    for t0, path in cues:
+        with wave.open(path) as w:
+            v = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+        a = int(t0 * sr); b = min(len(voice), a + len(v)); voice[a:b] += v[: b - a]
+    voice *= 0.92 / (np.max(np.abs(voice)) + 1e-9)
+    talk = (np.abs(voice) > 0.01).astype(np.float32)
+    win = int(0.4 * sr); talk = np.convolve(talk, np.ones(win) / win, mode='same')
+    duck = 1 - 0.7 * np.clip(talk * 3, 0, 1)
+    mix = m * 0.55 * duck[:, None] + voice[:, None]
+    mix *= 0.95 / (np.max(np.abs(mix)) + 1e-9)
+    audio = os.path.join(WORK, 'mix.wav')
+    with wave.open(audio, 'wb') as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr); w.writeframes((mix * 32767).astype(np.int16).tobytes())
 tmp = OUT + '.part.mp4'
-subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', silent, '-i', music, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', tmp], check=True)
+subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', silent, '-i', audio, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-af', 'loudnorm=I=-15:TP=-1.5:LRA=11', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', tmp], check=True)
 os.replace(tmp, OUT)
 def ts(x):
     x = int(x); return f'{x // 60}:{x % 60:02d}'
