@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { del, get, post } from '../api.js';
-import { pdfText } from '../pdftext.js';
+import { pdfRows, pdfText } from '../pdftext.js';
+import { parseColumnInvoice } from '../../worker/colinvoice.js';
 import { detectBrandFromModel, eqCI, parseInvoicePdfText, serialsFromAnything } from '../../worker/catalog.js';
 import { Field, Icon, Link, ago, can, navigate, todayISO, useToast } from '../ui.jsx';
 
@@ -20,6 +21,7 @@ export default function CarePackRegister({ user, boot }) {
   const [warnings, setWarnings] = useState([]);
   const [draft, setDraft] = useState(null);
   const [savedAt, setSavedAt] = useState(null);
+  const [newCust, setNewCust] = useState(null); // customer read from an invoice who is not in the customer list
   const touched = useRef(false);
   const types = boot.masters.cp_types?.filter((t) => t.active) || [];
   const brands = boot.carePack?.brands || ['TSC Auto ID', 'Printronix', 'Honeywell'];
@@ -57,11 +59,56 @@ export default function CarePackRegister({ user, boot }) {
     setDraft(null);
   }
 
+  // Busy (and similar) invoices laid out in columns: customer, product sets, serials and care pack length.
+  const alnum = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  function applyColumnInvoice(c) {
+    const cust = c.customer;
+    const master = boot.masters.customers.find((m) => (cust.gstin && eqCI(m.gstin || '', cust.gstin)) || eqCI(m.name, cust.name));
+    const withPack = c.sets.filter((x) => x.carePack);
+    const sets = withPack.length ? withPack : c.sets;
+    const modelFor = (x) => {
+      const d = alnum(x.itemName);
+      return [...models].sort((a, b) => b.length - a.length).find((m) => alnum(m) && d.includes(alnum(m))) || x.model;
+    };
+    const typeFor = (years) => {
+      if (!years) return '';
+      const t = types.find((y) => Number(y.duration_years) === years) || null;
+      return t ? t.name : (boot.carePack?.types || []).find((n) => new RegExp(`^\\s*${years}\\s*Y`, 'i').test(n)) || '';
+    };
+    const notes = [c.poRef && `Customer PO: ${c.poRef}`, ...withPack.map((x) => {
+      const p = x.carePack;
+      return `${x.model}: ${[p.comprehensive && 'comprehensive', p.years && `${p.years} years`, p.headLimit && `max ${p.headLimit} print heads`, p.service, p.reference && `ref ${p.reference}`].filter(Boolean).join(', ')}`;
+    })].filter(Boolean).join('\n');
+    touched.current = true;
+    setH((x) => ({ ...x, invoice_number: c.invoiceNumber || x.invoice_number, source_invoice_number: c.invoiceNumber || '', customer_name: master?.name || cust.name || x.customer_name,
+      customer_city: master?.city || cust.city || x.customer_city, invoice_date: c.invoiceDate || x.invoice_date, notes: notes || x.notes }));
+    setProducts(sets.map((x) => ({ ...blankProduct(), printer_item_name: x.itemName, care_pack_item_name: x.carePack?.itemName || '', printer_model: modelFor(x),
+      oem_brand: brands.find((b) => eqCI(b, x.brand || '')) || '', care_pack_type: typeFor(x.carePack?.years), qty: String(x.qty || ''), serial_text: x.serials.join('\n') })));
+    setNewCust(!master && cust.name ? { ...cust, email: '' } : null);
+    setWarnings([`Read from the ${c.format === 'busy-custom' ? 'Busy (customised layout)' : 'Busy'} invoice — check every field before you register.`,
+      ...(!withPack.length ? ['There is no care pack item on this invoice. Choose the care pack length only if one was sold.'] : []), ...c.warnings]);
+  }
+
+  async function addCustomer() {
+    setBusy('cust');
+    try {
+      await post('/api/masters/customers', { name: newCust.name, address: newCust.address, city: newCust.city, postal: newCust.postal, state: newCust.state,
+        gstin: newCust.gstin, phone: newCust.mobile, email: newCust.email, active: true });
+      toast(`${newCust.name} added to customers.`);
+      setNewCust(null);
+    } catch (e) {
+      toast(e.fields ? Object.values(e.fields).join(' ') : e.message, true);
+    } finally { setBusy(''); }
+  }
+
   async function readPdf(file) {
     if (!file) return;
     setBusy('pdf');
     setWarnings([]);
+    setNewCust(null);
     try {
+      const col = parseColumnInvoice(await pdfRows(file).catch(() => []));
+      if (col && col.sets.length) return applyColumnInvoice(col);
       const text = await pdfText(file);
       if (text.replace(/\s/g, '').length < 40) throw new Error('This PDF has no readable text (probably a scan). Enter the invoice manually.');
       const r = parseInvoicePdfText(text);
@@ -136,6 +183,27 @@ export default function CarePackRegister({ user, boot }) {
       )}
       {formError && <div className="formerror" role="alert">{formError}</div>}
       {warnings.map((w) => <div key={w} className="warnbox small">{w}</div>)}
+      {newCust && (
+        <section className="panel newcust" aria-label="New customer from the invoice">
+          <h2>New customer</h2>
+          <p className="small muted">{newCust.name} is not in your customer list yet. Add it so RMAs and reports can use these details.</p>
+          <dl className="track-facts">
+            {newCust.gstin && <><dt>GSTIN</dt><dd className="mono">{newCust.gstin}</dd></>}
+            {newCust.address && <><dt>Address</dt><dd>{newCust.address}{newCust.postal ? ` – ${newCust.postal}` : ''}</dd></>}
+            {(newCust.city || newCust.state) && <><dt>City, state</dt><dd>{[newCust.city, newCust.state].filter(Boolean).join(', ')}</dd></>}
+            {newCust.mobile && <><dt>Mobile</dt><dd>{newCust.mobile}</dd></>}
+          </dl>
+          {can.manage(user) ? (
+            <div className="row wrap" style={{ alignItems: 'flex-end', marginTop: 10 }}>
+              <Field label="Customer email" hint="Not on the invoice. Needed later for RMA status emails; you can add it now or on the first RMA.">
+                <input type="email" value={newCust.email} onChange={(e) => setNewCust((c) => ({ ...c, email: e.target.value }))} />
+              </Field>
+              <button type="button" className="btn primary" disabled={busy === 'cust'} onClick={addCustomer}>{busy === 'cust' ? 'Adding…' : 'Add to customers'}</button>
+              <button type="button" className="btn ghost" onClick={() => setNewCust(null)}>Not now</button>
+            </div>
+          ) : <p className="small">Ask a Manager or Admin to add this customer in Masters.</p>}
+        </section>
+      )}
 
       <section className="panel">
         <div className="tabs" role="tablist" style={{ marginBottom: 14 }}>

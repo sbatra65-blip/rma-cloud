@@ -95,6 +95,7 @@ export const SCREEN_HELP = [
     what: 'Record a sale of printers with a care pack, from your sales invoice.',
     steps: [
       'Import: choose the sales invoice PDF (a text PDF, not a scan). Invoice number, date, customer, model, care pack length and serial numbers are read for you.',
+      'Invoices printed from Busy (standard or customised layout) are read item by item: each printer with its serials and the care pack sold with it. A customer who is not in your list yet can be added in one click.',
       'Or enter the invoice number from Zoho Books and press Load (when Zoho is connected).',
       'Check every field; correct anything that was read wrongly.',
       'Serial numbers can be pasted in any form — one per line, with commas, or with "S/N:" in front. The count is shown as you type.',

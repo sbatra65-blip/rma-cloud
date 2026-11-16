@@ -151,6 +151,7 @@ export const GUIDE = [
       ['img', 'cp-register-empty', 'Choose how to register: type it in, from the invoice PDF, or from Zoho Books.', 'shot'],
       ['img', 'cp-register-filled', 'Everything read from the PDF, ready to check.', 'shot'],
       ['img', 'cp-detail-new', 'Registered. Next: link the OEM PO.', 'shot'],
+      ['tip', 'Invoices from Busy are read item by item, in both the standard and customised print layouts: each printer with its serial numbers, the care pack sold with it (years, print-head limit, return to base) and the customer\'s PO go into the form. If the customer is new, TrackMyRMA shows their GSTIN, address and mobile from the invoice and adds them to your customers with one click.'],
       ['note', 'With Zoho Books connected (Company settings → Zoho Books), choose "From Zoho Books", type the invoice number and press Load invoice. Or "Type it in" for anything else. The same serial can never be registered twice — you are told which invoice already has it.'],
       ['h', 'Link the OEM purchase order'],
       ['steps', [
