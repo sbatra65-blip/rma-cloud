@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, uploadPhoto } from '../api.js';
 import { Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, can, fmtDate, fmtMs, navigate, query, todayISO, useToast } from '../ui.jsx';
 import { CarePackPicker, CoverNote } from './CarePackLink.jsx';
+import PhotoViewer from './PhotoViewer.jsx';
 
 // Fields shared by every part raised for this printer.
 const SHARED = {
@@ -41,6 +42,18 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const draftId = editing ? null : query().draft || null;
   const [draft, setDraft] = useState(null);
   const [pick, setPick] = useState([]);
+  const [skip, setSkip] = useState([]);
+  const saved = useRef('');
+  // The photo choice is saved on the draft as it changes, so it is still there if you come back later.
+  useEffect(() => {
+    if (!draft) return undefined;
+    const key = JSON.stringify([pick, skip]);
+    if (key === saved.current) return undefined;
+    const t = setTimeout(() => {
+      post(`/api/drafts/${draft.id}`, { photo_order: pick, photo_skip: skip }).then(() => { saved.current = key; }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [draft, pick, skip]);
 
   // Load the ticket (edit) or copy customer + printer from another RMA (?from=ID, "raise another part").
   useEffect(() => {
@@ -60,7 +73,11 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
         }));
         setParts([{ ...newPart(), faulty_part: d.faulty_part || '' }]);
         setDraft(d);
-        setPick(d.photo_order?.length ? d.photo_order : d.photos.slice(0, 5).map((ph) => ph.id));
+        const sk = d.photo_skip || [];
+        const pk = d.photo_order?.length ? d.photo_order : d.photos.filter((ph) => !sk.includes(ph.id)).slice(0, 5).map((ph) => ph.id);
+        saved.current = JSON.stringify([pk, sk]);
+        setSkip(sk);
+        setPick(pk);
         if (dev?.customer_name && !c) toast(`"${dev.customer_name}" from the care pack is not in the customer list — choose the customer in step 1.`, true);
         setLoaded(true);
       }).catch(setLoadError);
@@ -232,7 +249,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
           partSnNote: snNote[p.key] || undefined,
           overrideReason: override.on && dups[p.key]?.blocks?.length ? override.reason : undefined,
           addToCarePack: i === 0 && notInCarePack && cpAdd.on ? { reason: cpAdd.reason, batchId: cpAdd.batchId || null } : undefined,
-          ...(i === 0 && draft ? { draftId: draft.id, draftPhotos: pick } : {}),
+          ...(i === 0 && draft ? { draftId: draft.id, draftPhotos: pick, draftSkip: skip } : {}),
         };
         const r = await post('/api/rma', body);
         created.push(r.ticket);
@@ -254,7 +271,8 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     onChange?.();
     if (photoFails) toast(`${photoFails} photo${photoFails === 1 ? '' : 's'} could not be uploaded. Add them on the RMA.`, true);
     if (draft) {
-      toast(`RMA ${created.map((t) => t.ticket_no).join(', ')} raised from draft ${draft.printer_sn} — ${draft.photos.length} photo${draft.photos.length === 1 ? '' : 's'} moved`);
+      const kept = draft.photos.length - skip.length;
+      toast(`RMA ${created.map((t) => t.ticket_no).join(', ')} raised from draft ${draft.printer_sn} — ${kept} photo${kept === 1 ? '' : 's'} added${skip.length ? `, ${skip.length} left out` : ''}`);
       let next = null;
       if (goNext) next = await get('/api/drafts').then((r) => r.drafts[0]?.id || null).catch(() => null);
       if (next) navigate(`/rma/new?draft=${next}`, { replace: true });
@@ -412,7 +430,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
             onNote={(v) => setSnNote((x) => ({ ...x, [p.key]: v }))} onUse={(sn) => setPart(p.key, 'faulty_part_sn', sn)} />}
           {!editing && dups[p.key]?.heads && <HeadBox h={dups[p.key].heads} serial={f.printer_sn} error={errors[`p${i}_head`]}
             value={headReason[p.key] || ''} onChange={(v) => setHeadReason((x) => ({ ...x, [p.key]: v }))} />}
-          {draft && i === 0 && <DraftPhotos draft={draft} pick={pick} onPick={setPick} />}
+          {draft && i === 0 && <DraftPhotos draft={draft} pick={pick} onPick={setPick} skip={skip} onSkip={setSkip} />}
           {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
         </section>
       ))}
@@ -578,33 +596,63 @@ export function Suggest({ id, value, onChange, options, onPick, placeholder, aut
   );
 }
 
-// Draft photos (from the zip): tap to choose up to five, in order — they fill the OEM Excel's photo boxes 1–5.
-// Every photo moves onto the RMA on Accept; the chosen ones go first.
-export function DraftPhotos({ draft, pick, onPick }) {
-  const toggle = (id) => {
+// Draft photos (from the zip). Every photo in the zip is saved on the draft.
+// Tap a photo to see it large (previous / next). Before accepting: untick "Keep" to leave a photo out of the RMA,
+// and press "Excel" on up to five photos, in order, for the OEM Excel's photo boxes 1–5.
+// Kept photos move onto the RMA (the Excel ones first); left-out photos are deleted with the draft.
+export function DraftPhotos({ draft, pick, onPick, skip, onSkip }) {
+  const [view, setView] = useState(null);
+  const excel = (id) => {
+    if (skip.includes(id)) return;
     if (pick.includes(id)) onPick(pick.filter((x) => x !== id));
     else if (pick.length < 5) onPick([...pick, id]);
+  };
+  const keep = (id, on) => {
+    if (on) onSkip(skip.filter((x) => x !== id));
+    else { onSkip([...skip, id]); onPick(pick.filter((x) => x !== id)); }
+  };
+  const kept = draft.photos.length - skip.length;
+  const src = (ph) => `/api/drafts/photos/${ph.id}`;
+  const controls = (ph, big = false) => {
+    const n = pick.indexOf(ph.id);
+    const out = skip.includes(ph.id);
+    return (
+      <>
+        <label className={`check small${big ? ' pv-keep' : ''}`}><input type="checkbox" checked={!out} onChange={(e) => keep(ph.id, e.target.checked)} /> Keep{big ? ' on the RMA' : ''}</label>
+        <button type="button" className={`btn small ${n >= 0 ? 'primary' : 'ghost'}`} disabled={out || (n < 0 && pick.length >= 5)} onClick={() => excel(ph.id)}
+          aria-pressed={n >= 0} title={out ? 'Left out — tick Keep first' : n < 0 && pick.length >= 5 ? 'Five already chosen — take one out first' : ''}>
+          {n >= 0 ? `Excel ${n + 1}` : big ? 'Put in OEM Excel' : 'Excel'}</button>
+      </>
+    );
   };
   return (
     <div className="draftphotos">
       <div className="spread" style={{ margin: '14px 0 8px' }}>
-        <b>Photos from the zip ({draft.photos.length})</b>
-        <span className="small muted">Numbered photos go in the OEM Excel boxes 1–5 · tap to change · {pick.length}/5 chosen</span>
+        <b>Photos from the zip — {kept} of {draft.photos.length} kept · {pick.length}/5 in OEM Excel</b>
+        <div className="row tight">
+          <button type="button" className="btn ghost small" onClick={() => onSkip([])} disabled={!skip.length}>Keep all</button>
+          <button type="button" className="btn ghost small" onClick={() => { onSkip(draft.photos.map((p) => p.id)); onPick([]); }} disabled={!kept}>Keep none</button>
+        </div>
       </div>
+      <p className="small muted" style={{ margin: '0 0 10px' }}>Tap a photo to see it large. Untick "Keep" to leave it out of the RMA. Press "Excel" on up to five photos — they fill the OEM Excel boxes 1–5 in that order.</p>
       {draft.photos.length ? (
         <div className="dpgrid">
-          {draft.photos.map((ph) => {
+          {draft.photos.map((ph, i) => {
             const n = pick.indexOf(ph.id);
+            const out = skip.includes(ph.id);
             return (
-              <button type="button" key={ph.id} className={`dp${n >= 0 ? ' on' : ''}`} onClick={() => toggle(ph.id)} aria-pressed={n >= 0}
-                title={n >= 0 ? `Excel photo ${n + 1} — tap to take out` : pick.length >= 5 ? 'Five already chosen — tap a numbered photo first to take it out' : 'Tap to put in the OEM Excel'}>
-                <img src={`/api/drafts/photos/${ph.id}`} alt={ph.name} loading="lazy" />
-                {n >= 0 ? <span className="n">{n + 1}</span> : <span className="off">not in Excel</span>}
-              </button>
+              <div key={ph.id} className={`dp${n >= 0 ? ' on' : ''}${out ? ' out' : ''}`}>
+                <button type="button" className="dp-img" onClick={() => setView(i)} aria-label={`View ${ph.name} large`} title="View large">
+                  <img src={src(ph)} alt={ph.name} loading="lazy" />
+                  {out ? <span className="off">left out</span> : n >= 0 ? <span className="n">{n + 1}</span> : null}
+                </button>
+                <div className="dp-bar">{controls(ph)}</div>
+              </div>
             );
           })}
         </div>
       ) : <p className="muted small">This zip had no photos. Add photos below.</p>}
+      <PhotoViewer photos={draft.photos} index={view} onIndex={setView} onClose={() => setView(null)} srcOf={src} actions={(ph) => controls(ph, true)} />
     </div>
   );
 }

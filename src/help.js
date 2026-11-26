@@ -51,7 +51,7 @@ export const SCREEN_HELP = [
     steps: [
       'Press "Review & accept" on a draft. The New RMA form opens with the serial, model, customer and part filled in.',
       'Fill in what is missing: customer email, part serial and number, TPH mileage and the failure description.',
-      'Tap the photos to choose the five that go in the OEM Excel boxes 1–5. All photos move to the RMA.',
+      'Every photo from the zip is saved on the draft. Tap a photo to see it large (arrows for next / previous). Untick "Keep" to leave a photo out of the RMA, and press "Excel" on up to five photos for the OEM Excel boxes 1–5.',
       'Press "Accept & create RMA", or "Accept & next draft" to go straight to the next one. All the normal RMA checks run.',
       'To delete drafts, tick them and press "Delete selected", or use the bin on one draft.',
     ],

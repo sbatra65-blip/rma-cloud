@@ -5,11 +5,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, compressImage, get, post } from '../api.js';
 import { Dialog, Empty, ErrorPanel, Icon, Link, Skeleton, ago, fmtDate, navigate, useToast } from '../ui.jsx';
+import PhotoViewer from './PhotoViewer.jsx';
 
 export const DRAFT_PARTS = ['Print head', 'Main board', 'Power supply', 'Front panel', 'Accessories', 'Other'];
 const MAX_ZIPS = 50;
-const MAX_PHOTOS = 20;
-const MAX_ZIP_MB = 25;
+const MAX_PHOTOS = 40; // every photo in the zip is kept on the draft (an RMA holds up to 40)
+const MAX_ZIP_MB = 100;
 const IMG = /\.(jpe?g|png|webp|heic|heif)$/i;
 const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif' };
 
@@ -75,6 +76,7 @@ export default function BulkPhotos({ onChange }) {
   const [checks, setChecks] = useState({});
   const [busy, setBusy] = useState('');
   const [drag, setDrag] = useState(false);
+  const [view, setView] = useState(null); // { key, i }
   const fileRef = useRef(null);
   const seq = useRef(0);
 
@@ -224,8 +226,9 @@ export default function BulkPhotos({ onChange }) {
                     )}
                   </div>
                   <div className="bl-photos">
-                    {l.photos.slice(0, 6).map((p) => <img key={p.url} src={p.url} alt={p.name} />)}
-                    {l.photos.length > 6 && <span className="small muted">+{l.photos.length - 6}</span>}
+                    {l.photos.slice(0, 6).map((p, i) => <button type="button" key={p.url} className="thumbbtn" onClick={() => setView({ key: l.key, i })} aria-label={`View ${p.name}`}><img src={p.url} alt={p.name} /></button>)}
+                    {l.photos.length > 6 && <button type="button" className="btn ghost small" onClick={() => setView({ key: l.key, i: 6 })}>+{l.photos.length - 6}</button>}
+                    {l.photos.length > 0 && <span className="small muted" style={{ flexBasis: '100%' }}>{l.photos.length} photo{l.photos.length === 1 ? '' : 's'} · all kept on the draft · tap to view</span>}
                   </div>
                   <div className="bl-part">
                     <div className="views" role="group" aria-label="Faulty part">
@@ -249,6 +252,10 @@ export default function BulkPhotos({ onChange }) {
           </div>
         </section>
       )}
+      {(() => {
+        const l = view && lines.find((x) => x.key === view.key);
+        return <PhotoViewer photos={l ? l.photos : []} index={l ? view.i : null} onIndex={(i) => setView({ ...view, i })} onClose={() => setView(null)} srcOf={(p) => p.url} />;
+      })()}
     </>
   );
 }
@@ -261,6 +268,7 @@ export function Drafts({ onChange }) {
   const [sel, setSel] = useState([]);
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState(null); // { d, i }
   const load = () => get('/api/drafts').then((r) => { setData(r); setSel((s) => s.filter((id) => r.drafts.some((d) => d.id === id))); }).catch(setError);
   useEffect(() => { load(); }, []);
 
@@ -311,8 +319,8 @@ export function Drafts({ onChange }) {
                 </div>
                 <div className="bl-check"><CoverPill c={d.check} /><DupNotes c={d.check} /></div>
                 <div className="bl-photos">
-                  {d.photos.slice(0, 4).map((p) => <img key={p.id} src={`/api/drafts/photos/${p.id}`} alt={p.name} loading="lazy" />)}
-                  {d.photos.length > 4 && <span className="small muted">+{d.photos.length - 4}</span>}
+                  {d.photos.slice(0, 4).map((p, i) => <button type="button" key={p.id} className="thumbbtn" onClick={() => setView({ d, i })} aria-label={`View ${p.name}`}><img src={`/api/drafts/photos/${p.id}`} alt={p.name} loading="lazy" /></button>)}
+                  {d.photos.length > 4 && <button type="button" className="btn ghost small" onClick={() => setView({ d, i: 4 })}>+{d.photos.length - 4}</button>}
                 </div>
                 <div className="row tight bl-act">
                   <Link to={`/rma/new?draft=${d.id}`} className="btn primary small">Review &amp; accept</Link>
@@ -323,6 +331,8 @@ export function Drafts({ onChange }) {
           </div>
         </>
       )}
+      <PhotoViewer photos={view ? view.d.photos : []} index={view ? view.i : null} onIndex={(i) => setView({ ...view, i })} onClose={() => setView(null)}
+        srcOf={(p) => `/api/drafts/photos/${p.id}`} />
       <Dialog open={!!confirm} onClose={() => setConfirm(null)} title={confirm?.length === 1 ? 'Delete this draft?' : `Delete ${confirm?.length} drafts?`}>
         <p>{confirm?.length === 1 ? `Draft ${drafts.find((d) => d.id === confirm[0])?.printer_sn || ''} and its photos` : `These ${confirm?.length} drafts and their photos`} will be deleted for good. RMAs already raised are not affected.</p>
         <div className="row end">

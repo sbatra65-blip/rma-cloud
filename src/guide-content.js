@@ -199,7 +199,7 @@ export const GUIDE = [
         '"Likely duplicate" means the same part is already on an open RMA — remove the line, or tick "Make a draft anyway". "Repeat failure" means the same part was closed in the last 90 days.',
         'Tap the faulty part (Print head, Main board, Power supply, Front panel, Accessories or Other) and remove any line you do not want with ×.',
         'Press "Create drafts". Drafts have no RMA number and do not email the customer.',
-        'Open "Draft RMAs" and press "Review & accept". The normal New RMA form opens, filled in. Add the failure description and part details, tap the five photos for the OEM Excel, then "Accept & create RMA" or "Accept & next draft".',
+        'Open "Draft RMAs" and press "Review & accept". The normal New RMA form opens, filled in. Add the failure description and part details. Every photo from the zip is on the draft: tap one to see it large, untick "Keep" to leave it out of the RMA, and press "Excel" on up to five for the OEM Excel. Then "Accept & create RMA" or "Accept & next draft".',
         'Delete drafts you do not need (one, or tick several). Drafts not accepted in 30 days are removed.',
       ]],
       ['tip', 'Everyone except Viewers can use this. An Admin can switch it off for one person in Users & security, or for the whole company in Company settings.'],

@@ -761,7 +761,7 @@ export class Company extends DurableObject {
     };
   }
 
-  createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote, draftId, draftPhotos }) {
+  createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote, draftId, draftPhotos, draftSkip }) {
     const v = this.checkTicket(ticket);
     // From a draft (bulk photo zips): make sure the draft is still there before anything is created.
     if (draftId) { this.draftsGuard(user); this.draftRow(draftId); }
@@ -795,7 +795,7 @@ export class Company extends DurableObject {
       head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null,
       psn.part_sn_note ? `Part serial differs from last received: ${psn.part_sn_note}` : null].filter(Boolean).join(' · ') || null);
     this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason, headOverride: !!head.head_override_reason });
-    const fromDraft = draftId ? this.draftAttach(user, draftId, id, draftPhotos) : null;
+    const fromDraft = draftId ? this.draftAttach(user, draftId, id, draftPhotos, draftSkip) : null;
     this.queueCustomerNotice(id, STATUS.OPEN);
     const out = this.getTicket(user, { id });
     return fromDraft ? { ...out, fromDraft } : out;

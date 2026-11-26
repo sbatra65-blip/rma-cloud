@@ -409,7 +409,8 @@ async function handle(request, env, ctx) {
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
     const r = await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote,
-      draftId: Number(b.draftId) || undefined, draftPhotos: Array.isArray(b.draftPhotos) ? b.draftPhotos.slice(0, 5).map(String) : undefined });
+      draftId: Number(b.draftId) || undefined, draftPhotos: Array.isArray(b.draftPhotos) ? b.draftPhotos.slice(0, 5).map(String) : undefined,
+      draftSkip: Array.isArray(b.draftSkip) ? b.draftSkip.slice(0, 40).map(String) : undefined });
     ctx.waitUntil(flushCustomerNotices(env, user, url));
     if (r.fromDraft?.r2Dropped?.length && env.FILES) ctx.waitUntil(Promise.all(r.fromDraft.r2Dropped.map((pid) => env.FILES.delete(`co/${user.companyId}/photo/${pid}`))));
     return respond(r);

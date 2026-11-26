@@ -8,7 +8,7 @@ import { ValidationError } from './validate.js';
 import { isHeadPart } from './devices.js';
 
 export const DRAFT_PARTS = ['Print head', 'Main board', 'Power supply', 'Front panel', 'Accessories', 'Other'];
-export const DRAFT_MAX_PHOTOS = 20;
+export const DRAFT_MAX_PHOTOS = 40; // same as an RMA, so every photo in a zip can be kept
 export const DRAFT_MAX_OPEN = 500;
 export const DRAFT_KEEP_DAYS = 30;
 const DAY = 86400000;
@@ -35,11 +35,12 @@ export const draftMethods = {
     if (this._draftsReady) return;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS rma_drafts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, printer_sn TEXT NOT NULL, printer_sn_norm TEXT, faulty_part TEXT,
-      source_name TEXT, photo_order TEXT, created_at INTEGER NOT NULL, created_by TEXT, updated_at INTEGER, updated_by TEXT)`);
+      source_name TEXT, photo_order TEXT, photo_skip TEXT, created_at INTEGER NOT NULL, created_by TEXT, updated_at INTEGER, updated_by TEXT)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS rma_draft_photos (
       id TEXT PRIMARY KEY, draft_id INTEGER NOT NULL, name TEXT, mime TEXT NOT NULL, size INTEGER NOT NULL, store TEXT NOT NULL,
       seq INTEGER NOT NULL, added_at INTEGER NOT NULL)`);
     this.sql.exec('CREATE INDEX IF NOT EXISTS rma_draft_photos_draft ON rma_draft_photos(draft_id)');
+    try { this.sql.exec('ALTER TABLE rma_drafts ADD COLUMN photo_skip TEXT'); } catch { /* already there */ }
     this._draftsReady = true;
   },
   bulkOn() {
@@ -128,11 +129,11 @@ export const draftMethods = {
   },
   draftView(d, withCheck = true) {
     const photos = this.all('SELECT id, name, mime, size, seq FROM rma_draft_photos WHERE draft_id = ? ORDER BY seq', d.id);
-    let order = [];
-    try { order = JSON.parse(d.photo_order || '[]'); } catch { /* none chosen */ }
+    const list = (v) => { try { return JSON.parse(v || '[]'); } catch { return []; } };
     const ids = new Set(photos.map((p) => p.id));
-    order = order.filter((x) => ids.has(x));
-    return { ...d, photos, photo_order: order, check: withCheck ? this.draftCheckOne(d.printer_sn, d.faulty_part, d.id) : null };
+    const skip = list(d.photo_skip).filter((x) => ids.has(x));
+    const order = list(d.photo_order).filter((x) => ids.has(x) && !skip.includes(x));
+    return { ...d, photos, photo_order: order, photo_skip: skip, check: withCheck ? this.draftCheckOne(d.printer_sn, d.faulty_part, d.id) : null };
   },
   draftList(user) {
     this.draftsGuard(user);
@@ -151,14 +152,15 @@ export const draftMethods = {
     const next = this.one('SELECT id FROM rma_drafts WHERE id != ? ORDER BY created_at, id LIMIT 1', d.id);
     return { draft: this.draftView(d), nextId: next?.id || null, parts: DRAFT_PARTS };
   },
-  draftUpdate(user, { id, faulty_part, photo_order }) {
+  draftUpdate(user, { id, faulty_part, photo_order, photo_skip }) {
     this.draftsGuard(user);
     const d = this.draftRow(id);
     const part = faulty_part === undefined ? d.faulty_part : String(faulty_part || '').trim().slice(0, 200);
     if (!part) throw new ValidationError({ faulty_part: 'Choose the faulty part' });
     const order = Array.isArray(photo_order) ? photo_order.map(String).slice(0, 5) : null;
-    this.sql.exec('UPDATE rma_drafts SET faulty_part = ?, photo_order = COALESCE(?, photo_order), updated_at = ?, updated_by = ? WHERE id = ?',
-      part, order ? JSON.stringify(order) : null, Date.now(), user.name, d.id);
+    const skip = Array.isArray(photo_skip) ? photo_skip.map(String).slice(0, DRAFT_MAX_PHOTOS) : null;
+    this.sql.exec('UPDATE rma_drafts SET faulty_part = ?, photo_order = COALESCE(?, photo_order), photo_skip = COALESCE(?, photo_skip), updated_at = ?, updated_by = ? WHERE id = ?',
+      part, order ? JSON.stringify(order) : null, skip ? JSON.stringify(skip) : null, Date.now(), user.name, d.id);
     return { draft: this.draftView(this.draftRow(d.id)) };
   },
   // Deletes drafts and their photos. Returns photo ids kept in R2 so the Worker can remove them too.
@@ -194,12 +196,17 @@ export const draftMethods = {
     return r2;
   },
 
-  // Called by createTicket once the RMA exists: the draft's photos become the RMA's inbound photos.
-  // The chosen photos go first (in the chosen order), so the OEM Excel's five photo boxes get them.
-  draftAttach(user, draftId, ticketId, photoOrder) {
+  // Called by createTicket once the RMA exists: the photos the operator kept become the RMA's inbound photos;
+  // photos left out are deleted with the draft. The chosen Excel photos go first (in the chosen order),
+  // so the OEM Excel's five photo boxes get them.
+  draftAttach(user, draftId, ticketId, photoOrder, photoSkip) {
     this.draftsReady();
     const d = this.draftRow(draftId);
-    const photos = this.all('SELECT * FROM rma_draft_photos WHERE draft_id = ? ORDER BY seq', d.id);
+    const all = this.all('SELECT * FROM rma_draft_photos WHERE draft_id = ? ORDER BY seq', d.id);
+    let skip = Array.isArray(photoSkip) ? photoSkip.map(String) : null;
+    if (!skip) { try { skip = JSON.parse(d.photo_skip || '[]'); } catch { skip = []; } }
+    const left = all.filter((p) => skip.includes(p.id));
+    const photos = all.filter((p) => !skip.includes(p.id));
     let chosen = Array.isArray(photoOrder) ? photoOrder.map(String) : null;
     if (!chosen) { try { chosen = JSON.parse(d.photo_order || '[]'); } catch { chosen = []; } }
     const rank = new Map(chosen.slice(0, 5).map((id, i) => [id, i]));
@@ -210,13 +217,14 @@ export const draftMethods = {
       this.sql.exec('INSERT INTO photos (id, ticket_id, direction, name, mime, size, store, notes, captured_at, captured_by) VALUES (?,?,?,?,?,?,?,?,?,?)',
         p.id, ticketId, 'INBOUND', p.name, p.mime, p.size, p.store, null, base + i, d.created_by || user.name);
     });
-    // Photos over the 40-per-RMA limit are dropped with the draft.
-    const extra = photos.slice(room);
+    // Photos left out by the operator, or over the 40-per-RMA limit, are deleted with the draft.
+    const extra = [...left, ...photos.slice(room)];
     for (const p of extra) this.sql.exec('DELETE FROM file_chunks WHERE file_id = ?', p.id);
     this.sql.exec('DELETE FROM rma_draft_photos WHERE draft_id = ?', d.id);
     this.sql.exec('DELETE FROM rma_drafts WHERE id = ?', d.id);
-    this.event(ticketId, user, 'Created from photo zip', `${d.source_name || d.printer_sn} · ${Math.min(photos.length, room)} photo${photos.length === 1 ? '' : 's'}`);
-    this.audit(user, 'accept', 'draft', d.id, { ticketId, photos: Math.min(photos.length, room) });
-    return { photos: Math.min(photos.length, room), r2Dropped: extra.filter((p) => p.store === 'r2').map((p) => p.id) };
+    const kept = Math.min(photos.length, room);
+    this.event(ticketId, user, 'Created from photo zip', `${d.source_name || d.printer_sn} · ${kept} of ${all.length} photo${all.length === 1 ? '' : 's'} kept`);
+    this.audit(user, 'accept', 'draft', d.id, { ticketId, photos: kept, leftOut: all.length - kept });
+    return { photos: kept, leftOut: all.length - kept, r2Dropped: extra.filter((p) => p.store === 'r2').map((p) => p.id) };
   },
 };
