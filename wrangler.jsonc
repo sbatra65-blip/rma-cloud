@@ -18,6 +18,9 @@
   // The OEM RMA Excel form ships inside the Worker as the default template.
   "rules": [{ "type": "Data", "globs": ["**/*.xlsx"], "fallthrough": false }],
 
+  // Workers AI: reads printer configuration printouts in draft photos (worker/configread.js).
+  "ai": { "binding": "AI" },
+
   // Directory = logins, 2FA, sessions, companies and who belongs to which company (one instance).
   // Company   = one private SQLite database per company (tickets, photos, masters, batches).
   "durable_objects": {

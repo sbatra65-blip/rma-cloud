@@ -488,12 +488,23 @@ function BulkPhotosPanel({ boot, reloadBoot }) {
       toast(next ? 'Bulk RMA from photos switched on' : 'Bulk RMA from photos switched off — drafts already made are kept');
     } catch (e) { toast(e.message, true); } finally { setBusy(false); }
   }
+  async function flipRead(next) {
+    setBusy(true);
+    try {
+      await post('/api/settings/config-read', { on: next });
+      await reloadBoot();
+      toast(next ? 'Config printouts will be read from draft photos' : 'Config printouts will not be read');
+    } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
   return (
     <section className="panel" id="bulk-photos" style={{ marginTop: 16 }}>
       <h2>Bulk RMA from photos</h2>
       <div className="stack">
         <label className="check"><input type="checkbox" checked={on} disabled={busy} onChange={(e) => flip(e.target.checked)} />
           Let people upload photo zips (one per printer, named with its serial) and turn them into draft RMAs</label>
+        <label className="check"><input type="checkbox" checked={boot.settings?.config_read !== false} disabled={busy || !on} onChange={(e) => flipRead(e.target.checked)} />
+          Read the printer's configuration printout in the photos (NON-RESET mileage, firmware, serial, bad dots) and fill them in on the draft</label>
+        <p className="muted small">Uses an AI model on Cloudflare Workers AI. The values are only suggestions: the operator checks them before accepting the draft.</p>
         <p className="muted small">For everyone except Viewers. To switch it off for one person, untick "Bulk RMA from photos" for them in Users &amp; security. Switching it off here hides it for the whole company; drafts already made are kept and come back when you switch it on again. RMAs already accepted are normal RMAs and are not affected.</p>
       </div>
     </section>

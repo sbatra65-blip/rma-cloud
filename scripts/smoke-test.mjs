@@ -289,6 +289,27 @@ r = await owner('POST', '/api/rma', { ticket: { ...base, printer_sn: 'NEWSN-009'
 ok(r.status === 404, 'accepting a draft that is gone creates no RMA');
 r = await owner('GET', '/api/dashboard');
 ok(r.data.total === totalBefore + 1, 'only the accepted draft became an RMA');
+// Config printout reading (canned model answers from scripts/dev-test.sh: cfg.jpg = this printer, other.jpg = another printer)
+r = await owner('POST', '/api/drafts', { printer_sn: 'NEWSN-CFG', faulty_part: 'Print head', source_name: 'NEWSN-CFG.zip' });
+const dc = r.data.id;
+const cfp = [];
+for (const n of ['part.jpg', 'other.jpg', 'cfg.jpg']) cfp.push((await owner('POST', `/api/drafts/${dc}/photos`, JPEG, { headers: { 'X-File-Name': n } })).data.id);
+r = await owner('POST', `/api/drafts/${dc}/read-config`, { order: [cfp[2], cfp[0], cfp[1]] });
+ok(r.status === 200 && r.data.draft.config.found && r.data.draft.config.match === true && r.data.draft.config.read.non_reset_m === 10304 && r.data.draft.config.photoId === cfp[2] && r.data.draft.config.tried === 1,
+  'printout read from the most likely photo first: NON-RESET 10304 m, S/N matches', JSON.stringify(r.data).slice(0, 300));
+r = await owner('POST', `/api/drafts/${dc}/read-config`, { order: [cfp[0], cfp[1], cfp[2]] });
+ok(r.data.draft.config.found && r.data.draft.config.match === false && r.data.draft.config.read.serial === 'OTHER123', 'printout of another printer is flagged (S/N does not match)');
+r = await owner('POST', `/api/drafts/${dc}`, { photo_skip: [cfp[1], cfp[2]] });
+r = await owner('POST', `/api/drafts/${dc}/read-config`, {});
+ok(r.data.draft.config.found === false && r.data.draft.config.tried === 1, 'left-out photos are not read; no printout found');
+r = await owner('GET', '/api/drafts');
+ok(r.data.drafts.find((d) => d.id === dc)?.config?.found === false, 'drafts list carries what was read');
+r = await owner('POST', '/api/settings/config-read', { on: false });
+ok(r.data.config_read === false, 'Admin switches printout reading off');
+r = await owner('POST', `/api/drafts/${dc}/read-config`, {});
+ok(r.status === 403 && r.data.code === 'config_off', 'printout reading refused while off');
+await owner('POST', '/api/settings/config-read', { on: true });
+await owner('POST', '/api/drafts/delete', { ids: [dc] });
 r = await owner('POST', '/api/settings/bulk-photos', { on: false });
 ok(r.status === 200 && r.data.bulk_photos === false, 'Admin switches bulk photos off');
 r = await owner('GET', '/api/drafts');

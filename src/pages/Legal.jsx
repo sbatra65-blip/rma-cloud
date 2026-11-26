@@ -64,6 +64,7 @@ function Privacy() {
       <h2>Service providers we use</h2>
       <ul>
         <li><b>Cloudflare</b>: runs the app and stores the databases and files.</li>
+        <li><b>Cloudflare Workers AI</b>: when you use Bulk RMA from photos, the photos of a draft are shown to an AI model running on Cloudflare to find the printer's configuration printout and read its mileage, firmware and serial. Cloudflare lists this model as keeping no data after it answers. An Admin can switch this off in Company settings.</li>
         <li><b>Backblaze</b>: stores the encrypted nightly backups.</li>
         <li><b>Resend</b>: delivers the app's emails (invites, reminders, backups, customer status emails).</li>
         <li><b>Razorpay</b>: takes online payments.</li>

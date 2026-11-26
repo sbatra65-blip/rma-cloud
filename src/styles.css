@@ -974,3 +974,11 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
 .pv-strip button { flex: none; padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; line-height: 0; }
 .pv-strip button.on { border-color: var(--accent); }
 .pv-strip img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; }
+
+.cfgpanel { border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: var(--radius); padding: 10px 12px; margin: 12px 0; background: var(--surface); }
+.cfgpanel.ok { border-left-color: var(--ok, #17704a); }
+.cfgpanel.warn { border-left-color: var(--amber); }
+.cfgpanel.bad { border-left-color: var(--rust); }
+.cfgvals { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px 14px; margin: 8px 0 0; }
+.cfgvals dt { color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.cfgvals dd { margin: 0; font-weight: 650; }

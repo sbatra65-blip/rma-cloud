@@ -6,6 +6,7 @@
 // Tables are created on first use and nothing existing is changed, so an older version of the app ignores them.
 import { ValidationError } from './validate.js';
 import { isHeadPart } from './devices.js';
+import { CONFIG_MAX_PHOTOS } from './configread.js';
 
 export const DRAFT_PARTS = ['Print head', 'Main board', 'Power supply', 'Front panel', 'Accessories', 'Other'];
 export const DRAFT_MAX_PHOTOS = 40; // same as an RMA, so every photo in a zip can be kept
@@ -35,12 +36,14 @@ export const draftMethods = {
     if (this._draftsReady) return;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS rma_drafts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, printer_sn TEXT NOT NULL, printer_sn_norm TEXT, faulty_part TEXT,
-      source_name TEXT, photo_order TEXT, photo_skip TEXT, created_at INTEGER NOT NULL, created_by TEXT, updated_at INTEGER, updated_by TEXT)`);
+      source_name TEXT, photo_order TEXT, photo_skip TEXT, config_json TEXT, created_at INTEGER NOT NULL, created_by TEXT, updated_at INTEGER, updated_by TEXT)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS rma_draft_photos (
       id TEXT PRIMARY KEY, draft_id INTEGER NOT NULL, name TEXT, mime TEXT NOT NULL, size INTEGER NOT NULL, store TEXT NOT NULL,
       seq INTEGER NOT NULL, added_at INTEGER NOT NULL)`);
     this.sql.exec('CREATE INDEX IF NOT EXISTS rma_draft_photos_draft ON rma_draft_photos(draft_id)');
-    try { this.sql.exec('ALTER TABLE rma_drafts ADD COLUMN photo_skip TEXT'); } catch { /* already there */ }
+    for (const c of ['photo_skip', 'config_json']) {
+      try { this.sql.exec(`ALTER TABLE rma_drafts ADD COLUMN ${c} TEXT`); } catch { /* already there */ }
+    }
     this._draftsReady = true;
   },
   bulkOn() {
@@ -51,6 +54,36 @@ export const draftMethods = {
     if (!this.bulkOn()) throw err(403, 'Bulk RMA from photos is switched off. An Admin can switch it on in Company settings.', { code: 'bulk_off' });
     this.draftsReady();
   },
+  // Reading printer configuration printouts from draft photos (Workers AI). On unless an Admin switched it off.
+  configReadOn() {
+    return this.one("SELECT value FROM meta WHERE key = 'set:config_read'")?.value !== '0';
+  },
+  configReadSet(user, { on }) {
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('set:config_read', ?)", on ? '1' : '0');
+    this.audit(user, 'update', 'settings', null, { config_read: !!on });
+    return this.getSettings(user);
+  },
+  // Photos to try for a draft, most likely first (the browser sends its guess), kept photos only, at most 8.
+  draftConfigPhotos(user, { id, order }) {
+    this.draftsGuard(user);
+    if (!this.configReadOn()) throw err(403, 'Reading config printouts is switched off. An Admin can switch it on in Company settings.', { code: 'config_off' });
+    const d = this.draftRow(id);
+    const v = this.draftView(d, false);
+    const rank = new Map((Array.isArray(order) ? order.map(String) : []).map((x, i) => [x, i]));
+    const list = v.photos.filter((p) => !v.photo_skip.includes(p.id))
+      .sort((a, b) => (rank.has(a.id) ? rank.get(a.id) : 1000 + a.seq) - (rank.has(b.id) ? rank.get(b.id) : 1000 + b.seq))
+      .slice(0, CONFIG_MAX_PHOTOS);
+    return { draftId: d.id, printer_sn: d.printer_sn, photos: list.map((p) => ({ id: p.id, name: p.name, mime: p.mime })) };
+  },
+  draftConfigSave(user, { id, result }) {
+    this.draftsGuard(user);
+    const d = this.draftRow(id);
+    const r = result && typeof result === 'object' ? result : { found: false };
+    this.sql.exec('UPDATE rma_drafts SET config_json = ?, updated_at = ? WHERE id = ?', JSON.stringify({ ...r, at: Date.now(), by: user.name }).slice(0, 4000), Date.now(), d.id);
+    this.audit(user, 'read-config', 'draft', d.id, { found: !!r.found, photo: r.photoId || null, match: r.match ?? null });
+    return { draft: this.draftView(this.draftRow(d.id)) };
+  },
+
   // Admin switch (Company settings). Off hides the screens; drafts already made are kept.
   bulkPhotosSet(user, { on }) {
     this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('set:bulk_photos', ?)", on ? '1' : '0');
@@ -133,7 +166,9 @@ export const draftMethods = {
     const ids = new Set(photos.map((p) => p.id));
     const skip = list(d.photo_skip).filter((x) => ids.has(x));
     const order = list(d.photo_order).filter((x) => ids.has(x) && !skip.includes(x));
-    return { ...d, photos, photo_order: order, photo_skip: skip, check: withCheck ? this.draftCheckOne(d.printer_sn, d.faulty_part, d.id) : null };
+    let config = null;
+    try { config = d.config_json ? JSON.parse(d.config_json) : null; } catch { /* unreadable */ }
+    return { ...d, config_json: undefined, config, photos, photo_order: order, photo_skip: skip, check: withCheck ? this.draftCheckOne(d.printer_sn, d.faulty_part, d.id) : null };
   },
   draftList(user) {
     this.draftsGuard(user);

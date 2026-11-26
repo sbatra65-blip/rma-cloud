@@ -1,4 +1,5 @@
 // API router. Static PWA files are served by Cloudflare's asset handler; only /api/* reaches here.
+import { readConfigPhoto, serialMatches } from './configread.js';
 import { Directory, ROLES, MODULES } from './directory.js';
 import { Company, splitEmails } from './company.js';
 import { Checker, ValidationError, checkPassword } from './validate.js';
@@ -664,6 +665,7 @@ async function handle(request, env, ctx) {
     return respond({ deleted: r.deleted });
   }
   if (path === '/api/settings/bulk-photos' && method === 'POST') return respond(await ccall(env, user, 'bulkPhotosSet', await body(request)));
+  if (path === '/api/settings/config-read' && method === 'POST') return respond(await ccall(env, user, 'configReadSet', await body(request)));
   m = path.match(/^\/api\/drafts\/(\d{1,12})$/);
   if (m && method === 'GET') return respond(await ccall(env, user, 'draftGet', { id: m[1] }));
   if (m && method === 'POST') return respond(await ccall(env, user, 'draftUpdate', { ...(await body(request)), id: m[1] }));
@@ -671,6 +673,34 @@ async function handle(request, env, ctx) {
     const r = await ccall(env, user, 'draftDelete', { ids: [m[1]] });
     dropR2(r.r2Photos);
     return respond({ deleted: r.deleted });
+  }
+  // Read the printer's configuration printout from the draft's photos (Workers AI) and save the values on the draft.
+  m = path.match(/^\/api\/drafts\/(\d{1,12})\/read-config$/);
+  if (m && method === 'POST') {
+    const b = await body(request);
+    const c = await ccall(env, user, 'draftConfigPhotos', { id: m[1], order: b.order });
+    let result = { found: false, tried: 0 };
+    for (const p of c.photos) {
+      const got = await ccall(env, user, 'draftPhotoGet', { id: p.id });
+      let bytes = got.bytes;
+      if (got.meta.store === 'r2') {
+        const obj = env.FILES ? await env.FILES.get(`co/${user.companyId}/photo/${p.id}`) : null;
+        if (!obj) continue;
+        bytes = await obj.arrayBuffer();
+      }
+      result.tried++;
+      let read;
+      try { read = await readConfigPhoto(env, bytes, got.meta.mime, p.name); } catch (e) {
+        if (e.status === 503) return err(503, e.message);
+        result.error = 'The AI service did not answer. Try again in a minute.';
+        continue;
+      }
+      if (read) {
+        result = { found: true, tried: result.tried, photoId: p.id, photoName: p.name, read, match: serialMatches(read, c.printer_sn) };
+        break;
+      }
+    }
+    return respond(await ccall(env, user, 'draftConfigSave', { id: m[1], result }));
   }
   m = path.match(/^\/api\/drafts\/(\d{1,12})\/photos$/);
   if (m && method === 'POST') {

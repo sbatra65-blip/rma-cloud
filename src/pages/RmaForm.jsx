@@ -13,6 +13,22 @@ const SHARED = {
   purchase_date: '', delivery_to_user_date: '',
 };
 // Fields that belong to one faulty part (one RMA each).
+// Values read from the printer's configuration printout (Bulk RMA from photos) → form fields.
+// NON-RESET mileage fills TPH mileage and Printer mileage; firmware; bad dots go into the failure description.
+// Not used when the printout's serial is a different printer.
+export function configFill(config) {
+  if (!config?.found || config.match === false) return null;
+  const r = config.read || {};
+  const date = r.date ? ` (config printout ${r.date})` : '';
+  return {
+    printer_mileage: r.non_reset_m ?? null,
+    tph_mileage: r.non_reset_m ?? null,
+    fw_version: r.firmware || null,
+    model: r.model || null,
+    failure: r.bad_dot !== null && r.bad_dot !== undefined ? `Bad dots: ${r.bad_dot}${date}. ` : '',
+  };
+}
+
 const PART = { faulty_part: '', faulty_part_sn: '', faulty_part_no: '', tph_mileage: '', failure_description: '' };
 const PARTS = ['Head', 'Platen roller', 'Main board', 'Power supply', 'Front panel', 'Cutter', 'Peeler', 'Motor', 'Sensor', 'Display', 'Accessories', 'Whole printer'];
 const newPart = () => ({ ...PART, key: Math.random().toString(36).slice(2), photos: [] });
@@ -43,6 +59,20 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const [draft, setDraft] = useState(null);
   const [pick, setPick] = useState([]);
   const [skip, setSkip] = useState([]);
+  const [reading, setReading] = useState(false);
+  async function rereadConfig() {
+    setReading(true);
+    try {
+      const r = await post(`/api/drafts/${draft.id}/read-config`, { order: [] });
+      setDraft((d) => ({ ...d, config: r.draft.config }));
+      const cf = configFill(r.draft.config);
+      if (cf) {
+        setF((x) => ({ ...x, printer_mileage: cf.printer_mileage ?? x.printer_mileage, fw_version: cf.fw_version || x.fw_version }));
+        setParts((ps) => ps.map((p, i) => (i ? p : { ...p, tph_mileage: cf.tph_mileage ?? p.tph_mileage, failure_description: p.failure_description || cf.failure })));
+        toast('Read from the config printout — check the filled values');
+      } else toast(r.draft.config?.match === false ? 'The printout is for a different printer — nothing filled' : 'No configuration printout found in the kept photos', true);
+    } catch (e) { toast(e.message, true); } finally { setReading(false); }
+  }
   const saved = useRef('');
   // The photo choice is saved on the draft as it changes, so it is still there if you come back later.
   useEffect(() => {
@@ -71,7 +101,9 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
             customer_postal: c.postal || '', customer_country: c.country || 'India',
           } : {}),
         }));
-        setParts([{ ...newPart(), faulty_part: d.faulty_part || '' }]);
+        const cf = configFill(d.config);
+        setParts([{ ...newPart(), faulty_part: d.faulty_part || '', tph_mileage: cf?.tph_mileage ?? '', failure_description: cf?.failure || '' }]);
+        if (cf) setF((x) => ({ ...x, printer_mileage: cf.printer_mileage ?? x.printer_mileage, fw_version: cf.fw_version || x.fw_version, printer_model: x.printer_model || cf.model || '' }));
         setDraft(d);
         const sk = d.photo_skip || [];
         const pk = d.photo_order?.length ? d.photo_order : d.photos.filter((ph) => !sk.includes(ph.id)).slice(0, 5).map((ph) => ph.id);
@@ -430,6 +462,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
             onNote={(v) => setSnNote((x) => ({ ...x, [p.key]: v }))} onUse={(sn) => setPart(p.key, 'faulty_part_sn', sn)} />}
           {!editing && dups[p.key]?.heads && <HeadBox h={dups[p.key].heads} serial={f.printer_sn} error={errors[`p${i}_head`]}
             value={headReason[p.key] || ''} onChange={(v) => setHeadReason((x) => ({ ...x, [p.key]: v }))} />}
+          {draft && i === 0 && boot.settings?.config_read !== false && <ConfigPanel config={draft.config} sn={f.printer_sn} reading={reading} onRead={rereadConfig} />}
           {draft && i === 0 && <DraftPhotos draft={draft} pick={pick} onPick={setPick} skip={skip} onSkip={setSkip} />}
           {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
         </section>
@@ -653,6 +686,37 @@ export function DraftPhotos({ draft, pick, onPick, skip, onSkip }) {
         </div>
       ) : <p className="muted small">This zip had no photos. Add photos below.</p>}
       <PhotoViewer photos={draft.photos} index={view} onIndex={setView} onClose={() => setView(null)} srcOf={src} actions={(ph) => controls(ph, true)} />
+    </div>
+  );
+}
+
+// What was read from the configuration printout, shown on the draft above its photos.
+function ConfigPanel({ config, sn, reading, onRead }) {
+  const r = config?.read;
+  const fmt = (n) => (n === null || n === undefined ? '—' : `${Number(n).toLocaleString('en-IN')} m`);
+  let tone = 'muted';
+  let head = 'No configuration printout read yet.';
+  if (config?.found && config.match === false) { tone = 'bad'; head = `The printout is for printer ${r.serial}, not ${sn}. Nothing was filled in — check the photos.`; }
+  else if (config?.found) { tone = config.match ? 'ok' : 'warn'; head = config.match ? 'Read from the configuration printout and filled in (mileage, firmware, failure description). Check them against the photo.' : 'Read from the configuration printout, but its S/N was not readable — check that it is this printer.'; }
+  else if (config) head = config.error || `No configuration printout found in ${config.tried || 0} photo${config.tried === 1 ? '' : 's'}.`;
+  return (
+    <div className={`cfgpanel ${tone}`}>
+      <div className="spread">
+        <b>Printer configuration printout</b>
+        <button type="button" className="btn ghost small" disabled={reading} onClick={onRead}>{reading ? 'Reading…' : config ? 'Read again' : 'Read printout'}</button>
+      </div>
+      <p className="small" style={{ margin: '4px 0 0' }}>{head}</p>
+      {config?.found && (
+        <dl className="cfgvals small">
+          <div><dt>S/N</dt><dd className="mono">{r.serial || '—'}</dd></div>
+          <div><dt>NON-RESET</dt><dd>{fmt(r.non_reset_m)}</dd></div>
+          <div><dt>RESET</dt><dd>{fmt(r.reset_m)}</dd></div>
+          <div><dt>Firmware</dt><dd>{r.firmware || '—'}</dd></div>
+          <div><dt>Bad dots</dt><dd>{r.bad_dot ?? '—'}</dd></div>
+          <div><dt>Date</dt><dd>{r.date || '—'}</dd></div>
+        </dl>
+      )}
+      {config?.found && config.match !== false && <p className="tiny muted" style={{ margin: '6px 0 0' }}>NON-RESET goes into TPH mileage and Printer mileage (OEM Excel); firmware into Firmware version; bad dots into the failure description.</p>}
     </div>
   );
 }

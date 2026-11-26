@@ -434,6 +434,7 @@ export class Company extends DurableObject {
       // bulk RMA from photo zips (drafts)
       draftCheck: 'edit', draftCreate: 'edit', draftPhotoPut: 'edit', draftPhotoGet: 'edit', draftList: 'edit', draftGet: 'edit',
       draftUpdate: 'edit', draftDelete: 'edit', draftCount: 'read', bulkPhotosSet: 'admin',
+      draftConfigPhotos: 'edit', draftConfigSave: 'edit', configReadSet: 'admin',
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only
@@ -486,7 +487,7 @@ export class Company extends DurableObject {
     const logo = this.one('SELECT updated_at FROM files WHERE id = ?', 'company_logo');
     const since = user?.trialStarted ? Date.parse(`${user.trialStarted}T00:00:00+05:30`) : 0;
     const trialRmasUsed = user?.plan === 'trial' ? this.one('SELECT COUNT(*) AS n FROM tickets WHERE COALESCE(is_imported, 0) = 0 AND created_at >= ?', since).n : null;
-    return { ...s, ...this.cpSettings(), bulk_photos: s.bulk_photos !== '0', template: tpl || null, logoAt: logo?.updated_at || null, trialRmasUsed };
+    return { ...s, ...this.cpSettings(), bulk_photos: s.bulk_photos !== '0', config_read: s.config_read !== '0', template: tpl || null, logoAt: logo?.updated_at || null, trialRmasUsed };
   }
   saveSettings(user, b) {
     const c = new Checker(b);

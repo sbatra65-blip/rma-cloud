@@ -45,10 +45,10 @@ export async function bulkOemExcel(ids, companyName, onProgress) {
     title: `RMAs for the OEM — ${done.length} RMA${done.length === 1 ? '' : 's'}`,
     subtitle: `${companyName || ''} · Generated ${new Date().toLocaleString('en-IN')}`,
     headers: ['S.No.', 'Internal Ticket #', 'Date Raised', 'Customer Name', 'Printer Model', 'Printer SN', 'Faulty Part', 'Faulty Part No.', 'Faulty Part SN',
-      'TPH Mileage', 'Failure Description', 'OEM RMA #', 'Stage', 'Photos', 'Excel file'],
-    widths: [6, 22, 14, 24, 15, 18, 15, 16, 18, 12, 36, 18, 22, 8, 34],
+      'TPH Mileage', 'Printer Mileage', 'Firmware', 'Failure Description', 'OEM RMA #', 'Stage', 'Photos', 'Excel file'],
+    widths: [6, 22, 14, 24, 15, 18, 15, 16, 18, 12, 14, 16, 36, 18, 22, 8, 34],
     rows: done.map(({ t, file, photos }, i) => [i + 1, t.ticket_no, fmtMs(t.created_at), t.customer_company || '', t.printer_model || '', t.printer_sn || '',
-      t.faulty_part || '', t.faulty_part_no || '', t.faulty_part_sn || '', t.tph_mileage ?? '', t.failure_description || '', t.oem_rma_number || '',
+      t.faulty_part || '', t.faulty_part_no || '', t.faulty_part_sn || '', t.tph_mileage ?? '', t.printer_mileage ?? '', t.fw_version || '', t.failure_description || '', t.oem_rma_number || '',
       t.status_label || t.status, photos, file]),
     total: `Total RMAs: ${done.length}`,
   });

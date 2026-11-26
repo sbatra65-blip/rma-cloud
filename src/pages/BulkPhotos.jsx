@@ -43,6 +43,37 @@ async function readZip(file) {
   return out;
 }
 
+// How much of a photo is white label paper: config printouts score high, so they are read first.
+async function whiteness(blob) {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const c = document.createElement('canvas');
+    c.width = 48; c.height = 48;
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0, 48, 48);
+    bmp.close?.();
+    const d = g.getImageData(0, 0, 48, 48).data;
+    let w = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 175 && d[i + 1] > 175 && d[i + 2] > 175 && Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) < 40) w++;
+    return w / (48 * 48);
+  } catch { return 0; }
+}
+
+// Reads the printer's configuration printout from the draft's photos (server side, Workers AI).
+export async function readDraftConfig(draftId, order) {
+  return post(`/api/drafts/${draftId}/read-config`, { order });
+}
+
+// One line about what was read from the printout.
+export function ConfigNote({ c, sn }) {
+  if (!c) return null;
+  if (!c.found) return <div className="small muted">{c.error || (c.tried ? `No configuration printout found in ${c.tried} photo${c.tried === 1 ? '' : 's'}` : 'No configuration printout read')}</div>;
+  const r = c.read;
+  const mileage = r.non_reset_m !== null && r.non_reset_m !== undefined ? `${r.non_reset_m.toLocaleString('en-IN')} m` : 'not readable';
+  if (c.match === false) return <div className="small" style={{ color: 'var(--rust)', fontWeight: 650 }}>Printout S/N {r.serial} is not {sn} — not used</div>;
+  return <div className="small"><span className="pill ok">Printout read</span> NON-RESET {mileage}{r.bad_dot !== null ? ` · bad dots ${r.bad_dot}` : ''}{c.match === null ? ' · S/N not readable — check' : ''}</div>;
+}
+
 export function CoverPill({ c }) {
   if (!c) return <span className="pill">Checking…</span>;
   if (c.error) return <span className="pill bad">{c.error}</span>;
@@ -69,7 +100,7 @@ export function DupNotes({ c, inUpload }) {
 // Lines that should not become drafts unless someone ticks "Make a draft anyway".
 const needsKeep = (c, inUpload) => !!(c && !c.error && (c.likely.length || c.drafts?.length)) || inUpload;
 
-export default function BulkPhotos({ onChange }) {
+export default function BulkPhotos({ boot, onChange }) {
   const toast = useToast();
   const [lines, setLines] = useState([]);
   const [reading, setReading] = useState(0);
@@ -139,6 +170,7 @@ export default function BulkPhotos({ onChange }) {
     return '';
   };
   const ready = lines.filter((l) => !l.state && !why(l));
+  const readCfg = boot?.settings?.config_read !== false;
 
   async function createDrafts() {
     let ok = 0;
@@ -149,15 +181,26 @@ export default function BulkPhotos({ onChange }) {
       try {
         const d = await post('/api/drafts', { printer_sn: l.sn, faulty_part: l.part, source_name: l.zip });
         let fails = 0;
+        const scored = [];
         for (const ph of l.photos) {
           try {
             const blob = await compressImage(ph.blob);
-            await api('POST', `/api/drafts/${d.id}/photos`, blob, {
+            const up = await api('POST', `/api/drafts/${d.id}/photos`, blob, {
               headers: { 'X-File-Name': encodeURIComponent(ph.name.replace(/\.(heic|heif|webp|png)$/i, '.jpg')), 'Content-Type': 'image/jpeg' },
             });
+            if (readCfg) scored.push({ id: up.id, w: await whiteness(blob) });
           } catch { fails++; }
         }
-        set(l.key, { state: 'done', draftId: d.id, fails });
+        let config = null;
+        if (readCfg && scored.length) {
+          setBusy(`Reading the config printout ${i + 1} of ${ready.length}…`);
+          set(l.key, { state: 'reading' });
+          try {
+            const r = await readDraftConfig(d.id, scored.sort((a, b) => b.w - a.w).map((x) => x.id));
+            config = r.draft.config;
+          } catch (e) { config = { found: false, error: `Printout not read: ${e.message}` }; }
+        }
+        set(l.key, { state: 'done', draftId: d.id, fails, config });
         ok++;
       } catch (e) {
         set(l.key, { state: '', saveError: e.message });
@@ -168,7 +211,7 @@ export default function BulkPhotos({ onChange }) {
     if (ok) {
       toast(`${ok} draft${ok === 1 ? '' : 's'} saved. Check each one and accept it as an RMA.`);
       setLines((ls) => {
-        const left = ls.filter((l) => l.state !== 'done' || l.fails);
+        const left = ls.filter((l) => l.state !== 'done' || l.fails || (readCfg && !l.config?.found) || l.config?.match === false);
         ls.filter((l) => !left.includes(l)).forEach((l) => l.photos.forEach((p) => URL.revokeObjectURL(p.url)));
         if (!left.length) setTimeout(() => navigate('/drafts'), 0);
         return left;
@@ -235,6 +278,8 @@ export default function BulkPhotos({ onChange }) {
                       {DRAFT_PARTS.map((p) => <button type="button" key={p} aria-pressed={l.part === p} disabled={!!l.state} onClick={() => set(l.key, { part: p })}>{p}</button>)}
                     </div>
                     {l.state === 'saving' && <span className="small muted">Saving…</span>}
+                    {l.state === 'reading' && <span className="small muted">Reading the config printout…</span>}
+                    {l.state === 'done' && <ConfigNote c={l.config} sn={l.sn} />}
                     {l.state === 'done' && <span className="small"><span className="pill ok">Draft saved</span>{l.fails ? ` · ${l.fails} photo${l.fails === 1 ? '' : 's'} could not be added` : ''}</span>}
                     {!l.state && reason && <span className="small muted">{reason}</span>}
                     {l.saveError && <span className="small" style={{ color: 'var(--rust)' }}>{l.saveError}</span>}
@@ -316,6 +361,7 @@ export function Drafts({ onChange }) {
                   <b className="mono">{d.printer_sn}</b>
                   <div className="small">{d.faulty_part}{d.check?.device ? ` · ${[d.check.device.printer_model, d.check.device.customer_name].filter(Boolean).join(' · ')}` : ''}</div>
                   <div className="small muted">{d.source_name || 'photo zip'} · {d.created_by} · {ago(d.created_at)}</div>
+                  <ConfigNote c={d.config} sn={d.printer_sn} />
                 </div>
                 <div className="bl-check"><CoverPill c={d.check} /><DupNotes c={d.check} /></div>
                 <div className="bl-photos">

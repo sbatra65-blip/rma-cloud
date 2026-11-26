@@ -40,7 +40,7 @@ export const SCREEN_HELP = [
       'Read the RMA notes on each line: "Likely duplicate" (same part on an open RMA), "Open RMA on this printer", "Repeat failure" (same part closed in the last 90 days) or "Already waiting in Draft RMAs".',
       'Tap the faulty part: Print head, Main board, Power supply, Front panel, Accessories or Other.',
       'Remove any line you do not want with the × button. Lines marked as likely duplicates are skipped unless you tick "Make a draft anyway".',
-      'Press "Create drafts". Nothing is an RMA yet — open Draft RMAs to check and accept each one.',
+      'Press "Create drafts". Each zip\'s photos are saved, then the printer\'s configuration printout is looked for in them and its NON-RESET mileage, firmware, serial and bad dots are read. Nothing is an RMA yet — open Draft RMAs to check and accept each one.',
     ],
     tips: ['A draft has no RMA number, does not email the customer and is not in reports.', 'Everyone except Viewers can use it. An Admin can switch it off for one person (Users & security) or for the whole company (Company settings).'],
   },
@@ -51,7 +51,8 @@ export const SCREEN_HELP = [
     what: 'Drafts made from photo zips, waiting to be checked and accepted as RMAs.',
     steps: [
       'Press "Review & accept" on a draft. The New RMA form opens with the serial, model, customer and part filled in.',
-      'Fill in what is missing: customer email, part serial and number, TPH mileage and the failure description.',
+      'Check the "Printer configuration printout" box: NON-RESET mileage is filled into TPH mileage and Printer mileage, firmware into Firmware version, bad dots into the failure description. If the printout\'s S/N is a different printer, nothing is filled. Use "Read again" after changing which photos are kept.',
+      'Fill in what is missing: customer email, part serial and number, and the failure description.',
       'Every photo from the zip is saved on the draft. Tap a photo to see it large (arrows for next / previous). Untick "Keep" to leave a photo out of the RMA, and press "Excel" on up to five photos for the OEM Excel boxes 1–5.',
       'Press "Accept & create RMA", or "Accept & next draft" to go straight to the next one. All the normal RMA checks run.',
       'To delete drafts, tick them and press "Delete selected", or use the bin on one draft.',
