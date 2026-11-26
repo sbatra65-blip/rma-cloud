@@ -160,6 +160,7 @@ export default function Settings({ user, boot, reloadBoot, onUserChange }) {
 
       <div className="savebar"><button className="btn primary" disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save settings'}</button></div>
     </form>
+    <BulkPhotosPanel boot={boot} reloadBoot={reloadBoot} />
     <PrivacyPanel />
     {user.company.modules?.includes('carepack') && <CarePackSettings s0={s0} reloadBoot={reloadBoot} />}
     {user.company.modules?.includes('zoho') && <ZohoSettings s0={s0} reloadBoot={reloadBoot} />}
@@ -469,6 +470,31 @@ function PrivacyPanel() {
           </table></div>
         )}
         <p className="small"><a href="/privacy" target="_blank" rel="noopener">Privacy policy</a> · <a href="/terms" target="_blank" rel="noopener">Terms of service</a></p>
+      </div>
+    </section>
+  );
+}
+
+// Switch for "Bulk RMA from photos" (zips → draft RMAs). Off hides the screens; drafts already made are kept.
+function BulkPhotosPanel({ boot, reloadBoot }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const on = boot.settings?.bulk_photos !== false;
+  async function flip(next) {
+    setBusy(true);
+    try {
+      await post('/api/settings/bulk-photos', { on: next });
+      await reloadBoot();
+      toast(next ? 'Bulk RMA from photos switched on' : 'Bulk RMA from photos switched off — drafts already made are kept');
+    } catch (e) { toast(e.message, true); } finally { setBusy(false); }
+  }
+  return (
+    <section className="panel" id="bulk-photos" style={{ marginTop: 16 }}>
+      <h2>Bulk RMA from photos</h2>
+      <div className="stack">
+        <label className="check"><input type="checkbox" checked={on} disabled={busy} onChange={(e) => flip(e.target.checked)} />
+          Let people upload photo zips (one per printer, named with its serial) and turn them into draft RMAs</label>
+        <p className="muted small">For everyone except Viewers. To switch it off for one person, untick "Bulk RMA from photos" for them in Users &amp; security. Switching it off here hides it for the whole company; drafts already made are kept and come back when you switch it on again. RMAs already accepted are normal RMAs and are not affected.</p>
       </div>
     </section>
   );

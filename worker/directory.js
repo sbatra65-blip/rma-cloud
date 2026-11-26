@@ -116,6 +116,8 @@ export class Directory extends DurableObject {
     for (const [c, def] of COMPANY_COLS) {
       try { this.sql.exec(`ALTER TABLE companies ADD COLUMN ${c} ${def}`); } catch { /* already there */ }
     }
+    // Per-login switch for "Bulk RMA from photos": 0 = allowed (default), 1 = switched off by an Admin.
+    try { this.sql.exec('ALTER TABLE users ADD COLUMN no_bulk INTEGER NOT NULL DEFAULT 0'); } catch { /* already there */ }
   }
 
   // ---------- Company limits (set from the console) ----------
@@ -577,7 +579,7 @@ export class Directory extends DurableObject {
     }
     if (!s) return null;
     const u = this.one(
-      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.disabled, c.id AS company_id, c.name AS company_name,
+      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.no_bulk, u.is_owner, u.disabled, c.id AS company_id, c.name AS company_name,
               c.code AS company_code, c.ticket_prefix, c.active, c.valid_until, c.idle_minutes, c.modules, c.plan, c.extended_at, c.advance_amount, c.trial_started
        FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, s.user_id);
     const idle = this.idleFor(u);
@@ -596,7 +598,7 @@ export class Directory extends DurableObject {
     return {
       sessionId: s.id, userId: u.id, email: u.email, name: u.name, isOwner: !!u.is_owner,
       companyId: u.company_id, companyName: u.company_name, companyCode: u.company_code, ticketPrefix: u.ticket_prefix,
-      role: u.role, dupOverride: !!u.dup_override || u.role === 'Admin', modules: this.modulesOf(u),
+      role: u.role, dupOverride: !!u.dup_override || u.role === 'Admin', bulkPhotos: !u.no_bulk && u.role !== 'Viewer', modules: this.modulesOf(u),
       newToken: newTok, expiresIn: idle, idleMinutes: idle / MIN,
       plan: u.plan || 'paid', access: this.access(u), trialStarted: u.trial_started || null,
     };
@@ -613,13 +615,13 @@ export class Directory extends DurableObject {
   publicUser(arg) {
     const userId = typeof arg === 'string' ? arg : arg.userId;
     const u = this.one(
-      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.is_owner, u.recovery, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix,
+      `SELECT u.id, u.email, u.name, u.role, u.dup_override, u.no_bulk, u.is_owner, u.recovery, c.id AS cid, c.name AS cname, c.code, c.ticket_prefix,
               c.modules, c.idle_minutes, c.valid_until, c.plan, c.extended_at, c.advance_amount
        FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = ?`, userId);
     if (!u) return null;
     return {
       id: u.id, email: u.email, name: u.name, role: u.role, isOwner: !!u.is_owner,
-      dupOverride: !!u.dup_override || u.role === 'Admin',
+      dupOverride: !!u.dup_override || u.role === 'Admin', bulkPhotos: !u.no_bulk && u.role !== 'Viewer',
       company: { id: u.cid, name: u.cname, code: u.code, ticketPrefix: u.ticket_prefix, modules: this.modulesOf(u), validUntil: u.valid_until,
         billing: { ...this.accessInfo(u), payment: this.paymentInfo() } },
       idleMinutes: this.idleFor(u) / MIN,
@@ -636,14 +638,14 @@ export class Directory extends DurableObject {
     this.requireAdmin(actor);
     const now = Date.now();
     const rows = this.all(
-      `SELECT id, email, name, role, dup_override, is_owner, disabled, totp_enabled, last_login, created_at, locked_until
+      `SELECT id, email, name, role, dup_override, no_bulk, is_owner, disabled, totp_enabled, last_login, created_at, locked_until
        FROM users WHERE company_id = ? ORDER BY disabled, name COLLATE NOCASE`, actor.companyId);
     const invites = new Set(this.all("SELECT user_id FROM pending WHERE purpose = 'invite' AND expires > ?", now).map((r) => r.user_id));
     const c = this.one('SELECT * FROM companies WHERE id = ?', actor.companyId);
     const online = new Set(this.all('SELECT user_id FROM sessions WHERE last_active > ?', now - this.idleFor(c)).map((r) => r.user_id));
     return rows.map((r) => ({
       id: r.id, email: r.email, name: r.name, role: r.role, isOwner: !!r.is_owner, disabled: !!r.disabled,
-      dupOverride: !!r.dup_override, lastLogin: r.last_login, createdAt: r.created_at,
+      dupOverride: !!r.dup_override, bulkPhotos: !r.no_bulk, lastLogin: r.last_login, createdAt: r.created_at,
       status: r.disabled ? 'Disabled' : r.totp_enabled ? (r.locked_until > now ? 'Locked' : 'Active') : invites.has(r.id) ? 'Invited' : 'Invite expired',
       online: online.has(r.id), you: r.id === actor.userId,
     }));
@@ -684,7 +686,7 @@ export class Directory extends DurableObject {
     return row;
   }
 
-  updateUser({ actor, userId, role, dupOverride, disabled, name }) {
+  updateUser({ actor, userId, role, dupOverride, bulkPhotos, disabled, name }) {
     this.requireAdmin(actor);
     const u = this.userIn(actor, userId);
     const losingAdmin = u.role === 'Admin' && ((role && role !== 'Admin') || disabled === true);
@@ -704,6 +706,10 @@ export class Directory extends DurableObject {
     if (typeof dupOverride === 'boolean' && dupOverride !== !!u.dup_override) {
       this.sql.exec('UPDATE users SET dup_override = ? WHERE id = ?', dupOverride ? 1 : 0, userId);
       changes.push(`duplicate override ${dupOverride ? 'on' : 'off'}`);
+    }
+    if (typeof bulkPhotos === 'boolean' && bulkPhotos !== !u.no_bulk) {
+      this.sql.exec('UPDATE users SET no_bulk = ? WHERE id = ?', bulkPhotos ? 0 : 1, userId);
+      changes.push(`bulk RMA from photos ${bulkPhotos ? 'on' : 'off'}`);
     }
     if (typeof disabled === 'boolean' && disabled !== !!u.disabled) {
       if (!disabled) this.checkUserLimit(this.one('SELECT * FROM companies WHERE id = ?', actor.companyId));

@@ -339,7 +339,7 @@ async function handle(request, env, ctx) {
   if (!session) return err(401, 'Your session ended. Please log in again.', { code: 'session_ended' });
   const user = {
     userId: session.userId, sessionId: session.sessionId, email: session.email, name: session.name, role: session.role,
-    isOwner: session.isOwner, dupOverride: session.dupOverride, companyId: session.companyId, companyName: session.companyName,
+    isOwner: session.isOwner, dupOverride: session.dupOverride, bulkPhotos: session.bulkPhotos, companyId: session.companyId, companyName: session.companyName,
     companyCode: session.companyCode, ticketPrefix: session.ticketPrefix, modules: session.modules,
     plan: session.plan, access: session.access, trialStarted: session.trialStarted,
   };
@@ -408,8 +408,10 @@ async function handle(request, env, ctx) {
   if (path === '/api/rma' && method === 'GET') return respond(await ccall(env, user, 'listTickets', Object.fromEntries(url.searchParams)));
   if (path === '/api/rma' && method === 'POST') {
     const b = await body(request);
-    const r = await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote });
+    const r = await ccall(env, user, 'createTicket', { ticket: b.ticket, overrideReason: b.overrideReason, addToCarePack: b.addToCarePack, headReason: b.headReason, partSnNote: b.partSnNote,
+      draftId: Number(b.draftId) || undefined, draftPhotos: Array.isArray(b.draftPhotos) ? b.draftPhotos.slice(0, 5).map(String) : undefined });
     ctx.waitUntil(flushCustomerNotices(env, user, url));
+    if (r.fromDraft?.r2Dropped?.length && env.FILES) ctx.waitUntil(Promise.all(r.fromDraft.r2Dropped.map((pid) => env.FILES.delete(`co/${user.companyId}/photo/${pid}`))));
     return respond(r);
   }
   if (path === '/api/devices' && method === 'GET') return respond(await ccall(env, user, 'searchDevices', { q: url.searchParams.get('q') }));
@@ -644,6 +646,73 @@ async function handle(request, env, ctx) {
     return respond({ ok: true });
   }
 
+  // Bulk RMA from photo zips: drafts (see worker/drafts.js). Draft photos use the same R2 key as RMA photos,
+  // so accepting a draft moves them onto the RMA without copying.
+  const dropR2 = (ids) => { if (env.FILES && ids?.length) ctx.waitUntil(Promise.all(ids.map((pid) => env.FILES.delete(`co/${user.companyId}/photo/${pid}`)))); };
+  if (path === '/api/drafts/count' && method === 'GET') return respond(await ccall(env, user, 'draftCount'));
+  if (path === '/api/drafts/check' && method === 'POST') return respond(await ccall(env, user, 'draftCheck', await body(request)));
+  if (path === '/api/drafts' && method === 'GET') {
+    const r = await ccall(env, user, 'draftList');
+    dropR2(r.r2Photos);
+    return respond({ ...r, r2Photos: undefined });
+  }
+  if (path === '/api/drafts' && method === 'POST') return respond(await ccall(env, user, 'draftCreate', await body(request)));
+  if (path === '/api/drafts/delete' && method === 'POST') {
+    const r = await ccall(env, user, 'draftDelete', await body(request));
+    dropR2(r.r2Photos);
+    return respond({ deleted: r.deleted });
+  }
+  if (path === '/api/settings/bulk-photos' && method === 'POST') return respond(await ccall(env, user, 'bulkPhotosSet', await body(request)));
+  m = path.match(/^\/api\/drafts\/(\d{1,12})$/);
+  if (m && method === 'GET') return respond(await ccall(env, user, 'draftGet', { id: m[1] }));
+  if (m && method === 'POST') return respond(await ccall(env, user, 'draftUpdate', { ...(await body(request)), id: m[1] }));
+  if (m && method === 'DELETE') {
+    const r = await ccall(env, user, 'draftDelete', { ids: [m[1]] });
+    dropR2(r.r2Photos);
+    return respond({ deleted: r.deleted });
+  }
+  m = path.match(/^\/api\/drafts\/(\d{1,12})\/photos$/);
+  if (m && method === 'POST') {
+    const len = Number(request.headers.get('Content-Length') || 0);
+    if (len > MAX_PHOTO) throw new ValidationError({ file: 'Photo is larger than 10 MB' });
+    const bytes = await request.arrayBuffer();
+    if (!bytes.byteLength) throw new ValidationError({ file: 'Photo is empty' });
+    if (bytes.byteLength > MAX_PHOTO) throw new ValidationError({ file: 'Photo is larger than 10 MB' });
+    const mime = sniff(bytes);
+    if (!mime || !/^image\/(jpeg|png)$/.test(mime)) throw new ValidationError({ file: 'Only JPG or PNG photos can be added to a draft' });
+    const name = decodeURIComponent(request.headers.get('X-File-Name') || 'photo.jpg').replace(/[^\w .()-]/g, '_').slice(0, 120);
+    const args = { draftId: m[1], name, mime, bytes };
+    if (env.FILES) {
+      const id = uuid();
+      const key = `co/${user.companyId}/photo/${id}`;
+      await env.FILES.put(key, bytes, { httpMetadata: { contentType: mime } });
+      try {
+        return respond(await ccall(env, user, 'draftPhotoPut', { ...args, bytes: bytes.byteLength, r2Id: id }));
+      } catch (e) {
+        await env.FILES.delete(key);
+        throw e;
+      }
+    }
+    return respond(await ccall(env, user, 'draftPhotoPut', args));
+  }
+  m = path.match(/^\/api\/drafts\/photos\/([0-9a-f-]{36})$/);
+  if (m && method === 'GET') {
+    const r = await ccall(env, user, 'draftPhotoGet', { id: m[1] });
+    let data = r.bytes;
+    if (r.meta.store === 'r2') {
+      if (!env.FILES) return err(500, 'Photo storage is not connected');
+      const obj = await env.FILES.get(`co/${user.companyId}/photo/${r.meta.id}`);
+      if (!obj) return err(404, 'Photo not found');
+      data = obj.body;
+    }
+    return raw(data, {
+      'Content-Type': r.meta.mime,
+      'Content-Disposition': `inline; filename="${r.meta.name.replace(/"/g, '')}"`,
+      'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox",
+      'Cache-Control': 'private, max-age=3600',
+    });
+  }
+
   // Company logo
   if (path === '/api/company/logo' && method === 'GET') {
     const l = await ccall(env, user, 'getLogo');
@@ -764,6 +833,7 @@ async function handle(request, env, ctx) {
     const args = { actor: user, userId: m[1] };
     if (b.role !== undefined) args.role = String(b.role);
     if (b.dupOverride !== undefined) args.dupOverride = b.dupOverride === true;
+    if (b.bulkPhotos !== undefined) args.bulkPhotos = b.bulkPhotos === true;
     if (b.disabled !== undefined) args.disabled = b.disabled === true;
     if (b.name !== undefined) args.name = new Checker(b).text('name', { required: true, max: 80, label: 'Name' }).done().name;
     return respond(await dcall(env, 'updateUser', args));
@@ -1324,6 +1394,7 @@ async function handleConsole(request, env, ctx, url, path, method, client) {
     const args = { userId: m[2] };
     if (b.role !== undefined) args.role = String(b.role);
     if (b.dupOverride !== undefined) args.dupOverride = b.dupOverride === true;
+    if (b.bulkPhotos !== undefined) args.bulkPhotos = b.bulkPhotos === true;
     if (b.disabled !== undefined) args.disabled = b.disabled === true;
     return respond(await dcall(env, 'consoleAct', { op, companyId: m[1], action: 'updateUser', args }));
   }

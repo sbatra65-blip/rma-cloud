@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, uploadPhoto } from '../api.js';
-import { Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, can, fmtDate, navigate, query, todayISO, useToast } from '../ui.jsx';
+import { Dialog, ErrorPanel, Field, Icon, Link, Skeleton, Status, can, fmtDate, fmtMs, navigate, query, todayISO, useToast } from '../ui.jsx';
 import { CarePackPicker, CoverNote } from './CarePackLink.jsx';
 
 // Fields shared by every part raised for this printer.
@@ -13,7 +13,7 @@ const SHARED = {
 };
 // Fields that belong to one faulty part (one RMA each).
 const PART = { faulty_part: '', faulty_part_sn: '', faulty_part_no: '', tph_mileage: '', failure_description: '' };
-const PARTS = ['Head', 'Platen roller', 'Main board', 'Power supply', 'Cutter', 'Peeler', 'Motor', 'Sensor', 'Display', 'Whole printer'];
+const PARTS = ['Head', 'Platen roller', 'Main board', 'Power supply', 'Front panel', 'Cutter', 'Peeler', 'Motor', 'Sensor', 'Display', 'Accessories', 'Whole printer'];
 const newPart = () => ({ ...PART, key: Math.random().toString(36).slice(2), photos: [] });
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 const normSn = (s) => String(s || '').replace(/\s+/g, '').toUpperCase();
@@ -37,9 +37,35 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
   const [cpAdd, setCpAdd] = useState({ reason: '', batchId: '' });
   const [headReason, setHeadReason] = useState({});
   const [snNote, setSnNote] = useState({});
+  // Draft from a photo zip (Bulk from photos): /rma/new?draft=ID. Accepting it raises the RMA and moves its photos.
+  const draftId = editing ? null : query().draft || null;
+  const [draft, setDraft] = useState(null);
+  const [pick, setPick] = useState([]);
 
   // Load the ticket (edit) or copy customer + printer from another RMA (?from=ID, "raise another part").
   useEffect(() => {
+    if (draftId) {
+      get(`/api/drafts/${draftId}`).then((r) => {
+        const d = r.draft;
+        const dev = d.check?.device;
+        const all = boot.masters.customers.filter((c) => c.active);
+        const c = dev?.customer_name ? all.find((x) => norm(x.name) === norm(dev.customer_name)) : null;
+        setF((x) => ({
+          ...x, printer_sn: d.printer_sn, printer_model: dev?.printer_model || x.printer_model, purchase_date: dev?.invoice_date || x.purchase_date,
+          ...(c ? {
+            customer_id: String(c.id), customer_company: c.name, customer_contact_name: c.contact_name || '', customer_email: c.email ? String(c.email).split(/[,;\s]+/)[0] : '',
+            customer_phone: c.phone || '', customer_address: c.address || '', customer_city: c.city || dev?.customer_city || '', customer_state: c.state || '',
+            customer_postal: c.postal || '', customer_country: c.country || 'India',
+          } : {}),
+        }));
+        setParts([{ ...newPart(), faulty_part: d.faulty_part || '' }]);
+        setDraft(d);
+        setPick(d.photo_order?.length ? d.photo_order : d.photos.slice(0, 5).map((ph) => ph.id));
+        if (dev?.customer_name && !c) toast(`"${dev.customer_name}" from the care pack is not in the customer list — choose the customer in step 1.`, true);
+        setLoaded(true);
+      }).catch(setLoadError);
+      return;
+    }
     const src = editing ? id : query().from;
     if (!src) { setLoaded(true); return; }
     get(`/api/rma/${src}`).then((r) => {
@@ -138,6 +164,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
 
   async function submit(e) {
     e.preventDefault();
+    const goNext = e.nativeEvent?.submitter?.value === 'next';
     const errs = {};
     if (!editing && !f.customer_id) errs.customer_company = 'Choose the customer from the list';
     else if (!f.customer_company.trim()) errs.customer_company = 'Customer is required';
@@ -205,6 +232,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
           partSnNote: snNote[p.key] || undefined,
           overrideReason: override.on && dups[p.key]?.blocks?.length ? override.reason : undefined,
           addToCarePack: i === 0 && notInCarePack && cpAdd.on ? { reason: cpAdd.reason, batchId: cpAdd.batchId || null } : undefined,
+          ...(i === 0 && draft ? { draftId: draft.id, draftPhotos: pick } : {}),
         };
         const r = await post('/api/rma', body);
         created.push(r.ticket);
@@ -225,6 +253,15 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     setBusy('');
     onChange?.();
     if (photoFails) toast(`${photoFails} photo${photoFails === 1 ? '' : 's'} could not be uploaded. Add them on the RMA.`, true);
+    if (draft) {
+      toast(`RMA ${created.map((t) => t.ticket_no).join(', ')} raised from draft ${draft.printer_sn} — ${draft.photos.length} photo${draft.photos.length === 1 ? '' : 's'} moved`);
+      let next = null;
+      if (goNext) next = await get('/api/drafts').then((r) => r.drafts[0]?.id || null).catch(() => null);
+      if (next) navigate(`/rma/new?draft=${next}`, { replace: true });
+      else if (goNext) navigate('/drafts', { replace: true });
+      else navigate(`/rma/${created[0].id}`, { replace: true });
+      return;
+    }
     if (created.length === 1) {
       toast(`RMA ${created[0].ticket_no} raised`);
       navigate(`/rma/${created[0].id}`, { replace: true });
@@ -239,9 +276,10 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
     <form onSubmit={submit} noValidate>
       <div className="page-head">
         <div>
-          <Link to={editing ? `/rma/${id}` : '/rma'} className="small muted" style={{ textDecoration: 'none' }}>← {editing ? ticketNo : 'RMAs'}</Link>
-          <h1>{editing ? 'Edit RMA' : 'New RMA'}</h1>
-          {!editing && <p className="muted">Several faulty parts from one device? Add each part below — each gets its own RMA number and OEM form.</p>}
+          <Link to={editing ? `/rma/${id}` : draft ? '/drafts' : '/rma'} className="small muted" style={{ textDecoration: 'none' }}>← {editing ? ticketNo : draft ? 'Drafts' : 'RMAs'}</Link>
+          <h1>{editing ? 'Edit RMA' : draft ? <>Draft · <span className="mono">{draft.printer_sn}</span></> : 'New RMA'}</h1>
+          {draft && <p className="muted">From {draft.source_name || 'a photo zip'} · made by {draft.created_by} on {fmtMs(draft.created_at)}. No RMA number yet and the customer has not been emailed. Check every field, then Accept — all the normal RMA checks run.</p>}
+          {!editing && !draft && <p className="muted">Several faulty parts from one device? Add each part below — each gets its own RMA number and OEM form.</p>}
           {editing && status && <p style={{ marginTop: 6 }}><Status s={status} /></p>}
         </div>
       </div>
@@ -374,6 +412,7 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
             onNote={(v) => setSnNote((x) => ({ ...x, [p.key]: v }))} onUse={(sn) => setPart(p.key, 'faulty_part_sn', sn)} />}
           {!editing && dups[p.key]?.heads && <HeadBox h={dups[p.key].heads} serial={f.printer_sn} error={errors[`p${i}_head`]}
             value={headReason[p.key] || ''} onChange={(v) => setHeadReason((x) => ({ ...x, [p.key]: v }))} />}
+          {draft && i === 0 && <DraftPhotos draft={draft} pick={pick} onPick={setPick} />}
           {!editing && <PartPhotos part={p} onChange={(photos) => setPart(p.key, 'photos', photos)} />}
         </section>
       ))}
@@ -383,8 +422,9 @@ export default function RmaForm({ user, boot, reloadBoot, id, onChange }) {
       )}
 
       <div className="savebar">
-        <Link to={editing ? `/rma/${id}` : '/rma'} className="btn ghost">Cancel</Link>
-        <button className="btn primary" disabled={!!busy}>{busy ? (busy === 'save' ? 'Saving…' : busy) : editing ? 'Save changes' : parts.length > 1 ? `Raise ${parts.length} RMAs` : 'Raise RMA'}</button>
+        <Link to={editing ? `/rma/${id}` : draft ? '/drafts' : '/rma'} className="btn ghost">{draft ? 'Back to drafts' : 'Cancel'}</Link>
+        {draft && <button className="btn ghost" name="go" value="next" disabled={!!busy}>Accept &amp; next draft</button>}
+        {draft ? <button className="btn primary" name="go" value="one" disabled={!!busy}>{busy || (parts.length > 1 ? `Accept & raise ${parts.length} RMAs` : 'Accept & create RMA')}</button> : <button className="btn primary" disabled={!!busy}>{busy ? (busy === 'save' ? 'Saving…' : busy) : editing ? 'Save changes' : parts.length > 1 ? `Raise ${parts.length} RMAs` : 'Raise RMA'}</button>}
       </div>
     </form>
       {addCust && <AddCustomer onClose={() => setAddCust(false)} onAdded={async (rec) => {
@@ -534,6 +574,37 @@ export function Suggest({ id, value, onChange, options, onPick, placeholder, aut
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// Draft photos (from the zip): tap to choose up to five, in order — they fill the OEM Excel's photo boxes 1–5.
+// Every photo moves onto the RMA on Accept; the chosen ones go first.
+export function DraftPhotos({ draft, pick, onPick }) {
+  const toggle = (id) => {
+    if (pick.includes(id)) onPick(pick.filter((x) => x !== id));
+    else if (pick.length < 5) onPick([...pick, id]);
+  };
+  return (
+    <div className="draftphotos">
+      <div className="spread" style={{ margin: '14px 0 8px' }}>
+        <b>Photos from the zip ({draft.photos.length})</b>
+        <span className="small muted">Numbered photos go in the OEM Excel boxes 1–5 · tap to change · {pick.length}/5 chosen</span>
+      </div>
+      {draft.photos.length ? (
+        <div className="dpgrid">
+          {draft.photos.map((ph) => {
+            const n = pick.indexOf(ph.id);
+            return (
+              <button type="button" key={ph.id} className={`dp${n >= 0 ? ' on' : ''}`} onClick={() => toggle(ph.id)} aria-pressed={n >= 0}
+                title={n >= 0 ? `Excel photo ${n + 1} — tap to take out` : pick.length >= 5 ? 'Five already chosen — tap a numbered photo first to take it out' : 'Tap to put in the OEM Excel'}>
+                <img src={`/api/drafts/photos/${ph.id}`} alt={ph.name} loading="lazy" />
+                {n >= 0 ? <span className="n">{n + 1}</span> : <span className="off">not in Excel</span>}
+              </button>
+            );
+          })}
+        </div>
+      ) : <p className="muted small">This zip had no photos. Add photos below.</p>}
     </div>
   );
 }

@@ -190,6 +190,22 @@ export const GUIDE = [
     ],
   },
   {
+    id: 'rma-bulk', title: '7a. Bulk RMAs from photo zips',
+    blocks: [
+      ['p', 'Many printers come back at once? Put each printer\'s photos in one zip named with its serial number (for example TEBT25160110.zip) and upload them together. Each zip becomes a draft RMA.'],
+      ['steps', [
+        'Open "Bulk from photos" in the menu and drop the zip files (or press Choose zip files). Up to 50 zips, 20 photos each.',
+        'Each line shows the serial taken from the file name, the cover (Covered, Not in care pack register, or Expired — blocked) and any RMAs already raised for that printer.',
+        '"Likely duplicate" means the same part is already on an open RMA — remove the line, or tick "Make a draft anyway". "Repeat failure" means the same part was closed in the last 90 days.',
+        'Tap the faulty part (Print head, Main board, Power supply, Front panel, Accessories or Other) and remove any line you do not want with ×.',
+        'Press "Create drafts". Drafts have no RMA number and do not email the customer.',
+        'Open "Draft RMAs" and press "Review & accept". The normal New RMA form opens, filled in. Add the failure description and part details, tap the five photos for the OEM Excel, then "Accept & create RMA" or "Accept & next draft".',
+        'Delete drafts you do not need (one, or tick several). Drafts not accepted in 30 days are removed.',
+      ]],
+      ['tip', 'Everyone except Viewers can use this. An Admin can switch it off for one person in Users & security, or for the whole company in Company settings.'],
+    ],
+  },
+  {
     id: 'rma-oem', title: '8. Send it to the OEM',
     blocks: [
       ['steps', [

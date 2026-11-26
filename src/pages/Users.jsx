@@ -94,6 +94,10 @@ function UserList({ user }) {
                 <label className="check small"><input type="checkbox" checked={u.dupOverride} disabled={u.disabled}
                   onChange={(e) => update(u, { dupOverride: e.target.checked }, e.target.checked ? 'Can now override duplicate RMAs' : 'Duplicate override removed')} />Can override duplicate RMAs</label>
               )}
+              {u.role !== 'Viewer' && (
+                <label className="check small"><input type="checkbox" checked={u.bulkPhotos !== false} disabled={u.disabled}
+                  onChange={(e) => update(u, { bulkPhotos: e.target.checked }, e.target.checked ? `${u.name} can use Bulk RMA from photos` : `Bulk RMA from photos switched off for ${u.name}`)} />Bulk RMA from photos</label>
+              )}
               <span style={{ flex: 1 }} />
               {!u.you && (u.status === 'Invited' || u.status === 'Invite expired') && <button className="btn ghost small" onClick={() => act(u, 'resend-invite')}>Send invite again</button>}
               {!u.you && u.status !== 'Invited' && u.status !== 'Invite expired' && !u.disabled && <button className="btn ghost small" onClick={() => setConfirmDo({ u, what: 'reset-login' })}>Reset login</button>}

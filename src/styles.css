@@ -917,3 +917,37 @@ input, select, textarea { transition: border-color var(--d-fast), box-shadow var
   .g-steps li, .g-list li, .g-tip, .g-note, .g-features > div, .g-qa { break-inside: avoid; }
   a { color: inherit; text-decoration: none; }
 }
+
+/* ---------- Bulk RMA from photo zips + draft RMAs ---------- */
+.dropzone { border: 2px dashed var(--field); border-radius: var(--radius-lg); padding: 26px 16px; display: grid; justify-items: center; gap: 8px;
+  text-align: center; color: var(--text-2); background: color-mix(in srgb, var(--accent-tint) 35%, var(--surface)); }
+.dropzone.over { border-color: var(--accent); background: var(--accent-tint); }
+.bulklines { display: grid; gap: 10px; }
+.bulkline { display: grid; grid-template-columns: minmax(170px, 1.1fr) minmax(190px, 1.3fr) minmax(150px, 1fr) minmax(220px, 1.6fr) auto; gap: 14px;
+  align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.bulkline.done { opacity: 0.7; }
+.bulkline.draftline { grid-template-columns: auto minmax(170px, 1.2fr) minmax(190px, 1.4fr) minmax(150px, 1fr) auto; align-items: center; }
+.bulkline .bl-id input { width: 100%; font-weight: 700; margin-bottom: 4px; }
+.bulkline .bl-check, .bulkline .bl-part { display: grid; gap: 6px; justify-items: start; }
+.bulkline .bl-photos { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.bulkline .bl-photos img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--mist); }
+.bulkline .views button { min-height: 32px; padding: 0 11px; font-size: 0.84rem; }
+.dupnotes { display: grid; gap: 4px; font-size: 0.82rem; }
+.dupnotes .bad { color: var(--rust); font-weight: 650; }
+.dupnotes .warn { color: var(--amber); font-weight: 600; }
+.dupnotes .note { color: var(--text-2); }
+.dupnotes svg { vertical-align: -2px; }
+@media (max-width: 900px) {
+  .bulkline, .bulkline.draftline { grid-template-columns: 1fr auto; }
+  .bulkline > :not(.bl-x):not(.bl-act):not(label) { grid-column: 1 / -1; }
+  .bulkline .bl-x { grid-row: 1; grid-column: 2; }
+  .bulkline.draftline > label { grid-row: 1; grid-column: 2; }
+}
+.dpgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.dp { position: relative; padding: 0; border: 2px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--mist); cursor: pointer; aspect-ratio: 1; }
+.dp img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dp.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-tint); }
+.dp .n { position: absolute; top: 6px; left: 6px; width: 26px; height: 26px; border-radius: 999px; background: var(--accent); color: #fff;
+  font-weight: 800; font-size: 0.8rem; display: grid; place-items: center; }
+.dp .off { position: absolute; top: 6px; left: 6px; background: var(--surface); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 1px 8px; font-size: 0.7rem; font-weight: 650; }

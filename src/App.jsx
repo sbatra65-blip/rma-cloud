@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, setSessionEndedHandler } from './api.js';
 import { broadcastLogout, useIdle } from './idle.js';
-import { CompanyLogo, TrialBar, Dialog, Icon, Link, BrandLogo, Logo, Wordmark, Skeleton, ToastProvider, VersionLabel, can, navigate, usePath, useToast } from './ui.jsx';
+import { CompanyLogo, TrialBar, Dialog, Icon, Link, BrandLogo, Logo, Wordmark, Skeleton, ToastProvider, VersionLabel, can, navigate, query, usePath, useToast } from './ui.jsx';
 import Auth from './pages/Auth.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import RmaList from './pages/RmaList.jsx';
@@ -24,6 +24,7 @@ import Track from './pages/Track.jsx';
 import Billing from './pages/Billing.jsx';
 import Legal from './pages/Legal.jsx';
 import Guide from './pages/Guide.jsx';
+import BulkPhotos, { Drafts } from './pages/BulkPhotos.jsx';
 import { helpFor } from './help.js';
 
 export default function App() {
@@ -47,6 +48,7 @@ function Shell() {
   const [state, setState] = useState({ phase: 'loading' }); // loading | out | in
   const [boot, setBoot] = useState(null);
   const [reminderCount, setReminderCount] = useState(0);
+  const [draftCount, setDraftCount] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const phaseRef = useRef('loading');
   phaseRef.current = state.phase;
@@ -58,6 +60,7 @@ function Shell() {
   }, []);
   const refreshReminders = useCallback(() => {
     get('/api/reminders').then((r) => setReminderCount(r.items.length + (r.carePack?.length || 0))).catch(() => {});
+    get('/api/drafts/count').then((r) => setDraftCount(r.n || 0)).catch(() => {});
   }, []);
 
   const signOut = useCallback(async (reason) => {
@@ -111,12 +114,16 @@ function Shell() {
   const common = { user, boot, reloadBoot: loadBoot, path, onChange: refreshReminders };
   const mods = user.company.modules || ['carepack', 'zoho', 'batches', 'import', 'reports'];
   const has = (m) => mods.includes(m);
+  // Bulk RMA from photo zips: on unless an Admin switched it off (Company settings).
+  const bulk = boot.settings?.bulk_photos !== false && can.edit(user) && user.bulkPhotos !== false;
 
   let page;
   let m;
   if (route === '/' || route === '') page = <Dashboard {...common} key={path} />;
   else if (route === '/rma') page = <RmaList {...common} />;
-  else if (route === '/rma/new' && can.edit(user)) page = <RmaForm {...common} key="new" />;
+  else if (route === '/rma/new' && can.edit(user)) page = <RmaForm {...common} key={`new${query().draft || ''}`} />;
+  else if (route === '/rma/bulk' && bulk) page = <BulkPhotos {...common} />;
+  else if (route === '/drafts' && bulk) page = <Drafts {...common} />;
   else if ((m = route.match(/^\/rma\/(\d+)\/edit$/)) && can.edit(user)) page = <RmaForm {...common} id={m[1]} key={`e${m[1]}`} />;
   else if ((m = route.match(/^\/rma\/(\d+)$/))) page = <RmaDetail {...common} id={m[1]} key={m[1]} />;
   else if ((route === '/batches' || route.startsWith('/batches/')) && has('batches')) page = <Batches {...common} code={route.split('/')[2]} key={route} />;
@@ -136,12 +143,14 @@ function Shell() {
   else if (route === '/users' && can.admin(user)) page = <Users {...common} />;
   else if (route === '/billing' && can.admin(user)) page = <Billing {...common} />;
   else if (route === '/profile') page = <Profile {...common} idleMinutes={state.idleMinutes} onLogout={() => signOut('logout')} />;
-  else if (route === '/more') page = <More user={user} onLogout={() => signOut('logout')} />;
+  else if (route === '/more') page = <More user={user} boot={boot} onLogout={() => signOut('logout')} />;
   else page = <div className="panel"><h1>Page not found</h1><p className="muted" style={{ marginTop: 8 }}><Link to="/">Go to the dashboard</Link></p></div>;
 
   const nav = [
     { to: '/', icon: 'home', label: 'Dashboard' },
     { to: '/rma', icon: 'ticket', label: 'RMAs' },
+    bulk && { to: '/rma/bulk', icon: 'camera', label: 'Bulk from photos' },
+    bulk && { to: '/drafts', icon: 'edit', label: 'Draft RMAs', count: draftCount },
     has('batches') && { to: '/batches', icon: 'truck', label: 'OEM batches' },
     has('carepack') && { to: '/care-packs', icon: 'shield', label: 'Care packs' },
     { to: '/reminders', icon: 'bell', label: 'Reminders', count: reminderCount },
@@ -155,7 +164,7 @@ function Shell() {
     can.admin(user) && { to: '/settings', icon: 'gear', label: 'Company settings' },
     can.admin(user) && { to: '/billing', icon: 'card', label: 'Plan & billing' },
   ].filter(Boolean);
-  const current = (to) => (to === '/' ? route === '/' : route === to || (route.startsWith(to + '/') && route !== '/rma/new'));
+  const current = (to) => (to === '/' ? route === '/' : route === to || (route.startsWith(to + '/') && route !== '/rma/new' && route !== '/rma/bulk'));
 
   return (
     <div className="app">
@@ -215,9 +224,12 @@ function Shell() {
   );
 }
 
-function More({ user, onLogout }) {
+function More({ user, boot, onLogout }) {
   const has = (m) => (user.company.modules || ['carepack', 'zoho', 'batches', 'import', 'reports']).includes(m);
+  const bulk = boot?.settings?.bulk_photos !== false && can.edit(user) && user.bulkPhotos !== false;
   const items = [
+    bulk && ['/rma/bulk', 'camera', 'Bulk from photos', 'Upload zips of photos named with printer serials — one draft RMA each'],
+    bulk && ['/drafts', 'edit', 'Draft RMAs', 'Check each draft and accept it as an RMA'],
     has('batches') && ['/batches', 'truck', 'OEM batches', 'Dispatch RMAs to the OEM together, packing list'],
     has('carepack') && ['/care-packs', 'shield', 'Care packs', 'Printers sold with care packs, OEM PO, OEM invoice, payment'],
     has('reports') && ['/reports', 'chart', 'Reports', 'Filter RMAs and export to Excel'],

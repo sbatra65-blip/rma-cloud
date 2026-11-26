@@ -5,6 +5,7 @@ import { migrateMethods } from './migrate.js';
 import { deviceMethods, isHeadPart, migrateV3, migrateV4 } from './devices.js';
 import { migrateV5, trackMethods } from './track.js';
 import { backupMethods } from './backup.js';
+import { draftMethods } from './drafts.js';
 import { DurableObject } from 'cloudflare:workers';
 import { uuid } from './crypto.js';
 import { Checker, ValidationError, today, istParts, daysBetween } from './validate.js';
@@ -430,6 +431,9 @@ export class Company extends DurableObject {
       backupStatus: 'admin', backupData: 'admin', backupRecord: 'admin', backupDue: 'system', backupFile: 'admin',
       // privacy: support access switch and the data activity list (Admins)
       dataActivity: 'admin', supportAccessSet: 'admin',
+      // bulk RMA from photo zips (drafts)
+      draftCheck: 'edit', draftCreate: 'edit', draftPhotoPut: 'edit', draftPhotoGet: 'edit', draftList: 'edit', draftGet: 'edit',
+      draftUpdate: 'edit', draftDelete: 'edit', draftCount: 'read', bulkPhotosSet: 'admin',
       // manage: Admin and Manager (masters, import)
       saveMaster: 'manage', deleteMaster: 'manage', importTickets: 'manage', importCustomers: 'manage',
       // admin only
@@ -475,13 +479,14 @@ export class Company extends DurableObject {
     for (const r of this.all("SELECT key, value FROM meta WHERE key LIKE 'set:%'")) out[r.key.slice(4)] = r.value;
     return out;
   }
+  statusLabel(s) { return label(s); }
   getSettings(user) {
     const s = this.settings();
     const tpl = this.one('SELECT name, size, updated_at, updated_by FROM files WHERE id = ?', TEMPLATE_ID);
     const logo = this.one('SELECT updated_at FROM files WHERE id = ?', 'company_logo');
     const since = user?.trialStarted ? Date.parse(`${user.trialStarted}T00:00:00+05:30`) : 0;
     const trialRmasUsed = user?.plan === 'trial' ? this.one('SELECT COUNT(*) AS n FROM tickets WHERE COALESCE(is_imported, 0) = 0 AND created_at >= ?', since).n : null;
-    return { ...s, ...this.cpSettings(), template: tpl || null, logoAt: logo?.updated_at || null, trialRmasUsed };
+    return { ...s, ...this.cpSettings(), bulk_photos: s.bulk_photos !== '0', template: tpl || null, logoAt: logo?.updated_at || null, trialRmasUsed };
   }
   saveSettings(user, b) {
     const c = new Checker(b);
@@ -756,8 +761,10 @@ export class Company extends DurableObject {
     };
   }
 
-  createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote }) {
+  createTicket(user, { ticket, overrideReason, addToCarePack, headReason, partSnNote, draftId, draftPhotos }) {
     const v = this.checkTicket(ticket);
+    // From a draft (bulk photo zips): make sure the draft is still there before anything is created.
+    if (draftId) { this.draftsGuard(user); this.draftRow(draftId); }
     // New RMAs: the customer is chosen from the customer list (dropdown), so names stay consistent for reports.
     const cust = v.customer_id ? this.one('SELECT id, name, active, email FROM customers WHERE id = ?', v.customer_id) : null;
     if (!cust || !cust.active) throw new ValidationError({ customer_company: 'Choose the customer from the list. An Admin or Manager can add a new customer.' });
@@ -788,8 +795,10 @@ export class Company extends DurableObject {
       head.head_override_reason ? `Print-head limit override: ${String(headReason).trim()}` : null,
       psn.part_sn_note ? `Part serial differs from last received: ${psn.part_sn_note}` : null].filter(Boolean).join(' · ') || null);
     this.audit(user, 'create', 'ticket', id, { ticketNo, dupOverride: !!dup.dup_reason, headOverride: !!head.head_override_reason });
+    const fromDraft = draftId ? this.draftAttach(user, draftId, id, draftPhotos) : null;
     this.queueCustomerNotice(id, STATUS.OPEN);
-    return this.getTicket(user, { id });
+    const out = this.getTicket(user, { id });
+    return fromDraft ? { ...out, fromDraft } : out;
   }
 
   updateTicket(user, { id, ticket }) {
@@ -1487,4 +1496,4 @@ export function parseLooseDate(v) {
   return { date, ms };
 }
 
-Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods, trackMethods, backupMethods);
+Object.assign(Company.prototype, carePackMethods, migrateMethods, deviceMethods, trackMethods, backupMethods, draftMethods);
