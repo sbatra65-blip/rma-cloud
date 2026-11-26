@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { get, post, qs } from '../api.js';
+import { BULK_EXCEL_MAX, bulkOemExcel } from '../oemBulk.js';
 import { Dialog, Empty, RECEIVED_STAGES, ErrorPanel, Field, Icon, Link, ShowToggle, Skeleton, Status, ageDays, can, fmtMs, navigate, query, useShow, useToast } from '../ui.jsx';
 
 // Saved views: one click for the lists people ask for most. "Active only / All" applies on top.
@@ -22,7 +23,10 @@ export default function RmaList({ user, boot }) {
   const [closing, setClosing] = useState(false);
   const [tick, setTick] = useState(0);
   const cats = (boot.masters.categories || []).filter((c) => c.active);
-  const bulk = can.manage(user);
+  // Tick RMAs to download their OEM Excel files together (anyone who can edit), or to close them (Manager/Admin).
+  const bulk = can.edit(user);
+  const canClose = can.manage(user);
+  const [xl, setXl] = useState('');
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -35,8 +39,19 @@ export default function RmaList({ user, boot }) {
 
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const toggle = (id) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const closable = (data?.rows || []).filter((t) => !t.closed_at);
-  const allOn = closable.length > 0 && closable.every((t) => sel.has(t.id));
+  const rows = data?.rows || [];
+  const allOn = rows.length > 0 && rows.every((t) => sel.has(t.id));
+  const openSel = rows.filter((t) => sel.has(t.id) && !t.closed_at).map((t) => t.id);
+  async function oemExcel() {
+    const ids = rows.filter((t) => sel.has(t.id)).map((t) => t.id);
+    if (ids.length > BULK_EXCEL_MAX) toast(`Only ${BULK_EXCEL_MAX} RMAs at a time — the first ${BULK_EXCEL_MAX} ticked are included.`, true);
+    setXl('Starting…');
+    try {
+      const r = await bulkOemExcel(ids, user.company?.name, (i, n) => setXl(`Building ${i} of ${n}…`));
+      toast(`${r.name} downloaded — ${r.done} OEM Excel file${r.done === 1 ? '' : 's'} and a summary list${r.failed.length ? `. ${r.failed.length} could not be made` : ''}`, !!r.failed.length);
+      setTick((n) => n + 1);
+    } catch (e) { toast(`Could not build the OEM Excel files: ${e.message}`, true); } finally { setXl(''); }
+  }
   const filtered = f.q || f.status || f.view || f.category;
   return (
     <>
@@ -82,7 +97,9 @@ export default function RmaList({ user, boot }) {
         <div className="selbar" role="region" aria-label="Selected RMAs">
           <b>{sel.size} selected</b>
           <button type="button" className="linkbtn" onClick={() => setSel(new Set())}>Clear</button>
-          <button type="button" className="btn primary small" style={{ marginLeft: 'auto' }} onClick={() => setClosing(true)}><Icon name="check" size={16} /> Close selected</button>
+          <button type="button" className="btn primary small" style={{ marginLeft: 'auto' }} disabled={!!xl} onClick={oemExcel}
+            title="One ZIP: each RMA's OEM Excel form (with its photos) plus a summary list"><Icon name="download" size={16} /> {xl || `OEM Excel (${sel.size})`}</button>
+          {canClose && <button type="button" className="btn ghost small" disabled={!openSel.length || !!xl} onClick={() => setClosing(true)}><Icon name="check" size={16} /> Close selected</button>}
         </div>
       )}
 
@@ -96,7 +113,7 @@ export default function RmaList({ user, boot }) {
           <div className="tlist mobile-only stagger">
             {data.rows.map((t) => (
               <div key={t.id} className={`tcard-wrap ${bulk ? 'has-check' : ''}`}>
-                {bulk && !t.closed_at && <input type="checkbox" className="tcheck" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}
+                {bulk && <input type="checkbox" className="tcheck" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}
                 <Link to={`/rma/${t.id}`} className="tcard" data-s={t.status}>
                   <div className="top"><span className="no">{t.ticket_no}</span><Status s={t.status} /></div>
                   <h3>{t.customer_company || '—'}</h3>
@@ -110,15 +127,15 @@ export default function RmaList({ user, boot }) {
           <div className="tablewrap desktop-only">
             <table className="data stagger-rows">
               <thead><tr>
-                {bulk && <th style={{ width: 36 }}><input type="checkbox" checked={allOn} disabled={!closable.length} aria-label="Select all shown that are not closed"
-                  onChange={() => setSel(allOn ? new Set() : new Set(closable.map((t) => t.id)))} /></th>}
+                {bulk && <th style={{ width: 36 }}><input type="checkbox" checked={allOn} disabled={!rows.length} aria-label="Select all shown"
+                  onChange={() => setSel(allOn ? new Set() : new Set(rows.map((t) => t.id)))} /></th>}
                 <th>RMA</th><th>Customer</th><th>Device</th><th>Part · serial sent → received</th><th>Stage</th><th>OEM RMA</th><th>Photos</th><th style={{ textAlign: 'right' }}>Age</th></tr></thead>
               <tbody>
                 {data.rows.map((t, ri) => {
                   const age = ageDays(t.created_at);
                   return (
                     <tr key={t.id} onClick={(e) => { if (!['A', 'INPUT'].includes(e.target.tagName)) navigate(`/rma/${t.id}`); }} style={{ cursor: 'pointer', '--row': ri }} className={sel.has(t.id) ? 'selected' : ''}>
-                      {bulk && <td>{!t.closed_at && <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} />}</td>}
+                      {bulk && <td><input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} aria-label={`Select ${t.ticket_no}`} /></td>}
                       <td className="nowrap"><Link to={`/rma/${t.id}`} className="mono">{t.ticket_no}</Link>{t.is_imported ? <div className="tiny muted">Imported</div> : null}</td>
                       <td style={{ fontWeight: 600 }}>{t.customer_company || '—'}<div className="tiny muted" style={{ fontWeight: 500 }}>{t.customer_city}</div></td>
                       <td>{t.printer_model || '—'}<div className="tiny muted mono">{t.printer_sn}{t.category && t.category !== 'Printer' ? ` · ${t.category}` : ''}</div></td>
@@ -136,10 +153,10 @@ export default function RmaList({ user, boot }) {
             </table>
           </div>
           {data.more && <p className="muted small" style={{ marginTop: 10 }}>Showing the newest 500. Search or filter to narrow down, or use Reports.</p>}
-          {bulk && <p className="muted small desktop-only" style={{ marginTop: 10 }}>Tip: to clear old finished RMAs, pick Stage “Dispatched to customer”, tick the box at the top of the list, then Close selected.</p>}
+          {bulk && <p className="muted small desktop-only" style={{ marginTop: 10 }}>Tip: tick RMAs and press “OEM Excel” to download all their OEM forms in one go (pick Stage “Open” for the ones still to send).{canClose ? ' To clear old finished RMAs, pick Stage “Dispatched to customer”, tick the box at the top, then Close selected.' : ''}</p>}
         </>
       )}
-      {closing && <BulkClose ids={[...sel]} rows={data?.rows || []} onClose={() => setClosing(false)}
+      {closing && <BulkClose ids={openSel} rows={data?.rows || []} onClose={() => setClosing(false)}
         onDone={(r) => { setClosing(false); setSel(new Set()); setTick((n) => n + 1); toast(`${r.closed} RMA${r.closed === 1 ? '' : 's'} closed${r.skipped.length ? `, ${r.skipped.length} already closed` : ''}`); }} />}
     </>
   );

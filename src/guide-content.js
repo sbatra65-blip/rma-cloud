@@ -212,6 +212,7 @@ export const GUIDE = [
         'Generate OEM Excel: your OEM\'s RMA form, filled with this RMA\'s details and photos. Download or Share it.',
         'Email OEM: the email from Company settings, filled in, with the Excel attached. Replies go to your company email.',
         'Emailing from your own mailbox instead? Use Copy email text, then Mark sent to OEM.',
+        'Several RMAs at once: on the RMAs list tick them (pick Stage "Open" to see the ones still to send) and press "OEM Excel". You get one ZIP with each RMA\'s OEM form, photos included, plus a summary list of all of them.',
         'When the OEM replies with their RMA number, press Enter OEM RMA # and type it.',
       ]],
       ['img', 'rma-email-oem', 'Email the OEM with the form attached.', 'crop'],

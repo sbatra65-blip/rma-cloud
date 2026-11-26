@@ -23,7 +23,8 @@ export const SCREEN_HELP = [
     steps: [
       'Search by RMA number, printer or part serial, customer or OEM RMA number.',
       'Filter by status with the buttons at the top; the counts update as you search.',
-      'Tick RMAs to close several at once (for example after a monthly review).',
+      'Tick RMAs and press "OEM Excel" to download one ZIP with each RMA\'s OEM Excel form (with its photos) and a summary list — ready to email to the OEM. Up to 50 at a time.',
+      'Managers and Admins can also tick RMAs to close several at once (for example after a monthly review).',
       'Click a row to open the RMA.',
     ],
     tips: ['The search box in the left menu searches RMAs from any screen.'],
