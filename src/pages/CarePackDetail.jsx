@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isNativeApp, nativeSaveFile } from '../native.js';
 import { api, downloadBlob, get, post } from '../api.js';
 import { writeTable } from '../excel.js';
 import { crossValidate } from '../../worker/catalog.js';
@@ -36,6 +37,7 @@ export default function CarePackDetail({ user, boot, id }) {
   async function openPdf() {
     try {
       const res = await api('GET', `/api/carepack/${b.id}/pdf`, undefined, { raw: true });
+      if (isNativeApp()) { await nativeSaveFile(await res.blob(), `care-pack-${b.id}.pdf`); return; }
       const url = URL.createObjectURL(await res.blob());
       window.open(url, '_blank', 'noopener');
       setTimeout(() => URL.revokeObjectURL(url), 60000);

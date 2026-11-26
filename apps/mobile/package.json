@@ -1,0 +1,26 @@
+{
+  "name": "trackmyrma-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TrackMyRMA for iPhone and Android (Capacitor shell around www.trackmyrma.com)",
+  "scripts": {
+    "assets": "capacitor-assets generate --iconBackgroundColor '#1e1b4b' --splashBackgroundColor '#1e1b4b' --splashBackgroundColorDark '#1e1b4b'",
+    "sync": "cap sync",
+    "android": "cap sync android && cap open android",
+    "ios": "cap sync ios && cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/filesystem": "^8.0.0",
+    "@capacitor/ios": "^8.6.3",
+    "@capacitor/share": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.3"
+  }
+}

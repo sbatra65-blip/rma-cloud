@@ -1,3 +1,4 @@
+import { isNativeApp, nativeSaveFile } from './native.js';
 // Small API client. The session lives in an HttpOnly cookie the page cannot read.
 export class ApiError extends Error {
   constructor(status, data) {
@@ -79,6 +80,8 @@ export async function uploadPhoto(ticketId, file, direction, { kind } = {}) {
 }
 
 export function downloadBlob(blob, name) {
+  // iPhone / Android app: save and open the share sheet (a web view cannot download).
+  if (isNativeApp()) { nativeSaveFile(blob, name).catch((e) => alert(`Could not save ${name}: ${e.message}`)); return; }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -91,6 +94,7 @@ export function downloadBlob(blob, name) {
 
 // Opens the phone's share sheet with the file (WhatsApp, Gmail…) when the browser supports it.
 export async function shareFile(blob, name, title) {
+  if (isNativeApp()) { await nativeSaveFile(blob, name, title); return true; }
   const file = new File([blob], name, { type: blob.type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {

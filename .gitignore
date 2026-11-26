@@ -5,3 +5,6 @@ dist/
 *.log
 shots/
 .wrangler-test.jsonc
+apps/desktop/release/
+apps/mobile/android/app/build/
+apps/mobile/ios/App/build/

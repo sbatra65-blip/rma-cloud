@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TrackMyRMA</string>
+    <string name="title_activity_main">TrackMyRMA</string>
+    <string name="package_name">com.trackmyrma.app</string>
+    <string name="custom_url_scheme">com.trackmyrma.app</string>
+</resources>

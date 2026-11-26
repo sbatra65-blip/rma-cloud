@@ -1,0 +1,32 @@
+{
+  "name": "trackmyrma-desktop",
+  "productName": "TrackMyRMA",
+  "version": "1.0.0",
+  "description": "TrackMyRMA for Windows and Mac",
+  "author": "Infinite Solutions <support@trackmyrma.com>",
+  "homepage": "https://www.trackmyrma.com",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --universal",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.trackmyrma.app",
+    "productName": "TrackMyRMA",
+    "copyright": "© Infinite Solutions",
+    "files": ["main.js", "build/icon.png", "package.json"],
+    "directories": { "output": "release", "buildResources": "build" },
+    "artifactName": "TrackMyRMA-${version}-${os}-${arch}.${ext}",
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "shortcutName": "TrackMyRMA" },
+    "mac": { "target": [{ "target": "dmg", "arch": ["universal"] }], "category": "public.app-category.business", "icon": "build/icon.png", "identity": null },
+    "linux": { "target": ["AppImage"], "category": "Office", "icon": "build/icon.png" }
+  }
+}

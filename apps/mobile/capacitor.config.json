@@ -1,0 +1,23 @@
+{
+  "appId": "com.trackmyrma.app",
+  "appName": "TrackMyRMA",
+  "webDir": "www",
+  "server": {
+    "url": "https://www.trackmyrma.com",
+    "allowNavigation": ["www.trackmyrma.com", "trackmyrma.com"],
+    "errorPath": "offline.html"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#1e1b4b"
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#1e1b4b",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 800, "backgroundColor": "#1e1b4b", "showSpinner": false },
+    "StatusBar": { "style": "DARK", "backgroundColor": "#1e1b4b", "overlaysWebView": false }
+  }
+}
