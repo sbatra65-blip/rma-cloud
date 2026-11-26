@@ -13,6 +13,10 @@ const VIEWS = [
 ];
 
 export default function RmaList({ user, boot }) {
+  // Bulk RMA from photo zips: shortcut on top of the list (same switches as the menu item).
+  const bulkOn = boot.settings?.bulk_photos !== false && can.edit(user) && user.bulkPhotos !== false;
+  const [drafts, setDrafts] = useState(0);
+  useEffect(() => { if (bulkOn) get('/api/drafts/count').then((r) => setDrafts(r.n || 0)).catch(() => {}); }, [bulkOn]);
   const toast = useToast();
   const q0 = query();
   const [show] = useShow();
@@ -60,6 +64,8 @@ export default function RmaList({ user, boot }) {
         <div className="row head-actions">
           <Link to="/devices" className="btn ghost" aria-label="Device history"><Icon name="history" size={18} /> <span>Device history</span></Link>
           <Link to="/reports" className="btn ghost" aria-label="Export"><Icon name="download" size={18} /> <span>Export</span></Link>
+          {bulkOn && drafts > 0 && <Link to="/drafts" className="btn ghost" aria-label={`Draft RMAs (${drafts})`}><Icon name="edit" size={18} /> <span>Drafts ({drafts})</span></Link>}
+          {bulkOn && <Link to="/rma/bulk" className="btn ghost" aria-label="Upload photo zips" title="Upload zips of photos, one per printer named with its serial — each becomes a draft RMA"><Icon name="upload" size={18} /> <span>Upload photo zips</span></Link>}
           {can.edit(user) && <Link to="/rma/new" className="btn primary wide-only"><Icon name="plus" size={18} /> New RMA</Link>}
         </div>
       </div>
